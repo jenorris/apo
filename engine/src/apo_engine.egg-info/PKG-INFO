@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: apo-engine
+Version: 0.1.0
+Summary: Apo KB engine — local semantic search over a markdown vault (sqlite-vec, no Docker).
+Requires-Python: >=3.11
+Requires-Dist: sqlite-vec>=0.1.6
+Provides-Extra: cpu
+Requires-Dist: fastembed>=0.8.0; extra == "cpu"
+Provides-Extra: mcp
+Requires-Dist: fastmcp>=2.0.0; extra == "mcp"

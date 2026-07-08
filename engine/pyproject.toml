@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apo-engine"
+version = "0.1.0"
+description = "Apo KB engine — local semantic search over a markdown vault (sqlite-vec, no Docker)."
+requires-python = ">=3.11"
+dependencies = [
+    "sqlite-vec>=0.1.6",
+]
+
+[project.optional-dependencies]
+# CPU fallback embedder + optional Python MCP surface. Not needed with the Ollama backend.
+cpu = ["fastembed>=0.8.0"]
+mcp = ["fastmcp>=2.0.0"]
+
+[project.scripts]
+apo-engine = "apo_engine.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

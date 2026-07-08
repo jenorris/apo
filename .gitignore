@@ -1,0 +1,26 @@
+# Root safety net — nested engine/.gitignore and gateway/.gitignore also apply.
+
+# secrets / env
+.env
+.env.*
+!.env.example
+*.key
+
+# data / indexes — NEVER commit (embeddings of the whole vault incl. employer-mixed content)
+index.db
+index.db-*
+*.sqlite
+*.sqlite-*
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# php / node
+vendor/
+node_modules/
+
+# os / logs
+.DS_Store
+*.log
