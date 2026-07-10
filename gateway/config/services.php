@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'apo' => [
+        'engine_bin' => env('APO_ENGINE_BIN', base_path('../engine/.venv/bin/apo-engine')),
+    ],
+
 ];

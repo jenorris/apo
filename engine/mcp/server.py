@@ -20,7 +20,7 @@ import yaml
 from fastmcp import FastMCP
 from apo_engine import config as apo_config
 from apo_engine.mcp_backend import ApoMem
-from markdown_patch import (
+from apo_engine.markdown_patch import (
     PatchError,
     _frontmatter_bounds,
     apply_append,
@@ -59,18 +59,6 @@ DEFAULT_VAULT = "default"
 
 
 # Apo uses APO_* env (MEMSEARCH_* aliases supported in config).
-
-
-def _make_memsearch(paths: list[str], collection: str) -> ApoMem:
-    del collection  # single sqlite index per vault root
-    return ApoMem(Path(paths[0]))
-
-
-def _resolve_mcp_memsearch_config():
-    return None
-
-
-_MS_CFG = None
 
 
 def _runtime_config_path() -> Path:
@@ -131,55 +119,27 @@ def _save_deferred(v: Vault) -> None:
 
 
 def _load_vaults() -> None:
-    """(Re)build the vault registry from env + runtime JSON. No Milvus connection."""
+    """(Re)build the single default vault from env + runtime JSON.
+
+    The engine binds NOTES_ROOT/INDEX once at import, so the registry holds exactly
+    one vault rooted there — multi-vault registration (MEMSEARCH_VAULTS) is not
+    supported. Runtime JSON may still override the collection (deferred-queue
+    namespace) and ingest_dir; changing the vault root requires restarting the
+    server with new APO_NOTES_ROOT / APO_INDEX env.
+    """
     global VAULTS, DEFAULT_VAULT
     overrides = _read_runtime_overrides()
-
-    raw_vaults: Any = overrides.get("MEMSEARCH_VAULTS")
-    if raw_vaults is None:
-        envv = os.environ.get("MEMSEARCH_VAULTS")
-        if envv:
-            try:
-                raw_vaults = json.loads(envv)
-            except json.JSONDecodeError:
-                raw_vaults = None
-
-    vaults: dict[str, Vault] = {}
-    default_name: str | None = None
-    if isinstance(raw_vaults, dict):
-        for name, spec in raw_vaults.items():
-            if not isinstance(spec, dict) or not spec.get("root"):
-                continue
-            coll = str(spec.get("collection") or name)
-            vaults[str(name)] = Vault(
-                name=str(name),
-                root=Path(str(spec["root"])).expanduser().resolve(),
-                collection=coll,
-                ingest_dir=str(spec.get("ingest_dir") or "wiki"),
-                deferred=_load_deferred(coll),
-            )
-            if spec.get("default"):
-                default_name = str(name)
-
-    if not vaults:
-        coll = _pick(overrides, "MEMSEARCH_COLLECTION", "notes_global") or "notes_global"
-        root_raw = (
-            _pick(overrides, "APO_NOTES_ROOT")
-            or _pick(overrides, "MEMSEARCH_NOTES_ROOT")
-            or str(apo_config.NOTES_ROOT)
-        )
-        vaults["default"] = Vault(
+    coll = _pick(overrides, "MEMSEARCH_COLLECTION", "notes_global") or "notes_global"
+    VAULTS = {
+        "default": Vault(
             name="default",
-            root=Path(root_raw or "").expanduser().resolve(),
+            root=apo_config.NOTES_ROOT,
             collection=coll,
             ingest_dir=_pick(overrides, "MEMSEARCH_INGEST_DIR", "wiki") or "wiki",
             deferred=_load_deferred(coll),
         )
-        default_name = "default"
-
-    picked = _pick(overrides, "MEMSEARCH_DEFAULT_VAULT", default_name)
-    DEFAULT_VAULT = picked if picked in vaults else next(iter(vaults))
-    VAULTS = vaults
+    }
+    DEFAULT_VAULT = "default"
 
 
 def _vault(name: str = "") -> Vault:
@@ -193,7 +153,7 @@ def _vault(name: str = "") -> Vault:
 def _ensure_mem(v: Vault) -> ApoMem:
     """Lazy-init index backend per vault."""
     if v.mem is None:
-        v.mem = _make_memsearch([str(v.root)], v.collection)
+        v.mem = ApoMem(v.root)
     return v.mem
 
 
@@ -401,12 +361,13 @@ _load_vaults()
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
 async def reload_config() -> dict:
-    """Rebuild the vault registry from env + optional runtime JSON, dropping cached Milvus clients.
+    """Rebuild the vault registry from env + optional runtime JSON, dropping the cached index backend.
 
     Use after editing the runtime JSON file (``MEMSEARCH_RUNTIME_CONFIG``; default
-    ``~/.memsearch/mcp-runtime.<collection>.json``) to apply path/vault changes without
-    restarting the MCP host. JSON keys: ``MEMSEARCH_VAULTS``, ``MEMSEARCH_DEFAULT_VAULT``,
-    or legacy ``MEMSEARCH_NOTES_ROOT`` / ``MEMSEARCH_COLLECTION`` / ``MEMSEARCH_INGEST_DIR``.
+    ``~/.apo/mcp-runtime.<collection>.json``) to apply changes without restarting the
+    MCP host. Supported JSON keys: ``MEMSEARCH_COLLECTION``, ``MEMSEARCH_INGEST_DIR``.
+    The vault root is fixed at process start (APO_NOTES_ROOT / APO_INDEX env) — changing
+    it requires a server restart.
     """
     _load_vaults()
     return {

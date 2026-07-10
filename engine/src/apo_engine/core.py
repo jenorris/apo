@@ -31,18 +31,23 @@ def strip_frontmatter(text: str) -> str:
     return _FRONTMATTER.sub("", text, count=1)
 
 
-def chunk_markdown(text: str, max_chars: int, overlap: int) -> list[tuple[str, str]]:
-    """Return [(heading_breadcrumb, chunk_text)] greedily packed to ~max_chars."""
+def chunk_markdown(text: str, max_chars: int, overlap: int) -> list[tuple[str, int, str]]:
+    """Return [(heading_breadcrumb, heading_level, chunk_text)] greedily packed to ~max_chars.
+
+    heading_level is the markdown level of the chunk's governing heading (0 = preamble).
+    The breadcrumb alone can't recover it: skipped levels (H3 directly under H1) are
+    collapsed out of the join.
+    """
     body = strip_frontmatter(text)
     heading: list[str] = []
-    blocks: list[tuple[str, str]] = []
+    blocks: list[tuple[str, int, str]] = []
     buf: list[str] = []
 
     def flush_block():
         if buf:
             joined = "\n".join(buf).strip()
             if joined:
-                blocks.append((" › ".join(h for h in heading if h), joined))
+                blocks.append((" › ".join(h for h in heading if h), len(heading), joined))
             buf.clear()
 
     for line in body.split("\n"):
@@ -55,28 +60,30 @@ def chunk_markdown(text: str, max_chars: int, overlap: int) -> list[tuple[str, s
             buf.append(line)
     flush_block()
 
-    chunks: list[tuple[str, str]] = []
+    chunks: list[tuple[str, int, str]] = []
     cur_head: str | None = None
+    cur_level = 0
     cur: list[str] = []
     cur_len = 0
 
     def emit():
-        nonlocal cur, cur_len, cur_head
+        nonlocal cur, cur_len, cur_head, cur_level
         if cur:
-            chunks.append((cur_head or "", "\n\n".join(cur).strip()))
-        cur, cur_len, cur_head = [], 0, None
+            chunks.append((cur_head or "", cur_level, "\n\n".join(cur).strip()))
+        cur, cur_len, cur_head, cur_level = [], 0, None, 0
 
-    for head, btext in blocks:
+    for head, level, btext in blocks:
         if len(btext) > max_chars:
             emit()
             step = max(1, max_chars - overlap)
             for i in range(0, len(btext), step):
-                chunks.append((head, btext[i : i + max_chars]))
+                chunks.append((head, level, btext[i : i + max_chars]))
             continue
         if cur and cur_len + len(btext) > max_chars:
             emit()
         if not cur:
             cur_head = head
+            cur_level = level
         cur.append(btext)
         cur_len += len(btext) + 2
     emit()
@@ -138,15 +145,6 @@ def compute_chunk_id(
 
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
-
-
-def _heading_level(title: str, heading: str) -> int:
-    if not heading:
-        return 0
-    for part in heading.split(" › "):
-        if part.strip().lower() == title.strip().lower():
-            return heading.count(" › ") + 1
-    return heading.count(" › ") + 1 if heading else 0
 
 
 def _locate_chunk_lines(lines: list[str], chunk_text: str) -> tuple[int, int]:
@@ -241,11 +239,13 @@ def _ensure_vec_table(db: sqlite3.Connection, dim: int) -> None:
 
 def _load_ignore() -> list[str]:
     patterns = [".git/*", ".obsidian/*", "*.excalidraw.md"]
-    if config.IGNORE_FILE.exists():
-        for line in config.IGNORE_FILE.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                patterns.append(line)
+    # Engine-level ignore file (APO_IGNORE) plus a vault-root .indexignore, if present.
+    for ignore_file in (config.IGNORE_FILE, config.NOTES_ROOT / ".indexignore"):
+        if ignore_file.exists():
+            for line in ignore_file.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    patterns.append(line)
     return patterns
 
 
@@ -315,9 +315,8 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
         else:
             stats.added += 1
         lines = text.split("\n")
-        for ordi, (heading, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
+        for ordi, (heading, hlevel, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
             start_line, end_line = _locate_chunk_lines(lines, ctext)
-            hlevel = _heading_level(heading.split(" › ")[-1] if heading else "", heading)
             chash = _content_hash(ctext)
             chunk_id = compute_chunk_id(
                 f"markdown:{rel}",
@@ -439,16 +438,18 @@ def index_file(full_path: Path, verbose: bool = False) -> int:
     except ValueError as e:
         raise ValueError(f"path outside vault root: {full_path}") from e
     if not full_path.is_file():
-        _delete_path_by_rel(connect(), rel)
+        db = connect()
+        _delete_path_by_rel(db, rel)
+        db.commit()
+        db.close()
         return 0
     text = full_path.read_text(encoding="utf-8", errors="replace")
     db = connect()
     _delete_path(db, rel)
     pending: list[tuple] = []
     lines = text.split("\n")
-    for ordi, (heading, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
+    for ordi, (heading, hlevel, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
         start_line, end_line = _locate_chunk_lines(lines, ctext)
-        hlevel = _heading_level(heading.split(" › ")[-1] if heading else "", heading)
         chash = _content_hash(ctext)
         chunk_id = compute_chunk_id(
             f"markdown:{rel}", start_line, end_line, chash, config.MODEL_NAME
@@ -554,7 +555,7 @@ def search(
         if row is None:
             continue
         path, heading, text, chunk_hash, hlevel, start_line, end_line = row
-        if folder_prefix and not path.startswith(folder_prefix):
+        if folder_prefix and not path.startswith(folder_prefix + "/"):
             continue
         if exclude and any(fnmatch.fnmatch(path, pat) for pat in exclude):
             continue

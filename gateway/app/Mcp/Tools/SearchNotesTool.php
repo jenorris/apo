@@ -22,7 +22,7 @@ class SearchNotesTool extends Tool
             'exclude.*' => ['string'],
         ]);
 
-        $bin = env('APO_ENGINE_BIN', base_path('../engine/.venv/bin/apo-engine'));
+        $bin = config('services.apo.engine_bin');
 
         $args = [$bin, 'search', $v['query'], '-k', (string) ($v['k'] ?? 8), '--json'];
         if (! empty($v['exclude'])) {
