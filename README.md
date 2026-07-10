@@ -60,6 +60,17 @@ claude mcp add -s user memsearch -- \
 # Set env in claude.json or shell: APO_NOTES_ROOT, APO_INDEX, OLLAMA_KEEP_ALIVE=0
 ```
 
+## Deployment environments
+
+| Profile | Config | Use when |
+|---------|--------|----------|
+| **local-ollama** (default) | `config.env` | MacBook / Desma — Cursor & Claude Code via stdio MCP |
+| **ecs-aws** (future) | `config.env.ecs` | Fargate — remote claude.ai via Laravel gateway + Bedrock embeddings |
+
+Full ECS task layout (ALB, EFS, IAM, unified container, optional watcher service): **`docs/deploy-ecs.md`**.
+
+Local profile is the day-to-day dev path. ECS profile targets OAuth remote MCP only — stdio MCP does not run in Fargate.
+
 ## Configuration
 
 Copy `config.env` → `.env` at repo root (justfile loads `.env` automatically). Or export vars in your shell / MCP host env block.
@@ -107,7 +118,8 @@ When retiring legacy memsearch: `launchctl bootout gui/$(id -u)/com.example.mems
 - [x] **MCP: memsearch-compatible surface (19 tools)** — `engine/mcp/server.py`; Cursor cutover documented in `docs/mcp-migration.md`
 - [x] Gateway: `laravel/mcp` + `search-notes-tool`, verified over stdio JSON-RPC
 - [x] Remote OAuth: Passport + `Mcp::oauthRoutes()` — discovery, DCR, bearer-protected `/mcp/apo`, verified local
-- [ ] Deploy for claude.ai (Caddy/TLS + public origin + allowlisted users) · SCIM · wiki routes · Quartz static tier
+- [ ] Deploy for claude.ai (Caddy/TLS or **ECS** per `docs/deploy-ecs.md`) · SCIM · wiki routes · Quartz static tier
+- [ ] ECS: Dockerfile · Bedrock embed backend · Terraform module
 
 ## Remote MCP (claude.ai)
 
