@@ -85,6 +85,22 @@ Copy `config.env` → `.env` at repo root (justfile loads `.env` automatically).
 
 **Gateway only:** `gateway/.env` sets `APO_ENGINE_BIN` for the Laravel search tool shell-out.
 
+## Background watcher (launchd)
+
+Incremental reindex when vault files change (complements MCP `index=False` + `reindex_deferred`).
+
+```bash
+just watch-install    # LaunchAgent com.apo.watch — RunAtLoad + KeepAlive
+just watch-status     # manual watcher via watch.sh
+tail -f ~/.apo/watch-launchd.log
+```
+
+Requires **Ollama** running (`just ollama` or brew services). The watcher waits up to 120s for Ollama at startup.
+
+Manual control: `bash watch.sh {start|stop|restart|status}` · uninstall: `just watch-uninstall`
+
+When retiring legacy memsearch: `launchctl bootout gui/$(id -u)/com.example.memsearch-watch`
+
 ## Current status
 
 - [x] Engine: chunk · embed (Ollama bge-m3) · **hybrid retrieval (sqlite-vec dense + FTS5 BM25, RRF)** · incremental · path post-filter

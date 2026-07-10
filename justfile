@@ -41,9 +41,33 @@ search-personal QUERY:
 stats:
     {{eng}} stats
 
-# Watch the vault and reindex on change.
-watch:
+# Watch the vault and reindex on change (foreground — Ctrl-C to stop).
+watch-fg:
     {{eng}} watch
+
+# Manual background watcher (PID + log under ~/.apo/).
+watch-start:
+    bash watch.sh start
+
+watch-stop:
+    bash watch.sh stop
+
+watch-status:
+    bash watch.sh status
+
+# Install LaunchAgent (login auto-start, KeepAlive). Requires Ollama reachable.
+watch-install:
+    chmod +x launchd-watch.sh watch.sh
+    mkdir -p ~/Library/LaunchAgents
+    cp com.apo.watch.plist ~/Library/LaunchAgents/
+    launchctl bootout "gui/$(id -u)/com.apo.watch" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.apo.watch.plist
+    @echo "installed — log: ~/.apo/watch-launchd.log"
+
+watch-uninstall:
+    launchctl bootout "gui/$(id -u)/com.apo.watch" 2>/dev/null || true
+    rm -f ~/Library/LaunchAgents/com.apo.watch.plist
+    @echo "uninstalled"
 
 # memsearch-compatible MCP over stdio (drop-in for ~/.cursor/mcp.json "memsearch" block).
 mcp:
