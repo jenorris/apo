@@ -124,6 +124,56 @@ def embed(texts: list[str]) -> list[list[float]]:
 # --------------------------------------------------------------------------- #
 # Index
 # --------------------------------------------------------------------------- #
+def compute_chunk_id(
+    source: str,
+    start_line: int,
+    end_line: int,
+    content_hash: str,
+    model: str,
+) -> str:
+    """Composite chunk ID aligned with memsearch / OpenClaw format."""
+    raw = f"markdown:{source}:{start_line}:{end_line}:{content_hash}:{model}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _heading_level(title: str, heading: str) -> int:
+    if not heading:
+        return 0
+    for part in heading.split(" › "):
+        if part.strip().lower() == title.strip().lower():
+            return heading.count(" › ") + 1
+    return heading.count(" › ") + 1 if heading else 0
+
+
+def _locate_chunk_lines(lines: list[str], chunk_text: str) -> tuple[int, int]:
+    """Best-effort 1-based start/end lines for a chunk body."""
+    needle = chunk_text.strip().split("\n")[0][:80]
+    start = 1
+    for i, line in enumerate(lines):
+        if needle and needle in line:
+            start = i + 1
+            break
+    end = min(len(lines), start + max(1, chunk_text.count("\n") + 3))
+    return start, end
+
+
+def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
+    cols = {row[1] for row in db.execute("PRAGMA table_info(chunks)").fetchall()}
+    for name, ddl in (
+        ("start_line", "INTEGER NOT NULL DEFAULT 1"),
+        ("end_line", "INTEGER NOT NULL DEFAULT 1"),
+        ("heading_level", "INTEGER NOT NULL DEFAULT 0"),
+        ("chunk_hash", "TEXT"),
+    ):
+        if name not in cols:
+            db.execute(f"ALTER TABLE chunks ADD COLUMN {name} {ddl}")
+    db.execute("CREATE INDEX IF NOT EXISTS chunks_hash ON chunks(chunk_hash)")
+
+
 def connect(path: Path | None = None) -> sqlite3.Connection:
     db = sqlite3.connect(path or config.INDEX_PATH)
     db.enable_load_extension(True)
@@ -139,12 +189,17 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
             path TEXT NOT NULL,
             ord INTEGER NOT NULL,
             heading TEXT,
-            text TEXT NOT NULL
+            text TEXT NOT NULL,
+            start_line INTEGER NOT NULL DEFAULT 1,
+            end_line INTEGER NOT NULL DEFAULT 1,
+            heading_level INTEGER NOT NULL DEFAULT 0,
+            chunk_hash TEXT
         );
         CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);
         CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text);
         """
     )
+    _ensure_chunk_columns(db)
     return db
 
 
@@ -236,7 +291,7 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
     known = {row[0]: (row[1], row[2]) for row in db.execute("SELECT path, mtime, hash FROM files")}
     on_disk: set[str] = set()
 
-    pending: list[tuple[str, int, str, str]] = []  # (path, ord, heading, text)
+    pending: list[tuple[str, int, str, str, int, int, int, str]] = []
     stats = IndexStats()
 
     notes = list(_iter_notes(root, ignore))
@@ -259,8 +314,19 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
             stats.changed += 1
         else:
             stats.added += 1
+        lines = text.split("\n")
         for ordi, (heading, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
-            pending.append((rel, ordi, heading, ctext))
+            start_line, end_line = _locate_chunk_lines(lines, ctext)
+            hlevel = _heading_level(heading.split(" › ")[-1] if heading else "", heading)
+            chash = _content_hash(ctext)
+            chunk_id = compute_chunk_id(
+                f"markdown:{rel}",
+                start_line,
+                end_line,
+                chash,
+                config.MODEL_NAME,
+            )
+            pending.append((rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id))
         db.execute(
             "INSERT OR REPLACE INTO files(path, mtime, hash) VALUES (?,?,?)",
             (rel, p.stat().st_mtime, h),
@@ -279,12 +345,14 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                 f"  embedding {len(pending)} chunks via {config.EMBED_BACKEND}:{config.MODEL_NAME} ...",
                 flush=True,
             )
-        vectors = embed([t for _, _, _, t in pending])
+        vectors = embed([t[3] for t in pending])
         _ensure_vec_table(db, len(vectors[0]))
-        for (rel, ordi, heading, ctext), vec in zip(pending, vectors):
+        for row, vec in zip(pending, vectors):
+            rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id = row
             cur = db.execute(
-                "INSERT INTO chunks(path, ord, heading, text) VALUES (?,?,?,?)",
-                (rel, ordi, heading, ctext),
+                """INSERT INTO chunks(path, ord, heading, text, start_line, end_line, heading_level, chunk_hash)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id),
             )
             db.execute(
                 "INSERT INTO vec_chunks(rowid, embedding) VALUES (?,?)",
@@ -321,9 +389,122 @@ class Hit:
     heading: str
     text: str
     score: float
+    chunk_hash: str = ""
+    heading_level: int = 0
+    start_line: int = 0
+    end_line: int = 0
+    source: str = ""
 
 
-def search(query: str, k: int = 8, exclude: list[str] | None = None, hybrid: bool = True) -> list[Hit]:
+def count_chunks() -> int:
+    db = connect()
+    try:
+        return db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    finally:
+        db.close()
+
+
+def lookup_chunk(chunk_hash: str) -> dict | None:
+    db = connect()
+    try:
+        row = db.execute(
+            """SELECT path, heading, text, start_line, end_line, heading_level, chunk_hash
+               FROM chunks WHERE chunk_hash = ? LIMIT 1""",
+            (chunk_hash,),
+        ).fetchone()
+        if not row:
+            return None
+        rel, heading, text, start_line, end_line, hlevel, chash = row
+        root = config.NOTES_ROOT
+        return {
+            "source": str(root / rel),
+            "path": rel,
+            "heading": heading or "",
+            "content": text,
+            "start_line": start_line,
+            "end_line": end_line,
+            "heading_level": hlevel,
+            "chunk_hash": chash,
+        }
+    finally:
+        db.close()
+
+
+def index_file(full_path: Path, verbose: bool = False) -> int:
+    """Reindex one note by absolute path. Returns chunk count embedded."""
+    root = config.NOTES_ROOT
+    full_path = full_path.resolve()
+    try:
+        rel = full_path.relative_to(root).as_posix()
+    except ValueError as e:
+        raise ValueError(f"path outside vault root: {full_path}") from e
+    if not full_path.is_file():
+        _delete_path_by_rel(connect(), rel)
+        return 0
+    text = full_path.read_text(encoding="utf-8", errors="replace")
+    db = connect()
+    _delete_path(db, rel)
+    pending: list[tuple] = []
+    lines = text.split("\n")
+    for ordi, (heading, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
+        start_line, end_line = _locate_chunk_lines(lines, ctext)
+        hlevel = _heading_level(heading.split(" › ")[-1] if heading else "", heading)
+        chash = _content_hash(ctext)
+        chunk_id = compute_chunk_id(
+            f"markdown:{rel}", start_line, end_line, chash, config.MODEL_NAME
+        )
+        pending.append((rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id))
+    if pending:
+        if verbose:
+            print(f"  embedding {len(pending)} chunks for {rel} ...", flush=True)
+        vectors = embed([t[3] for t in pending])
+        _ensure_vec_table(db, len(vectors[0]))
+        for row, vec in zip(pending, vectors):
+            rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id = row
+            cur = db.execute(
+                """INSERT INTO chunks(path, ord, heading, text, start_line, end_line, heading_level, chunk_hash)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id),
+            )
+            db.execute(
+                "INSERT INTO vec_chunks(rowid, embedding) VALUES (?,?)",
+                (cur.lastrowid, sqlite_vec.serialize_float32(vec)),
+            )
+            db.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cur.lastrowid, ctext))
+    db.execute(
+        "INSERT OR REPLACE INTO files(path, mtime, hash) VALUES (?,?,?)",
+        (rel, full_path.stat().st_mtime, _file_hash(text)),
+    )
+    db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_ready','1')")
+    db.commit()
+    db.close()
+    return len(pending)
+
+
+def _delete_path_by_rel(db: sqlite3.Connection, rel: str) -> None:
+    _delete_path(db, rel)
+    db.execute("DELETE FROM files WHERE path=?", (rel,))
+
+
+def purge_source(full_path: Path) -> bool:
+    try:
+        rel = full_path.resolve().relative_to(config.NOTES_ROOT).as_posix()
+    except ValueError:
+        return False
+    db = connect()
+    _delete_path_by_rel(db, rel)
+    db.commit()
+    db.close()
+    return True
+
+
+def search(
+    query: str,
+    k: int = 8,
+    exclude: list[str] | None = None,
+    folder: str = "",
+    hybrid: bool = True,
+) -> list[Hit]:
     db = connect()
     if db.execute("SELECT value FROM meta WHERE key='dim'").fetchone() is None:
         db.close()
@@ -363,16 +544,34 @@ def search(query: str, k: int = 8, exclude: list[str] | None = None, hybrid: boo
     top = max(fused.values())
 
     hits: list[Hit] = []
+    folder_prefix = folder.replace("\\", "/").strip("/")
     for rid in sorted(fused, key=lambda i: fused[i], reverse=True):
-        row = db.execute("SELECT path, heading, text FROM chunks WHERE id = ?", (rid,)).fetchone()
+        row = db.execute(
+            """SELECT path, heading, text, chunk_hash, heading_level, start_line, end_line
+               FROM chunks WHERE id = ?""",
+            (rid,),
+        ).fetchone()
         if row is None:
             continue
-        path, heading, text = row
+        path, heading, text, chunk_hash, hlevel, start_line, end_line = row
+        if folder_prefix and not path.startswith(folder_prefix):
+            continue
         if exclude and any(fnmatch.fnmatch(path, pat) for pat in exclude):
             continue
-        # Report cosine when the hit surfaced in dense results, else normalized fusion score.
         score = cosine.get(rid, fused[rid] / top)
-        hits.append(Hit(path=path, heading=heading or "", text=text, score=score))
+        hits.append(
+            Hit(
+                path=path,
+                heading=heading or "",
+                text=text,
+                score=score,
+                chunk_hash=chunk_hash or "",
+                heading_level=int(hlevel or 0),
+                start_line=int(start_line or 1),
+                end_line=int(end_line or 1),
+                source=str(config.NOTES_ROOT / path),
+            )
+        )
         if len(hits) >= k:
             break
     db.close()

@@ -11,8 +11,11 @@ def _path(env: str, default: str) -> Path:
     return Path(os.environ.get(env, default)).expanduser().resolve()
 
 
-# Vault to index. Defaults to the Meta Obsidian vault.
-NOTES_ROOT: Path = _path("APO_NOTES_ROOT", "~/Notes")
+# Vault to index. MEMSEARCH_NOTES_ROOT alias for drop-in MCP migration.
+NOTES_ROOT: Path = _path(
+    "APO_NOTES_ROOT",
+    os.environ.get("MEMSEARCH_NOTES_ROOT", "~/Notes"),
+)
 
 # Single-file sqlite-vec index (rebuildable, git-ignored).
 INDEX_PATH: Path = _path("APO_INDEX", str(_ENGINE_ROOT / "index.db"))

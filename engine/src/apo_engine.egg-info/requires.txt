@@ -1,7 +1,10 @@
 sqlite-vec>=0.1.6
+pyyaml>=6.0
 
 [cpu]
 fastembed>=0.8.0
 
 [mcp]
 fastmcp>=2.0.0
+httpx>=0.27
+trafilatura>=1.12

@@ -1,47 +1,49 @@
 # Apo
 
-Personal knowledge-base gateway. A Laravel **MCP** surface over a local semantic-search **engine**, indexing a markdown (PARA/OKF Obsidian) vault. Embedded, GPU-embedded, no Docker.
-
-This is the personal, clean-room realization of the `apo-kb-gateway` spec: **memsearch** (the engine) as the index, **Laravel MCP** as the agent surface, with the vault-split ACL lever available at query time.
+Personal knowledge-base gateway. Laravel **MCP** surface + **memsearch-compatible** Python MCP over a local semantic-search **engine** (sqlite-vec + Ollama). Indexes a markdown (PARA/OKF Obsidian) vault.
 
 ## Architecture
 
 ```
 agent (Claude Code / Cursor / claude.ai)
-      │  MCP
+      │  MCP (memsearch-compatible tools)
       ▼
-gateway/   Laravel + laravel/mcp   ── ApoServer → SearchNotesTool
-      │  Process (shell)              (Passport/OAuth · SCIM · wiki routes = future modules)
+engine/mcp/server.py   FastMCP — drop-in for legacy memsearch MCP
+      │  apo-engine CLI + sqlite-vec hybrid (dense + FTS5 RRF)
       ▼
-engine/    apo-engine (python)     ── chunk → embed → sqlite-vec KNN → path/ACL post-filter
-      │  HTTP
-      ▼
-Ollama  bge-m3 (1024-dim) on the local GPU        index: one sqlite file, rebuildable
+Ollama  bge-m3 (local Metal)     index: engine/index.db (rebuildable)
+      │
+gateway/ (optional)  Laravel + laravel/mcp — OAuth remote path; search-only today
 ```
 
-- **Engine** (`engine/`): pure-Python. Embeddings via **Ollama/bge-m3** on the GPU (no CUDA/cuDNN system deps — Ollama bundles it); `fastembed` CPU fallback via `pip install -e '.[cpu]'`. One `index.db` (`sqlite-vec`).
-- **Gateway** (`gateway/`): Laravel 13 + `laravel/mcp`. `ApoServer` exposes `search-notes-tool`, which shells to `apo-engine search --json`. Ready for the Passport + SCIM + wiki modules from the spec.
+- **Engine** (`engine/`): Python. Embeddings via **Ollama/bge-m3** (default) or `fastembed` CPU (`pip install -e '.[cpu]'`). One `index.db`.
+- **MCP** (`engine/mcp/server.py`): **19 tools** — same names as `~/Code/ai-tools/memsearch/mcp/server.py` for seamless Cursor swap. See `docs/mcp-migration.md`.
+- **Gateway** (`gateway/`): Laravel 13 + Passport OAuth (remote claude.ai path).
 
-## Provenance (clean-room)
+## MacBook Air (32 GB) — local Ollama
 
-Personal reimplementation from the author's own vault specification — **not** derived from any employer codebase. Architecture deliberately diverges from the original (embedded `sqlite-vec` + Ollama, not Milvus/Docker). All deps permissive OSS (sqlite-vec, fastembed/ONNX, Laravel, laravel/mcp; BGE embeddings MIT). Boundaries per `projects/apo-kb-gateway/personal-build-boundaries` in the vault; IP ownership is a counsel question, not asserted here.
+| Resource | Typical |
+|----------|---------|
+| `bge-m3` on disk | ~1.2 GB |
+| RAM while model loaded | ~2–3 GB |
+| After idle (`OLLAMA_KEEP_ALIVE=0`) | ~100 MB (daemon only) |
+
+No Docker/GPU container required — Ollama uses Apple Metal natively.
 
 ## Quickstart
 
 ```bash
-# prereqs: python3, ollama (running) with `ollama pull bge-m3`, php 8.5, composer, just
+# prereqs: python3, ollama, just
+brew install ollama just
 just setup
-just index                       # embed the whole vault (GPU)
+just ollama          # start serve with unload-after-use
+ollama pull bge-m3   # once
+just index
 just search "trash pickup day"
-just search-personal "..."       # minus employer-mixed paths
-just mcp                         # stdio MCP for Claude Code / Cursor
+just mcp             # stdio MCP (memsearch-compatible)
 ```
 
-Register with Claude Code:
-
-```bash
-claude mcp add apo -- php /home/jeremy/Code/apo/gateway/artisan mcp:start apo
-```
+Copy `.env` from repo root or set `APO_NOTES_ROOT`. Migration: `docs/mcp-migration.md`.
 
 ## Configuration (engine env)
 

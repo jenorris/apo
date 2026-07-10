@@ -9,12 +9,17 @@ description = "Apo KB engine — local semantic search over a markdown vault (sq
 requires-python = ">=3.11"
 dependencies = [
     "sqlite-vec>=0.1.6",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-# CPU fallback embedder + optional Python MCP surface. Not needed with the Ollama backend.
+# CPU fallback embedder. Not needed with the Ollama backend.
 cpu = ["fastembed>=0.8.0"]
-mcp = ["fastmcp>=2.0.0"]
+mcp = [
+    "fastmcp>=2.0.0",
+    "httpx>=0.27",
+    "trafilatura>=1.12",
+]
 
 [project.scripts]
 apo-engine = "apo_engine.cli:main"
