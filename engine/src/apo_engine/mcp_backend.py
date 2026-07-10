@@ -1,7 +1,12 @@
-"""MCP backend — sqlite-vec index adapter matching memsearch MCP expectations."""
+"""MCP backend — sqlite-vec index adapter matching memsearch MCP expectations.
+
+The async methods run the blocking engine calls (embedding HTTP, sqlite) in a
+worker thread so slow embeds never stall the MCP server's event loop.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
@@ -43,7 +48,7 @@ class ApoMem:
                 folder = Path(source_prefix).resolve().relative_to(config.NOTES_ROOT).as_posix()
             except ValueError:
                 folder = source_prefix
-        hits = core.search(query, k=top_k, folder=folder)
+        hits = await asyncio.to_thread(core.search, query, k=top_k, folder=folder)
         rows: list[dict] = []
         for h in hits:
             rows.append(
@@ -61,8 +66,8 @@ class ApoMem:
         return rows
 
     async def index_file(self, path: str | Path) -> None:
-        core.index_file(Path(path), verbose=False)
+        await asyncio.to_thread(core.index_file, Path(path), verbose=False)
 
     async def index(self, force: bool = False) -> int:
-        stats = core.index_vault(rebuild=force, verbose=False)
+        stats = await asyncio.to_thread(core.index_vault, rebuild=force, verbose=False)
         return stats.added + stats.changed

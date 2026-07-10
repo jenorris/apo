@@ -122,7 +122,7 @@ def find_section(
 
 
 def section_from_chunk(lines: list[str], start_line: int, heading_level: int) -> Section:
-    """Resolve section bounds from Milvus chunk metadata (start_line is 1-based)."""
+    """Resolve section bounds from index chunk metadata (start_line is 1-based)."""
     if start_line < 1:
         start_line = 1
     idx = start_line - 1

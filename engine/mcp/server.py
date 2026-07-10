@@ -333,10 +333,10 @@ def _match_condition(value: Any, cond: Any) -> bool:
 ###############################################################################
 
 mcp = FastMCP(
-    "memsearch",
+    "Apo",
     instructions=(
-        "Persistent semantic memory for AI agents: plain Markdown files under one or more "
-        "vault roots, indexed into Milvus (hybrid BM25 + dense vector search). Files are the "
+        "Apo — persistent semantic memory for AI agents: plain Markdown files under a single "
+        "vault root, indexed into sqlite-vec (hybrid FTS5 BM25 + dense vector search). Files are the "
         "source of truth; the index is rebuildable. All paths are vault-relative; omit `vault` "
         "to use the default vault. "
         "Write routing: new note → write_note; add to a log/section → append_note; frontmatter "
@@ -350,7 +350,7 @@ mcp = FastMCP(
     ),
 )
 
-# Load vault registry at import (fast); Milvus connects lazily per vault.
+# Load vault registry at import (fast); the index backend connects lazily per vault.
 _load_vaults()
 
 

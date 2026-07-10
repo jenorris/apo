@@ -506,6 +506,12 @@ def search(
     folder: str = "",
     hybrid: bool = True,
 ) -> list[Hit]:
+    """Hybrid retrieval: dense KNN + FTS5 BM25 fused with reciprocal-rank fusion.
+
+    Hit.score is the fused RRF strength normalized to the best candidate
+    (1.0 = top hit), so scores are monotonic with ranking — comparable within
+    one result set, not across queries.
+    """
     db = connect()
     if db.execute("SELECT value FROM meta WHERE key='dim'").fetchone() is None:
         db.close()
@@ -520,7 +526,6 @@ def search(
         "SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance",
         (sqlite_vec.serialize_float32(qvec), n),
     ).fetchall()
-    cosine = {rid: 1.0 - dist / 2.0 for rid, dist in vrows}
     for rank, (rid, _) in enumerate(vrows):
         fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
 
@@ -559,7 +564,7 @@ def search(
             continue
         if exclude and any(fnmatch.fnmatch(path, pat) for pat in exclude):
             continue
-        score = cosine.get(rid, fused[rid] / top)
+        score = fused[rid] / top
         hits.append(
             Hit(
                 path=path,
