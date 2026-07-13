@@ -51,10 +51,7 @@ Add an `apo` block to `~/.cursor/mcp.json` (merge into existing `mcpServers`):
     "APO_INDEX": "/ABSOLUTE/PATH/TO/apo/engine/index.db",
     "APO_EMBED_BACKEND": "ollama",
     "APO_OLLAMA_URL": "http://127.0.0.1:11434",
-    "OLLAMA_KEEP_ALIVE": "5m",
-    "MEMSEARCH_NOTES_ROOT": "/ABSOLUTE/PATH/TO/YOUR/VAULT",
-    "MEMSEARCH_COLLECTION": "notes_global",
-    "MEMSEARCH_INGEST_DIR": "resources/wiki"
+    "OLLAMA_KEEP_ALIVE": "5m"
   }
 }
 ```
