@@ -22,10 +22,29 @@ class DeferredQueueTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_enqueue_and_consume_index(self):
-        deferred.enqueue_index(self.collection, "/tmp/note.md")
+        q = deferred.enqueue_index(self.collection, "/tmp/note.md")
+        self.assertIn(str(Path("/tmp/note.md").resolve()), q)
         paths = deferred.consume_index_queue(self.collection)
         self.assertEqual(paths, [str(Path("/tmp/note.md").resolve())])
         self.assertEqual(deferred.consume_index_queue(self.collection), [])
+
+    def test_enqueue_many_single_wake(self):
+        touches = {"n": 0}
+        orig = deferred.touch_wake
+
+        def counting(coll):
+            touches["n"] += 1
+            orig(coll)
+
+        deferred.touch_wake = counting  # type: ignore[method-assign]
+        try:
+            q = deferred.enqueue_many(
+                self.collection, ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md"], wake=True
+            )
+            self.assertEqual(touches["n"], 1)
+            self.assertEqual(len(q), 2)
+        finally:
+            deferred.touch_wake = orig  # type: ignore[method-assign]
 
     def test_enqueue_purge(self):
         deferred.enqueue_purge(self.collection, "/tmp/gone.md")
@@ -65,6 +84,8 @@ class ProcessQueuesTest(unittest.TestCase):
             setattr(config, k, val)
         deferred.DEFERRED_DIR = self._saved_dir
         core.embed = self._saved_embed
+        core.writer_close()
+        core._schema_ready.discard(str(config.INDEX_PATH.resolve()))
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_process_index_queue(self):

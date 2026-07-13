@@ -24,7 +24,7 @@ Ollama  bge-m3 (local Metal)     index: engine/index.db (rebuildable)
 
 **Single-writer indexing:** MCP never writes `index.db`. Writes queue paths under `~/.apo/`; `apo-engine watch` (launchd) consumes queues, embeds off-DB, and commits short SQLite transactions.
 
-**Debounce / coalescing:** Rapid Obsidian saves and MCP `enqueue_index` bursts share a per-path quiet window (`APO_WATCH_DEBOUNCE`, default 2s). `index_file` skips Ollama when the content hash is unchanged. Purge and rebuild stay immediate.
+**Debounce / coalescing:** Rapid Obsidian saves and MCP `enqueue_index` bursts share a per-path quiet window (`APO_WATCH_DEBOUNCE`, default 2s). Ready paths share one Ollama batch; unchanged chunk bodies reuse stored vectors. `index_file` skips when the file hash is unchanged. The 30s vault poll stats mtime first (no read+hash). Purge and rebuild stay immediate.
 
 **Search latency:** Cold unique queries are dominated by Ollama query embed (~120–150ms with `bge-m3` loaded). Identical queries within `APO_QUERY_EMBED_TTL` reuse the cached vector (~15ms). FTS runs overlapped with embed; hybrid candidate pool floor is `APO_SEARCH_CANDIDATES` (default 24).
 
@@ -104,6 +104,7 @@ After pulling engine changes that touch `watch.py` / `core.py`, re-run `just set
 - [x] MacBook cutover (Ollama bge-m3, launchd watcher)
 - [x] Single-writer index + watch debounce / path coalescing
 - [x] Query-embed TTL cache + overlapped FTS for search latency
+- [x] mtime vault scan, partial chunk reuse, batch embed, enqueue_many, writer conn reuse
 - [ ] Bedrock embed backend (for ECS — see apo-enterprise `docs/deploy-ecs.md`)
 
 ## Enterprise / remote MCP

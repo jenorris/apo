@@ -8,7 +8,7 @@ from __future__ import annotations
 import fcntl
 import json
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 DEFERRED_DIR = Path.home() / ".apo"
 
@@ -48,16 +48,34 @@ def load_index_queue(collection: str) -> set[str]:
         return set()
 
 
-def enqueue_index(collection: str, path: str) -> None:
-    abs_path = str(Path(path).resolve())
+def enqueue_many(
+    collection: str,
+    paths: Iterable[str],
+    *,
+    wake: bool = True,
+) -> set[str]:
+    """Add many absolute paths in one flock; optional single wake touch."""
+    abs_paths = [str(Path(p).resolve()) for p in paths]
+    if not abs_paths:
+        return load_index_queue(collection)
 
     def add(items: list) -> list:
-        if abs_path not in items:
-            items.append(abs_path)
+        seen = set(items)
+        for a in abs_paths:
+            if a not in seen:
+                items.append(a)
+                seen.add(a)
         return items
 
-    _locked_update(_queue_path(collection, "deferred"), add)
-    touch_wake(collection)
+    result = _locked_update(_queue_path(collection, "deferred"), add)
+    if wake:
+        touch_wake(collection)
+    return {str(x) for x in result}
+
+
+def enqueue_index(collection: str, path: str, *, wake: bool = True) -> set[str]:
+    """Enqueue one path. Returns the full deferred set (no extra re-read needed)."""
+    return enqueue_many(collection, [path], wake=wake)
 
 
 def enqueue_purge(collection: str, path: str) -> None:

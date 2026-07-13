@@ -88,6 +88,8 @@ class VaultTestCase(unittest.TestCase):
         for k, val in self._saved.items():
             setattr(config, k, val)
         core.embed = self._saved_embed
+        core.writer_close()
+        core._schema_ready.discard(str(config.INDEX_PATH.resolve()))
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def write(self, rel: str, text: str) -> Path:

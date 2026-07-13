@@ -63,6 +63,8 @@ class IndexFileUnchangedTest(unittest.TestCase):
         for k, val in self._saved.items():
             setattr(config, k, val)
         core.embed = self._embed
+        core.writer_close()
+        core._schema_ready.discard(str(config.INDEX_PATH.resolve()))
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_skips_embed_when_hash_unchanged(self):
@@ -72,6 +74,42 @@ class IndexFileUnchangedTest(unittest.TestCase):
         self.assertEqual(self.calls, 1)
         self.assertEqual(core.index_file(note), 0)
         self.assertEqual(self.calls, 1)
+
+    def test_partial_reembed_reuses_unchanged_chunks(self):
+        config.MAX_CHARS = 40
+        self.n_texts = 0
+
+        def counting(texts):
+            self.calls += 1
+            self.n_texts += len(texts)
+            return [[1.0] + [0.0] * 15 for _ in texts]
+
+        core.embed = counting
+        note = self.vault / "partial.md"
+        note.write_text(
+            "# Keep\n\nstable alpha body text here\n\n## Tail\n\nold omega trailer here\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(core.index_file(note), 1)
+        first_texts = self.n_texts
+        self.assertGreaterEqual(first_texts, 2)
+        note.write_text(
+            "# Keep\n\nstable alpha body text here\n\n## Tail\n\nnew omega trailer here\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(core.index_file(note), 1)
+        # Second pass embeds only changed chunk bodies (fewer texts than a full re-embed).
+        self.assertEqual(self.calls, 2)
+        self.assertLess(self.n_texts - first_texts, first_texts)
+
+    def test_index_files_batches_embed(self):
+        a = self.vault / "a.md"
+        b = self.vault / "b.md"
+        a.write_text("# A\n\nalpha one\n", encoding="utf-8")
+        b.write_text("# B\n\nbeta two\n", encoding="utf-8")
+        n = core.index_files([a, b], verbose=False)
+        self.assertEqual(n, 2)
+        self.assertEqual(self.calls, 1)  # single batch
 
 
 class QueryEmbedCacheTest(unittest.TestCase):
@@ -130,6 +168,8 @@ class ProcessQueuesConsumeIndexFlag(unittest.TestCase):
             setattr(config, k, val)
         self.deferred.DEFERRED_DIR = self._dir
         core.embed = self._embed
+        core.writer_close()
+        core._schema_ready.discard(str(config.INDEX_PATH.resolve()))
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_consume_index_false_leaves_queue(self):

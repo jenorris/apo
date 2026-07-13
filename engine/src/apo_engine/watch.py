@@ -74,17 +74,19 @@ def _note_path(root: Path, raw: str) -> Path | None:
 
 
 def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
-    """Index ready paths. Returns count of paths that needed an embed or purge."""
-    worked = 0
-    for p in sorted(paths):
-        try:
-            n = core.index_file(p, verbose=verbose)
-            if n > 0 or not p.is_file():
-                worked += 1
-        except (OSError, ValueError) as e:
-            if verbose:
-                print(f"  skip {p}: {e}", flush=True)
-    return worked
+    """Index ready paths in one embed batch. Returns files updated or purged."""
+    items = list(paths)
+    if not items:
+        return 0
+    try:
+        n = core.index_files(items, verbose=verbose)
+        # index_files counts active updates; also count pure deletes for the log.
+        purged = sum(1 for p in items if not Path(p).is_file())
+        return n if n else purged
+    except (OSError, ValueError) as e:
+        if verbose:
+            print(f"  skip batch: {e}", flush=True)
+        return 0
 
 
 def run_watch(interval: float | None = None, *, use_events: bool | None = None, verbose: bool = True) -> None:
@@ -223,6 +225,7 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
             print("\nstopped", flush=True)
     finally:
         stop.set()
+        core.writer_close()
         if observer is not None:
             observer.stop()
             observer.join(timeout=5)

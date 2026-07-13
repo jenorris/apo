@@ -52,8 +52,13 @@ times per second. The watcher now:
 1. Merges fsevents **and** drained `deferred-*.json` paths into a per-path timer
 2. Indexes a path only after `APO_WATCH_DEBOUNCE` seconds without another touch
 3. Skips Ollama entirely in `index_file` when the content hash is unchanged
+4. **Batches** ready paths into one `embed()` call; reuses vectors for unchanged chunk bodies
+5. Vault poll uses **mtime short-circuit** before read+hash (~1.9k notes)
 
 Purge and rebuild signals stay immediate (not debounced).
+
+MCP writes: `enqueue_index` / `enqueue_many` return the updated queue set (no second
+`load_index_queue` re-read). Use `enqueue_many(..., wake=True)` for sweep coalescing.
 
 ## Search latency notes
 

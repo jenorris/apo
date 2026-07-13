@@ -191,8 +191,8 @@ def _default_index_on_write() -> bool:
 async def _maybe_index(v: Vault, full: Path, index: bool | None) -> None:
     """Queue path for the watcher — MCP never writes index.db (single-writer policy)."""
     del index  # API compat; watcher owns all SQLite writes
-    index_deferred.enqueue_index(v.collection, str(full.resolve()))
-    v.deferred = index_deferred.load_index_queue(v.collection)
+    # enqueue_index returns the updated set — avoid a second flock/re-read.
+    v.deferred = index_deferred.enqueue_index(v.collection, str(full.resolve()))
 
 
 def _purge_index(v: Vault, full: Path) -> bool:
@@ -1176,8 +1176,7 @@ async def ingest_uri(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(document, encoding="utf-8")
 
-    index_deferred.enqueue_index(v.collection, str(out_path.resolve()))
-    v.deferred = index_deferred.load_index_queue(v.collection)
+    v.deferred = index_deferred.enqueue_index(v.collection, str(out_path.resolve()))
 
     return {"ok": True, "uri": uri, "path": rel, "chars": len(content), "indexed": False, "queued": True}
 

@@ -10,11 +10,12 @@ import hashlib
 import json
 import re
 import sqlite3
+import struct
 import threading
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
@@ -25,6 +26,11 @@ from . import config
 # Query-embedding LRU (identical agent searches within TTL skip Ollama).
 _query_embed_cache: dict[str, tuple[float, list[float]]] = {}
 _query_embed_lock = threading.Lock()
+
+# Schema bootstrap once per index path per process.
+_schema_ready: set[str] = set()
+# Sole index-writer connection (watch / CLI index) — reuse across commits.
+_writer_local = threading.local()
 
 _FRONTMATTER = re.compile(r"^---\n.*?\n---\n", re.DOTALL)
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)")
@@ -210,33 +216,66 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
-    db = sqlite3.connect(path or config.INDEX_PATH, timeout=config.DB_TIMEOUT)
+    index = Path(path or config.INDEX_PATH).resolve()
+    key = str(index)
+    db = sqlite3.connect(str(index), timeout=config.DB_TIMEOUT)
     db.enable_load_extension(True)
     sqlite_vec.load(db)
     db.enable_load_extension(False)
     db.execute("PRAGMA journal_mode=WAL")
     db.execute(f"PRAGMA busy_timeout={int(config.DB_TIMEOUT * 1000)}")
-    db.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS meta   (key TEXT PRIMARY KEY, value TEXT);
-        CREATE TABLE IF NOT EXISTS files  (path TEXT PRIMARY KEY, mtime REAL, hash TEXT);
-        CREATE TABLE IF NOT EXISTS chunks (
-            id INTEGER PRIMARY KEY,
-            path TEXT NOT NULL,
-            ord INTEGER NOT NULL,
-            heading TEXT,
-            text TEXT NOT NULL,
-            start_line INTEGER NOT NULL DEFAULT 1,
-            end_line INTEGER NOT NULL DEFAULT 1,
-            heading_level INTEGER NOT NULL DEFAULT 0,
-            chunk_hash TEXT
-        );
-        CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);
-        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text);
-        """
-    )
-    _ensure_chunk_columns(db)
+    if key not in _schema_ready:
+        db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS meta   (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE IF NOT EXISTS files  (path TEXT PRIMARY KEY, mtime REAL, hash TEXT);
+            CREATE TABLE IF NOT EXISTS chunks (
+                id INTEGER PRIMARY KEY,
+                path TEXT NOT NULL,
+                ord INTEGER NOT NULL,
+                heading TEXT,
+                text TEXT NOT NULL,
+                start_line INTEGER NOT NULL DEFAULT 1,
+                end_line INTEGER NOT NULL DEFAULT 1,
+                heading_level INTEGER NOT NULL DEFAULT 0,
+                chunk_hash TEXT
+            );
+            CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text);
+            """
+        )
+        _ensure_chunk_columns(db)
+        _schema_ready.add(key)
     return db
+
+
+def writer_connect() -> sqlite3.Connection:
+    """Process-local connection for the sole index writer (watch / index CLI)."""
+    db = getattr(_writer_local, "conn", None)
+    if db is not None:
+        try:
+            db.execute("SELECT 1")
+            return db
+        except sqlite3.Error:
+            writer_close()
+    db = connect()
+    _writer_local.conn = db
+    return db
+
+
+def writer_close() -> None:
+    db = getattr(_writer_local, "conn", None)
+    if db is None:
+        return
+    try:
+        db.close()
+    except sqlite3.Error:
+        pass
+    _writer_local.conn = None
+
+
+def _index_key() -> str:
+    return str(Path(config.INDEX_PATH).resolve())
 
 
 RRF_K = 60  # reciprocal-rank-fusion damping
@@ -343,23 +382,27 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
     if not root.exists():
         raise SystemExit(f"NOTES_ROOT does not exist: {root}")
 
-    db = connect()
     if rebuild:
+        writer_close()
+        _schema_ready.discard(_index_key())
+        db = writer_connect()
         db.executescript(
             "DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS vec_chunks; DROP TABLE IF EXISTS chunks_fts;"
         )
         db.execute("DELETE FROM files")
         db.execute("DELETE FROM meta")
         db.commit()
-        db.close()
-        db = connect()
+        writer_close()
+        _schema_ready.discard(_index_key())
 
+    db = writer_connect()
     ignore = _load_ignore()
     known = {row[0]: (row[1], row[2]) for row in db.execute("SELECT path, mtime, hash FROM files")}
     on_disk: set[str] = set()
 
     pending: list[tuple[str, int, str, str, int, int, int, str]] = []
     stats = IndexStats()
+    mtime_refreshed = False
 
     notes = list(_iter_notes(root, ignore))
     if limit:
@@ -369,13 +412,22 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
         rel = p.relative_to(root).as_posix()
         on_disk.add(rel)
         try:
+            st = p.stat()
+        except OSError:
+            continue
+        prev = known.get(rel)
+        # mtime match ⇒ skip read+hash (hash remains source of truth when mtime moves).
+        if prev is not None and abs(float(prev[0]) - st.st_mtime) < 1e-6:
+            continue
+        try:
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         h = _file_hash(text)
-        prev = known.get(rel)
         if prev and prev[1] == h:
-            continue  # unchanged
+            db.execute("UPDATE files SET mtime=? WHERE path=?", (st.st_mtime, rel))
+            mtime_refreshed = True
+            continue
         if prev:
             _delete_path(db, rel)
             stats.changed += 1
@@ -395,7 +447,7 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
             pending.append((rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id))
         db.execute(
             "INSERT OR REPLACE INTO files(path, mtime, hash) VALUES (?,?,?)",
-            (rel, p.stat().st_mtime, h),
+            (rel, st.st_mtime, h),
         )
 
     if limit is None:
@@ -405,10 +457,9 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                 db.execute("DELETE FROM files WHERE path=?", (rel,))
                 stats.removed += 1
 
-    work_done = bool(pending) or stats.removed > 0
-    if work_done:
+    work_done = bool(pending) or stats.removed > 0 or stats.added > 0 or stats.changed > 0
+    if work_done or mtime_refreshed:
         db.commit()
-    db.close()
 
     vectors: list[list[float]] = []
     if pending:
@@ -418,16 +469,10 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                 flush=True,
             )
         vectors = embed([t[3] for t in pending])
-
-    if pending:
-        db = connect()
         stats.chunks = _insert_pending_chunks(db, pending, vectors)
         _finalize_index_writes(db)
-        db.close()
     elif work_done:
-        db = connect()
         _finalize_index_writes(db)
-        db.close()
 
     stats.seconds = time.time() - t0
     return stats
@@ -495,65 +540,143 @@ def lookup_chunk(chunk_hash: str) -> dict | None:
         db.close()
 
 
+def _deserialize_vec(blob: bytes) -> list[float]:
+    n = len(blob) // 4
+    return list(struct.unpack(f"{n}f", blob))
+
+
+def _vectors_by_content_hash(db: sqlite3.Connection, rel: str) -> dict[str, list[float]]:
+    """Map chunk body hash → embedding for an existing path (before delete)."""
+    out: dict[str, list[float]] = {}
+    for rid, text in db.execute("SELECT id, text FROM chunks WHERE path=?", (rel,)):
+        row = db.execute("SELECT embedding FROM vec_chunks WHERE rowid=?", (rid,)).fetchone()
+        if not row:
+            continue
+        out[_content_hash(text)] = _deserialize_vec(row[0])
+    return out
+
+
+@dataclass
+class _FilePlan:
+    rel: str
+    full_path: Path
+    mtime: float
+    file_hash: str
+    text: str = ""
+    pending: list[tuple[str, int, str, str, int, int, int, str]] = field(default_factory=list)
+
+
 def index_file(full_path: Path, verbose: bool = False) -> int:
-    """Reindex one note by absolute path. Returns chunk count embedded (0 if unchanged/missing)."""
+    """Reindex one note. Returns files updated (0 if unchanged or missing after purge)."""
+    full = Path(full_path).resolve()
+    n = index_files([full], verbose=verbose)
+    if not full.is_file():
+        return 0
+    return n
+
+
+def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
+    """Index many notes with partial chunk reuse and one batched Ollama embed."""
     root = config.NOTES_ROOT
-    full_path = full_path.resolve()
-    try:
-        rel = full_path.relative_to(root).as_posix()
-    except ValueError as e:
-        raise ValueError(f"path outside vault root: {full_path}") from e
-    if not full_path.is_file():
-        db = connect()
-        _delete_path_by_rel(db, rel)
-        db.commit()
-        db.close()
-        return 0
-    text = full_path.read_text(encoding="utf-8", errors="replace")
-    file_hash = _file_hash(text)
-    mtime = full_path.stat().st_mtime
+    plans: list[_FilePlan] = []
+    purge_rels: list[str] = []
 
-    db = connect()
-    prev = db.execute("SELECT hash FROM files WHERE path=?", (rel,)).fetchone()
-    if prev and prev[0] == file_hash:
-        # Content unchanged (common Obsidian touch / duplicate fsevents) — refresh mtime only.
-        db.execute("UPDATE files SET mtime=? WHERE path=?", (mtime, rel))
-        db.commit()
-        db.close()
-        return 0
-    db.close()
-
-    pending: list[tuple] = []
-    lines = text.split("\n")
-    for ordi, (heading, hlevel, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
-        start_line, end_line = _locate_chunk_lines(lines, ctext)
-        chash = _content_hash(ctext)
-        chunk_id = compute_chunk_id(
-            f"markdown:{rel}", start_line, end_line, chash, config.MODEL_NAME
+    for raw in sorted(paths, key=lambda p: str(p)):
+        full_path = Path(raw).resolve()
+        try:
+            rel = full_path.relative_to(root).as_posix()
+        except ValueError as e:
+            raise ValueError(f"path outside vault root: {full_path}") from e
+        if not full_path.is_file():
+            purge_rels.append(rel)
+            continue
+        text = full_path.read_text(encoding="utf-8", errors="replace")
+        file_hash = _file_hash(text)
+        mtime = full_path.stat().st_mtime
+        plans.append(
+            _FilePlan(rel=rel, full_path=full_path, mtime=mtime, file_hash=file_hash, text=text)
         )
-        pending.append((rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id))
 
-    db = connect()
-    _delete_path(db, rel)
+    db = writer_connect()
+
+    # Hash-skip unchanged; keep only plans that need work.
+    active: list[_FilePlan] = []
+    for plan in plans:
+        prev = db.execute("SELECT hash FROM files WHERE path=?", (plan.rel,)).fetchone()
+        if prev and prev[0] == plan.file_hash:
+            db.execute("UPDATE files SET mtime=? WHERE path=?", (plan.mtime, plan.rel))
+            continue
+        lines = plan.text.split("\n")
+        for ordi, (heading, hlevel, ctext) in enumerate(
+            chunk_markdown(plan.text, config.MAX_CHARS, config.OVERLAP)
+        ):
+            start_line, end_line = _locate_chunk_lines(lines, ctext)
+            body_hash = _content_hash(ctext)
+            chunk_id = compute_chunk_id(
+                f"markdown:{plan.rel}", start_line, end_line, body_hash, config.MODEL_NAME
+            )
+            plan.pending.append(
+                (plan.rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id)
+            )
+        active.append(plan)
+
+    # Load reusable embeddings before deletes.
+    reuse: dict[str, dict[str, list[float]]] = {}
+    for plan in active:
+        reuse[plan.rel] = _vectors_by_content_hash(db, plan.rel)
+
+    for rel in purge_rels:
+        _delete_path_by_rel(db, rel)
+    for plan in active:
+        _delete_path(db, plan.rel)
     db.commit()
-    db.close()
 
-    vectors: list[list[float]] = []
-    if pending:
+    # Assign vectors: reuse by body hash, else queue for embed.
+    all_pending: list[tuple[str, int, str, str, int, int, int, str]] = []
+    all_vectors: list[list[float]] = []
+    texts_to_embed: list[str] = []
+    embed_slots: list[int] = []  # index into all_pending / all_vectors
+
+    for plan in active:
+        by_hash = reuse.get(plan.rel, {})
+        for row in plan.pending:
+            body_hash = _content_hash(row[3])
+            slot = len(all_pending)
+            all_pending.append(row)
+            if body_hash in by_hash:
+                all_vectors.append(by_hash[body_hash])
+            else:
+                all_vectors.append([])  # placeholder
+                texts_to_embed.append(row[3])
+                embed_slots.append(slot)
+
+    if texts_to_embed:
         if verbose:
-            print(f"  embedding {len(pending)} chunks for {rel} ...", flush=True)
-        vectors = embed([t[3] for t in pending])
+            total = len(all_pending)
+            print(
+                f"  embedding {len(texts_to_embed)}/{total} chunks "
+                f"across {len(active)} file(s) ...",
+                flush=True,
+            )
+        embs = embed(texts_to_embed)
+        for slot, vec in zip(embed_slots, embs):
+            all_vectors[slot] = vec
+    elif verbose and active:
+        print(f"  reused all chunks for {len(active)} file(s) (no embed)", flush=True)
 
-    db = connect()
-    if pending:
-        _insert_pending_chunks(db, pending, vectors)
-    db.execute(
-        "INSERT OR REPLACE INTO files(path, mtime, hash) VALUES (?,?,?)",
-        (rel, mtime, file_hash),
-    )
-    _finalize_index_writes(db)
-    db.close()
-    return len(pending)
+    if all_pending:
+        _insert_pending_chunks(db, all_pending, all_vectors)
+    for plan in active:
+        db.execute(
+            "INSERT OR REPLACE INTO files(path, mtime, hash) VALUES (?,?,?)",
+            (plan.rel, plan.mtime, plan.file_hash),
+        )
+    if purge_rels or active:
+        _finalize_index_writes(db)
+    else:
+        db.commit()  # mtime-only updates
+
+    return len(active) + len(purge_rels)
 
 
 def _delete_path_by_rel(db: sqlite3.Connection, rel: str) -> None:
@@ -566,10 +689,9 @@ def purge_source(full_path: Path) -> bool:
         rel = full_path.resolve().relative_to(config.NOTES_ROOT).as_posix()
     except ValueError:
         return False
-    db = connect()
+    db = writer_connect()
     _delete_path_by_rel(db, rel)
     db.commit()
-    db.close()
     return True
 
 
@@ -726,16 +848,19 @@ def process_queues(
             out.purged += 1
 
     if consume_index:
+        to_index: list[Path] = []
         for path in deferred.consume_index_queue(coll):
             p = Path(path)
             if p.exists():
+                to_index.append(p)
+            else:
                 try:
-                    n = index_file(p, verbose=verbose)
-                    if n > 0:
-                        out.indexed += 1
-                except (OSError, ValueError) as e:
-                    if verbose:
-                        print(f"  skip index {path}: {e}", flush=True)
+                    if purge_source(p):
+                        out.purged += 1
+                except (OSError, ValueError):
+                    pass
+        if to_index:
+            out.indexed += index_files(to_index, verbose=verbose)
 
     if scan_vault:
         out.vault_stats = index_vault(verbose=verbose)
