@@ -99,7 +99,7 @@ Optional but high-leverage: a daily note under `inbox/daily/YYYY-MM-DD.md` with 
 - Rename / archive → `move_note` (never read→write→delete)
 - After a batch of index-deferred writes → `reindex_deferred`
 
-Always check tool `ok` (except `build_context`).
+Always check tool `ok`.
 
 ### 4. Inbox hygiene
 

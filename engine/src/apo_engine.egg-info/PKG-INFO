@@ -5,6 +5,7 @@ Summary: Apo KB engine — local semantic search over a markdown vault (sqlite-v
 Requires-Python: >=3.11
 Requires-Dist: sqlite-vec>=0.1.6
 Requires-Dist: pyyaml>=6.0
+Requires-Dist: watchdog>=4.0.0
 Provides-Extra: cpu
 Requires-Dist: fastembed>=0.8.0; extra == "cpu"
 Provides-Extra: mcp

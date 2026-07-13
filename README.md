@@ -19,7 +19,7 @@ Ollama bge-m3 (or fastembed)     index: engine/index.db
 | Layer | Role |
 |-------|------|
 | **Engine** (`engine/`) | Chunk, embed, hybrid BM25 + vector search |
-| **MCP** | 19 tools — agents never talk to sqlite directly for writes |
+| **MCP** | 17 tools — agents never talk to sqlite directly for writes |
 | **Watcher** | FS events + deferred queue → reindex |
 
 ## Quickstart

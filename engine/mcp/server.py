@@ -627,36 +627,6 @@ async def patch_note(
     return out
 
 
-@mcp.tool(annotations=_WRITE)
-async def upsert_thread(
-    path: str,
-    history_line: str,
-    fields: dict[str, str] | None = None,
-    heading: str = "## History",
-    index: bool | None = None,
-    vault: str = "",
-) -> dict:
-    """Append a dated log bullet under a heading and update frontmatter in one call.
-
-    Compiles to patch_note internally. Suited to rotation sweeps over many notes.
-
-    Example:
-        upsert_thread("threads/plat-794.md",
-                      "- 2026-07-09 15:30 ET — Jira Done.",
-                      {"last_checked": "2026-07-09 15:30", "status": "resolved"})
-    """
-    ops: list[dict] = [
-        {
-            "op": "append",
-            "heading": heading,
-            "text": history_line if history_line.endswith("\n") else history_line + "\n",
-        },
-    ]
-    for key, value in (fields or {}).items():
-        ops.append({"op": "set_field", "field": key, "value": value})
-    return await patch_note(path, ops, strict=False, index=index, vault=vault)
-
-
 @mcp.tool(annotations=_MUTATE)
 async def move_note(
     src: str,
@@ -847,50 +817,6 @@ async def expand_chunk(chunk_hash: str, vault: str = "") -> dict:
         "end_line": section.body_end,
         "content": "\n".join(lines[start : section.body_end]),
     }
-
-
-@mcp.tool(annotations=_RO)
-async def build_context(
-    query: str,
-    top_k: int = 10,
-    folder: str = "",
-    max_chars: int = 8000,
-    vault: str = "",
-) -> str:
-    """Build a memory-context markdown block for a query (deduped, size-budgeted).
-
-    Returns the most relevant note excerpts with sources, best chunk per note first,
-    truncated to max_chars. Use to prime context before a deep task.
-    """
-    try:
-        v = _vault(vault)
-    except VaultError as e:
-        return f"Error: {e}"
-    source_prefix = str(v.root / folder) if folder else None
-    try:
-        results = await _ensure_mem(v).search(query, top_k=top_k, source_prefix=source_prefix)
-    except Exception as e:
-        return f"Search failed: {e}"
-    if not results:
-        return "No relevant memories found."
-
-    # Best chunk per note first, remaining chunks after — until the budget runs out.
-    seen: set[str] = set()
-    first_pass = [r for r in results if not (r.get("source") in seen or seen.add(r.get("source")))]
-    rest = [r for r in results if r not in first_pass]
-
-    lines = [f"# Memory Context: {query}\n"]
-    used = len(lines[0])
-    for r in first_pass + rest:
-        src = _display_source(v, r.get("source", ""))
-        score = round(float(r.get("score", 0)), 3)
-        block = f"## [{src}] (score: {score})\n\n{r.get('content', '')}\n"
-        if used + len(block) > max_chars and len(lines) > 1:
-            lines.append(f"…truncated at {max_chars} chars; refine query or raise max_chars.")
-            break
-        lines.append(block)
-        used += len(block)
-    return "\n".join(lines)
 
 
 @mcp.tool(annotations=_RO)

@@ -71,7 +71,7 @@ Ensure the same env vars as above are visible to that process (`~/.claude.json` 
 ## 4. Verify
 
 ```bash
-cd ~/Code/apo && just inspect    # expect ~19 tools
+cd ~/Code/apo && just inspect    # expect ~17 tools
 ```
 
 In the agent, run Apo `memory_status` — expect `root_exists: true`, watcher optionally running, index ok.
@@ -91,7 +91,7 @@ Install gets the engine running. **Persistent write habits** should match *your*
 |---------|-----|
 | 0 Apo tools in Cursor | Full quit/reopen; confirm `apo` key (not a stale rename); Ollama up with `bge-m3` |
 | Empty / stale search | `just index`; confirm `APO_NOTES_ROOT`; `just watch-status` |
-| Writes don’t show in search | Call `reindex_deferred` after batches; ensure watcher installed |
+| Writes don’t show in search | Ensure watcher installed; after large batches call `reindex_deferred` (or wait for debounce/poll) |
 
 Health one-liner:
 
