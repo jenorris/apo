@@ -24,3 +24,7 @@ node_modules/
 # os / logs
 .DS_Store
 *.log
+
+# sqlite indexes (any name)
+*.db
+*.db-*
