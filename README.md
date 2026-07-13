@@ -53,13 +53,12 @@ claude mcp add -s user apo -- \
 |-----|---------|---------|
 | `APO_NOTES_ROOT` | (set me) | Vault root to index |
 | `APO_INDEX` | `engine/index.db` | sqlite-vec database |
+| `APO_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace |
+| `APO_INGEST_DIR` | `resources/wiki` | Default `ingest_uri` destination (vault-relative) |
 | `APO_EMBED_BACKEND` | `ollama` | `ollama` or `fastembed` |
 | `OLLAMA_KEEP_ALIVE` | `5m` | Keep embed model warm; `0` = unload when idle |
-| `MEMSEARCH_COLLECTION` | `notes_global` | Deferred-queue namespace |
 | `WATCH_INTERVAL` | `30` | Periodic mtime scan (seconds) |
 | `APO_WATCH_DEBOUNCE` | `2` | Quiet seconds before re-embedding a path |
-
-`MEMSEARCH_NOTES_ROOT` is accepted as an alias for `APO_NOTES_ROOT`.
 
 Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 

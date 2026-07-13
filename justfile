@@ -64,4 +64,4 @@ mcp:
     {{mcp_py}} {{mcp_srv}}
 
 inspect:
-    npx -y @modelcontextprotocol/inspector --cli {{mcp_py}} {{mcp_srv}} --env MEMSEARCH_NOTES_ROOT=${APO_NOTES_ROOT} --method tools/list | rg '"name"' | wc -l
+    npx -y @modelcontextprotocol/inspector --cli {{mcp_py}} {{mcp_srv}} --env APO_NOTES_ROOT=${APO_NOTES_ROOT} --method tools/list | rg '"name"' | wc -l

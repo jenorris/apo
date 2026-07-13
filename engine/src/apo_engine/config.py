@@ -11,11 +11,8 @@ def _path(env: str, default: str) -> Path:
     return Path(os.environ.get(env, default)).expanduser().resolve()
 
 
-# Vault to index. MEMSEARCH_NOTES_ROOT alias for drop-in MCP migration.
-NOTES_ROOT: Path = _path(
-    "APO_NOTES_ROOT",
-    os.environ.get("MEMSEARCH_NOTES_ROOT", "~/Notes"),
-)
+# Vault to index.
+NOTES_ROOT: Path = _path("APO_NOTES_ROOT", "~/Notes")
 
 # Single-file sqlite-vec index (rebuildable, git-ignored).
 INDEX_PATH: Path = _path("APO_INDEX", str(_ENGINE_ROOT / "index.db"))
@@ -37,8 +34,11 @@ OVERLAP: int = int(os.environ.get("APO_OVERLAP", "150"))
 # Ignore-file (globs relative to NOTES_ROOT).
 IGNORE_FILE: Path = _path("APO_IGNORE", str(_ENGINE_ROOT / ".indexignore"))
 
-# Deferred-queue namespace (MCP + watcher). MEMSEARCH_COLLECTION alias for drop-in.
-COLLECTION: str = os.environ.get("MEMSEARCH_COLLECTION", "notes_global")
+# Deferred-queue namespace (MCP + watcher).
+COLLECTION: str = os.environ.get("APO_COLLECTION", "notes_global")
+
+# Default vault-relative dir for ingest_uri when dest_dir is omitted.
+INGEST_DIR: str = os.environ.get("APO_INGEST_DIR", "resources/wiki")
 
 # SQLite busy-handler timeout (seconds) — cross-process writer contention.
 DB_TIMEOUT: float = float(os.environ.get("APO_DB_TIMEOUT", "30"))

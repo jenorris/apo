@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-Apo MCP server — memsearch-compatible tool surface over sqlite-vec + Ollama.
+Apo MCP server — hybrid search + surgical writes over sqlite-vec + Ollama.
 
-Drop-in replacement for ~/Code/ai-tools/memsearch/mcp/server.py.
-Vault: APO_NOTES_ROOT (alias MEMSEARCH_NOTES_ROOT).
-Deferred queue: ~/.apo/deferred-<collection>.json
+Vault: APO_NOTES_ROOT. Deferred queue: ~/.apo/deferred-<collection>.json
 """
 
 import asyncio
@@ -59,16 +57,13 @@ VAULTS: dict[str, Vault] = {}
 DEFAULT_VAULT = "default"
 
 
-# Apo uses APO_* env (MEMSEARCH_* aliases supported in config).
-
-
 def _runtime_config_path() -> Path:
-    explicit = os.environ.get("MEMSEARCH_RUNTIME_CONFIG")
+    explicit = os.environ.get("APO_RUNTIME_CONFIG")
     if explicit:
         return Path(explicit).expanduser()
     # Per-collection override file so multiple server instances (one per vault
     # registration) never clobber each other through a shared runtime file.
-    coll = (os.environ.get("MEMSEARCH_COLLECTION") or "").strip()
+    coll = (os.environ.get("APO_COLLECTION") or "").strip()
     base = Path.home() / ".apo"
     return base / (f"mcp-runtime.{coll}.json" if coll else "mcp-runtime.json")
 
@@ -107,20 +102,24 @@ def _load_vaults() -> None:
     """(Re)build the single default vault from env + runtime JSON.
 
     The engine binds NOTES_ROOT/INDEX once at import, so the registry holds exactly
-    one vault rooted there — multi-vault registration (MEMSEARCH_VAULTS) is not
-    supported. Runtime JSON may still override the collection (deferred-queue
-    namespace) and ingest_dir; changing the vault root requires restarting the
-    server with new APO_NOTES_ROOT / APO_INDEX env.
+    one vault rooted there. Runtime JSON may still override the collection
+    (deferred-queue namespace) and ingest_dir; changing the vault root requires
+    restarting the server with new APO_NOTES_ROOT / APO_INDEX env.
     """
     global VAULTS, DEFAULT_VAULT
     overrides = _read_runtime_overrides()
-    coll = _pick(overrides, "MEMSEARCH_COLLECTION", "notes_global") or "notes_global"
+    coll = (
+        _pick(overrides, "APO_COLLECTION", apo_config.COLLECTION) or apo_config.COLLECTION
+    )
+    ingest = (
+        _pick(overrides, "APO_INGEST_DIR", apo_config.INGEST_DIR) or apo_config.INGEST_DIR
+    )
     VAULTS = {
         "default": Vault(
             name="default",
             root=apo_config.NOTES_ROOT,
             collection=coll,
-            ingest_dir=_pick(overrides, "MEMSEARCH_INGEST_DIR", "wiki") or "wiki",
+            ingest_dir=ingest,
             deferred=_load_deferred(coll),
         )
     }
@@ -185,7 +184,7 @@ def _check_mtime(full: Path, expected: float | None, path: str) -> dict | None:
 
 
 def _default_index_on_write() -> bool:
-    return os.environ.get("MEMSEARCH_INDEX_ON_WRITE", "").lower() in ("1", "true", "yes")
+    return os.environ.get("APO_INDEX_ON_WRITE", "").lower() in ("1", "true", "yes")
 
 
 async def _maybe_index(v: Vault, full: Path, index: bool | None) -> None:
@@ -341,9 +340,9 @@ _load_vaults()
 async def reload_config() -> dict:
     """Rebuild the vault registry from env + optional runtime JSON, dropping the cached index backend.
 
-    Use after editing the runtime JSON file (``MEMSEARCH_RUNTIME_CONFIG``; default
+    Use after editing the runtime JSON file (``APO_RUNTIME_CONFIG``; default
     ``~/.apo/mcp-runtime.<collection>.json``) to apply changes without restarting the
-    MCP host. Supported JSON keys: ``MEMSEARCH_COLLECTION``, ``MEMSEARCH_INGEST_DIR``.
+    MCP host. Supported JSON keys: ``APO_COLLECTION``, ``APO_INGEST_DIR``.
     The vault root is fixed at process start (APO_NOTES_ROOT / APO_INDEX env) — changing
     it requires a server restart.
     """
@@ -1084,7 +1083,7 @@ async def ingest_uri(
         tags: Optional tags written into the note frontmatter.
         force: Overwrite if already ingested.
         dest_dir: Vault-relative destination dir; default = the vault's configured
-            ingest_dir (MEMSEARCH_INGEST_DIR / vault config).
+            ingest_dir (APO_INGEST_DIR / vault config).
         vault: Vault name; empty = default vault.
     """
     try:
