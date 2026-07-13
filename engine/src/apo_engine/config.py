@@ -36,3 +36,15 @@ OVERLAP: int = int(os.environ.get("APO_OVERLAP", "150"))
 
 # Ignore-file (globs relative to NOTES_ROOT).
 IGNORE_FILE: Path = _path("APO_IGNORE", str(_ENGINE_ROOT / ".indexignore"))
+
+# Deferred-queue namespace (MCP + watcher). MEMSEARCH_COLLECTION alias for drop-in.
+COLLECTION: str = os.environ.get("MEMSEARCH_COLLECTION", "notes_global")
+
+# SQLite busy-handler timeout (seconds) — cross-process writer contention.
+DB_TIMEOUT: float = float(os.environ.get("APO_DB_TIMEOUT", "30"))
+
+# Watcher: prefer filesystem events over poll-only scan.
+WATCH_USE_EVENTS: bool = os.environ.get("APO_WATCH_EVENTS", "1").lower() not in ("0", "false", "no")
+
+# Fallback poll interval when events are active (seconds).
+WATCH_POLL_INTERVAL: float = float(os.environ.get("WATCH_INTERVAL", "30"))

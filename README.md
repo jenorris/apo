@@ -10,20 +10,24 @@ Clean-room personal build — not derived from employer code. See Meta vault `pr
 
 ```
 agent (Claude Code / Cursor)
-      │  MCP — 19 tools (apo)
+      │  MCP — 19 tools (read index.db; enqueue writes)
       ▼
 engine/mcp/server.py   FastMCP
-      │  apo-engine CLI + sqlite-vec hybrid (dense + FTS5 RRF)
+      │  ~/.apo/deferred-*.json + wake signals
+      ▼
+apo-watch (launchd)    sole SQLite writer
+      │  fsevents + queue consumer + periodic hash scan
       ▼
 Ollama  bge-m3 (local Metal)     index: engine/index.db (rebuildable)
-
-apo-enterprise (separate repo)   Laravel OAuth remote MCP — Grid/home only
 ```
+
+**Single-writer indexing:** MCP never writes `index.db`. Writes queue paths under `~/.apo/`; `apo-engine watch` (launchd) consumes queues, embeds off-DB, and commits short SQLite transactions.
 
 | Layer | Location | Role |
 |-------|----------|------|
 | **Engine** (`engine/`) | this repo | Chunk, embed, hybrid search, incremental index |
-| **MCP** (`engine/mcp/server.py`) | this repo | 19 tools — Cursor/Claude Code entry point |
+| **MCP** (`engine/mcp/server.py`) | this repo | 19 tools — search/read + enqueue index work |
+| **Watcher** (`apo-engine watch`) | launchd | fsevents, deferred queue, sole index writer |
 | **Enterprise** | `jenorris/apo-enterprise` | Passport OAuth, remote claude.ai, family KB |
 
 ## MacBook Air (32 GB) — local Ollama
@@ -66,6 +70,10 @@ claude mcp add -s user apo -- \
 | `APO_INDEX` | `engine/index.db` | sqlite-vec index |
 | `APO_EMBED_BACKEND` | `ollama` | `ollama` or `fastembed` (CPU) |
 | `OLLAMA_KEEP_ALIVE` | `0` | Unload model after each request |
+| `MEMSEARCH_COLLECTION` | `notes_global` | Deferred queue namespace |
+| `WATCH_INTERVAL` | `30` | Vault hash-scan interval (fsevents handle hot paths) |
+| `APO_DB_TIMEOUT` | `30` | SQLite busy-handler seconds |
+| `APO_WATCH_EVENTS` | `1` | Use fsevents (`0` = poll-only) |
 
 \*MacBook profile in `config.env` uses `~/Notes/MyVault`.
 
@@ -75,6 +83,8 @@ claude mcp add -s user apo -- \
 just watch-install    # com.apo.watch
 tail -f ~/.apo/watch-launchd.log
 ```
+
+Concurrency model: [docs/index-concurrency.md](docs/index-concurrency.md)
 
 ## Current status
 

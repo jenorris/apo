@@ -11,7 +11,7 @@ set +a
 APO_ENGINE_BIN="${APO_ENGINE_BIN:-${SCRIPT_DIR}/engine/.venv/bin/apo-engine}"
 WATCH_PID_DIR="${WATCH_PID_DIR:-${HOME}/.apo}"
 OLLAMA_URL="${APO_OLLAMA_URL:-http://127.0.0.1:11434}"
-WATCH_INTERVAL="${WATCH_INTERVAL:-5}"
+WATCH_INTERVAL="${WATCH_INTERVAL:-30}"
 
 mkdir -p "${WATCH_PID_DIR}"
 
@@ -39,7 +39,7 @@ if ! curl -sf "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
   exit 1
 fi
 
-printf '[apo-watch] watching %s → %s (interval %ss, ollama %s)\n' \
+printf '[apo-watch] watching %s → %s (fsevents + %ss scan, ollama %s)\n' \
   "${APO_NOTES_ROOT}" "${APO_INDEX:-engine/index.db}" "${WATCH_INTERVAL}" "${OLLAMA_URL}"
 
 echo $$ > "${WATCH_PID_DIR}/watch.pid"

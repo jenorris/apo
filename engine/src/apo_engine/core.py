@@ -173,11 +173,12 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
-    db = sqlite3.connect(path or config.INDEX_PATH)
+    db = sqlite3.connect(path or config.INDEX_PATH, timeout=config.DB_TIMEOUT)
     db.enable_load_extension(True)
     sqlite_vec.load(db)
     db.enable_load_extension(False)
     db.execute("PRAGMA journal_mode=WAL")
+    db.execute(f"PRAGMA busy_timeout={int(config.DB_TIMEOUT * 1000)}")
     db.executescript(
         """
         CREATE TABLE IF NOT EXISTS meta   (key TEXT PRIMARY KEY, value TEXT);
@@ -220,6 +221,35 @@ def ensure_fts(db: sqlite3.Connection) -> None:
         "INSERT INTO chunks_fts(rowid, text) VALUES (?,?)",
         db.execute("SELECT id, text FROM chunks").fetchall(),
     )
+    db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_ready','1')")
+    db.commit()
+
+
+def _insert_pending_chunks(
+    db: sqlite3.Connection,
+    pending: list[tuple[str, int, str, str, int, int, int, str]],
+    vectors: list[list[float]],
+) -> int:
+    if not pending:
+        return 0
+    _ensure_vec_table(db, len(vectors[0]))
+    for row, vec in zip(pending, vectors):
+        rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id = row
+        cur = db.execute(
+            """INSERT INTO chunks(path, ord, heading, text, start_line, end_line, heading_level, chunk_hash)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id),
+        )
+        db.execute(
+            "INSERT INTO vec_chunks(rowid, embedding) VALUES (?,?)",
+            (cur.lastrowid, sqlite_vec.serialize_float32(vec)),
+        )
+        db.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cur.lastrowid, ctext))
+    return len(pending)
+
+
+def _finalize_index_writes(db: sqlite3.Connection) -> None:
+    ensure_fts(db)
     db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_ready','1')")
     db.commit()
 
@@ -338,6 +368,12 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                 db.execute("DELETE FROM files WHERE path=?", (rel,))
                 stats.removed += 1
 
+    work_done = bool(pending) or stats.removed > 0
+    if work_done:
+        db.commit()
+    db.close()
+
+    vectors: list[list[float]] = []
     if pending:
         if verbose:
             print(
@@ -345,24 +381,17 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                 flush=True,
             )
         vectors = embed([t[3] for t in pending])
-        _ensure_vec_table(db, len(vectors[0]))
-        for row, vec in zip(pending, vectors):
-            rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id = row
-            cur = db.execute(
-                """INSERT INTO chunks(path, ord, heading, text, start_line, end_line, heading_level, chunk_hash)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id),
-            )
-            db.execute(
-                "INSERT INTO vec_chunks(rowid, embedding) VALUES (?,?)",
-                (cur.lastrowid, sqlite_vec.serialize_float32(vec)),
-            )
-            db.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cur.lastrowid, ctext))
-        stats.chunks = len(pending)
 
-    db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_ready','1')")
-    db.commit()
-    db.close()
+    if pending:
+        db = connect()
+        stats.chunks = _insert_pending_chunks(db, pending, vectors)
+        _finalize_index_writes(db)
+        db.close()
+    elif work_done:
+        db = connect()
+        _finalize_index_writes(db)
+        db.close()
+
     stats.seconds = time.time() - t0
     return stats
 
@@ -444,8 +473,6 @@ def index_file(full_path: Path, verbose: bool = False) -> int:
         db.close()
         return 0
     text = full_path.read_text(encoding="utf-8", errors="replace")
-    db = connect()
-    _delete_path(db, rel)
     pending: list[tuple] = []
     lines = text.split("\n")
     for ordi, (heading, hlevel, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
@@ -455,29 +482,26 @@ def index_file(full_path: Path, verbose: bool = False) -> int:
             f"markdown:{rel}", start_line, end_line, chash, config.MODEL_NAME
         )
         pending.append((rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id))
+
+    db = connect()
+    _delete_path(db, rel)
+    db.commit()
+    db.close()
+
+    vectors: list[list[float]] = []
     if pending:
         if verbose:
             print(f"  embedding {len(pending)} chunks for {rel} ...", flush=True)
         vectors = embed([t[3] for t in pending])
-        _ensure_vec_table(db, len(vectors[0]))
-        for row, vec in zip(pending, vectors):
-            rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id = row
-            cur = db.execute(
-                """INSERT INTO chunks(path, ord, heading, text, start_line, end_line, heading_level, chunk_hash)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id),
-            )
-            db.execute(
-                "INSERT INTO vec_chunks(rowid, embedding) VALUES (?,?)",
-                (cur.lastrowid, sqlite_vec.serialize_float32(vec)),
-            )
-            db.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cur.lastrowid, ctext))
+
+    db = connect()
+    if pending:
+        _insert_pending_chunks(db, pending, vectors)
     db.execute(
         "INSERT OR REPLACE INTO files(path, mtime, hash) VALUES (?,?,?)",
         (rel, full_path.stat().st_mtime, _file_hash(text)),
     )
-    db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_ready','1')")
-    db.commit()
+    _finalize_index_writes(db)
     db.close()
     return len(pending)
 
@@ -512,6 +536,7 @@ def search(
     (1.0 = top hit), so scores are monotonic with ranking — comparable within
     one result set, not across queries.
     """
+    qvec = embed([query])[0]
     db = connect()
     if db.execute("SELECT value FROM meta WHERE key='dim'").fetchone() is None:
         db.close()
@@ -521,7 +546,6 @@ def search(
     fused: dict[int, float] = {}
 
     # --- dense: vector KNN ---
-    qvec = embed([query])[0]
     vrows = db.execute(
         "SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance",
         (sqlite_vec.serialize_float32(qvec), n),
@@ -529,20 +553,21 @@ def search(
     for rank, (rid, _) in enumerate(vrows):
         fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
 
-    # --- lexical: FTS5 BM25 ---
+    # --- lexical: FTS5 BM25 (index-time backfill only; no writes during search) ---
     if hybrid:
-        ensure_fts(db)
-        match = _fts_query(query)
-        if match:
-            try:
-                frows = db.execute(
-                    "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
-                    (match, n),
-                ).fetchall()
-            except sqlite3.OperationalError:
-                frows = []
-            for rank, (rid,) in enumerate(frows):
-                fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
+        fts_ready = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
+        if fts_ready and fts_ready[0] == "1":
+            match = _fts_query(query)
+            if match:
+                try:
+                    frows = db.execute(
+                        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
+                        (match, n),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    frows = []
+                for rank, (rid,) in enumerate(frows):
+                    fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
 
     if not fused:
         db.close()
@@ -602,4 +627,43 @@ def stats() -> dict:
         row = db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         out[key] = row[0] if row else None
     db.close()
+    return out
+
+
+@dataclass
+class QueueStats:
+    purged: int = 0
+    indexed: int = 0
+    vault_stats: IndexStats | None = None
+
+
+def process_queues(collection: str | None = None, *, scan_vault: bool = False, verbose: bool = False) -> QueueStats:
+    """Single-writer entry point: consume MCP queues, then optional vault scan."""
+    from . import deferred
+
+    coll = collection or config.COLLECTION
+    out = QueueStats()
+
+    rebuild = deferred.consume_rebuild(coll)
+    if rebuild is not None:
+        out.vault_stats = index_vault(rebuild=bool(rebuild.get("force")), verbose=verbose)
+        return out
+
+    for path in deferred.consume_purge_queue(coll):
+        if purge_source(Path(path)):
+            out.purged += 1
+
+    for path in deferred.consume_index_queue(coll):
+        p = Path(path)
+        if p.exists():
+            try:
+                index_file(p, verbose=verbose)
+                out.indexed += 1
+            except (OSError, ValueError) as e:
+                if verbose:
+                    print(f"  skip index {path}: {e}", flush=True)
+
+    if scan_vault:
+        out.vault_stats = index_vault(verbose=verbose)
+
     return out

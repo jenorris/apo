@@ -19,6 +19,7 @@ from typing import Any, Literal
 import yaml
 from fastmcp import FastMCP
 from apo_engine import config as apo_config
+from apo_engine import deferred as index_deferred
 from apo_engine.mcp_backend import ApoMem
 from apo_engine.markdown_patch import (
     PatchError,
@@ -94,28 +95,12 @@ def _pick(overrides: dict, key: str, default: str | None = None) -> str | None:
     return default
 
 
-def _deferred_queue_path(collection: str) -> Path:
-    return DEFERRED_DIR / f"deferred-{collection}.json"
-
-
 def _load_deferred(collection: str) -> set[str]:
-    p = _deferred_queue_path(collection)
-    if not p.is_file():
-        return set()
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return {str(x) for x in data} if isinstance(data, list) else set()
-    except (OSError, json.JSONDecodeError):
-        return set()
+    return index_deferred.load_index_queue(collection)
 
 
 def _save_deferred(v: Vault) -> None:
-    p = _deferred_queue_path(v.collection)
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(sorted(v.deferred)), encoding="utf-8")
-    except OSError:
-        pass  # queue survives in memory; watcher is the backstop
+    index_deferred.save_index_queue(v.collection, v.deferred)
 
 
 def _load_vaults() -> None:
@@ -204,23 +189,16 @@ def _default_index_on_write() -> bool:
 
 
 async def _maybe_index(v: Vault, full: Path, index: bool | None) -> None:
-    """Index the file immediately, or queue it for reindex_deferred / the watcher."""
-    if index is None:
-        index = _default_index_on_write()
-    if index:
-        await _ensure_mem(v).index_file(full)
-        if str(full) in v.deferred:
-            v.deferred.discard(str(full))
-            _save_deferred(v)
-    else:
-        v.deferred.add(str(full))
-        _save_deferred(v)
+    """Queue path for the watcher — MCP never writes index.db (single-writer policy)."""
+    del index  # API compat; watcher owns all SQLite writes
+    index_deferred.enqueue_index(v.collection, str(full.resolve()))
+    v.deferred = index_deferred.load_index_queue(v.collection)
 
 
 def _purge_index(v: Vault, full: Path) -> bool:
-    """Remove all indexed chunks for a source file. Best-effort."""
+    """Queue index purge for the watcher. Best-effort."""
     try:
-        _ensure_mem(v).store.delete_by_source(str(full))
+        index_deferred.enqueue_purge(v.collection, str(full.resolve()))
         return True
     except Exception:
         return False
@@ -344,9 +322,9 @@ mcp = FastMCP(
         "search_notes results carry anchors (chunk_hash, heading, start_line) that feed directly "
         "into append_note / patch_note / expand_chunk — no read_note round trip needed. "
         "Query structured frontmatter with find_notes; trace [[wiki-links]] with backlinks. "
-        "Writes default to index=False (a file watcher re-indexes); call reindex_deferred() after "
-        "batch sweeps or pass index=true when immediate searchability matters. "
-        "memory_status() reports vaults, index health, and the deferred queue."
+        "MCP never writes index.db — writes enqueue paths in ~/.apo/deferred-*.json; "
+        "apo-engine watch (launchd) is the sole index writer. Call reindex_deferred() after "
+        "batch sweeps to wake the watcher. memory_status() reports vault health and queue depth."
     ),
 )
 
@@ -445,7 +423,7 @@ async def write_note(
         path: Vault-relative path, e.g. 'notes/topic.md'.
         content: Markdown content to write.
         append: If True, append to the raw file tail instead of overwriting.
-        index: True = index immediately; default False (watcher / reindex_deferred).
+        index: Deprecated — always queues for the watcher (single-writer policy).
         expected_mtime: If set, fail with stale_write when the file changed since this mtime.
         vault: Vault name; empty = default vault.
     """
@@ -698,7 +676,7 @@ async def move_note(
         src: Current vault-relative path.
         dst: New vault-relative path (parent dirs are created).
         overwrite: Allow replacing an existing destination note.
-        index: True = index the new path immediately; default deferred.
+        index: Deprecated — always queues for the watcher (single-writer policy).
         vault: Vault name; empty = default vault.
     """
     try:
@@ -714,17 +692,17 @@ async def move_note(
         return _err(src=src, dst=dst, error="destination_exists", message="pass overwrite=true to replace")
 
     dst_full.parent.mkdir(parents=True, exist_ok=True)
+    src_abs = str(src_full.resolve())
     os.replace(src_full, dst_full)
 
-    purged = _purge_index(v, src_full)
-    if str(src_full) in v.deferred:
-        v.deferred.discard(str(src_full))
-        _save_deferred(v)
+    purged = _purge_index(v, Path(src_abs))
+    v.deferred.discard(src_abs)
+    _save_deferred(v)
     await _maybe_index(v, dst_full, index)
 
     out: dict[str, Any] = {"ok": True, "src": src, "dst": dst, "index_purged": purged, "mtime": _mtime(dst_full)}
     if not purged:
-        out["warning"] = "old chunks not purged — run reindex() later"
+        out["warning"] = "purge not queued — watcher may retain stale chunks"
     return out
 
 
@@ -738,14 +716,14 @@ async def delete_note(path: str, vault: str = "") -> dict:
         return _err(path=path, error="bad_path", message=str(e))
     if not full.exists():
         return _err(path=path, error="not_found", message="note not found")
-    full.unlink()
+    abs_path = str(full.resolve())
     purged = _purge_index(v, full)
-    if str(full) in v.deferred:
-        v.deferred.discard(str(full))
-        _save_deferred(v)
+    full.unlink()
+    v.deferred.discard(abs_path)
+    _save_deferred(v)
     out: dict[str, Any] = {"ok": True, "path": path, "index_purged": purged}
     if not purged:
-        out["warning"] = "indexed chunks not purged — run reindex() later"
+        out["warning"] = "purge not queued — watcher may retain stale chunks"
     return out
 
 
@@ -1198,51 +1176,37 @@ async def ingest_uri(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(document, encoding="utf-8")
 
-    try:
-        await _ensure_mem(v).index_file(out_path)
-        indexed = True
-    except Exception:
-        v.deferred.add(str(out_path))
-        _save_deferred(v)
-        indexed = False
+    index_deferred.enqueue_index(v.collection, str(out_path.resolve()))
+    v.deferred = index_deferred.load_index_queue(v.collection)
 
-    return {"ok": True, "uri": uri, "path": rel, "chars": len(content), "indexed": indexed}
+    return {"ok": True, "uri": uri, "path": rel, "chars": len(content), "indexed": False, "queued": True}
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
 async def reindex_deferred(vault: str = "") -> dict:
-    """Index all files written with index=False since the last flush.
+    """Signal the watcher to flush the deferred index queue.
 
-    Call at the end of batch sweeps. Empty vault = flush every vault. The queue
-    persists across server restarts; the file watcher is the backstop either way.
+    MCP does not write index.db — the watcher consumes ~/.apo/deferred-*.json.
+    Call at the end of batch sweeps for faster pickup (otherwise watcher poll/events).
     """
     try:
         targets = list(VAULTS.values()) if not vault.strip() else [_vault(vault)]
     except VaultError as e:
         return _err(error="bad_vault", message=str(e))
 
-    indexed = 0
-    errors: list[str] = []
+    queued = 0
     for v in targets:
-        paths = sorted(v.deferred)
-        for p in paths:
-            try:
-                if Path(p).exists():
-                    await _ensure_mem(v).index_file(p)
-                    indexed += 1
-                v.deferred.discard(p)
-            except Exception as e:
-                errors.append(f"{p}: {e}")
-        _save_deferred(v)
-    out: dict[str, Any] = {"ok": not errors, "indexed": indexed}
-    if errors:
-        out["errors"] = errors[:5]
-    return out
+        index_deferred.touch_wake(v.collection)
+        v.deferred = index_deferred.load_index_queue(v.collection)
+        queued += len(v.deferred)
+    return {"ok": True, "queued": queued, "signaled": True}
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
 async def reindex(force: bool = False, vault: str = "") -> dict:
-    """Trigger a full re-index of a vault (also prunes chunks of deleted files).
+    """Signal the watcher to rebuild the index (also prunes chunks of deleted files).
+
+    MCP does not run index_vault directly — the watcher is the sole SQLite writer.
 
     Args:
         force: Re-embed all content even if unchanged (slow).
@@ -1250,10 +1214,10 @@ async def reindex(force: bool = False, vault: str = "") -> dict:
     """
     try:
         v = _vault(vault)
-        n = await _ensure_mem(v).index(force=force)
+        index_deferred.signal_rebuild(v.collection, force=force)
         v.deferred.clear()
-        _save_deferred(v)
-        return {"ok": True, "vault": v.name, "files_indexed": n}
+        index_deferred.save_index_queue(v.collection, set())
+        return {"ok": True, "vault": v.name, "rebuild_signaled": True, "force": force}
     except VaultError as e:
         return _err(error="bad_vault", message=str(e))
     except Exception as e:

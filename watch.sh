@@ -17,7 +17,7 @@ set +a
 
 APO_ENGINE_BIN="${APO_ENGINE_BIN:-${SCRIPT_DIR}/engine/.venv/bin/apo-engine}"
 WATCH_PID_DIR="${WATCH_PID_DIR:-${HOME}/.apo}"
-WATCH_INTERVAL="${WATCH_INTERVAL:-5}"
+WATCH_INTERVAL="${WATCH_INTERVAL:-30}"
 
 mkdir -p "${WATCH_PID_DIR}"
 

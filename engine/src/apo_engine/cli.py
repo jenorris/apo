@@ -7,9 +7,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 
 from . import config, core
+from .watch import run_watch
 
 
 def _cmd_index(args) -> int:
@@ -44,15 +44,7 @@ def _cmd_stats(args) -> int:
 
 
 def _cmd_watch(args) -> int:
-    print(f"Watching {config.NOTES_ROOT} every {args.interval}s (Ctrl-C to stop)")
-    try:
-        while True:
-            s = core.index_vault(verbose=False)
-            if s.added or s.changed or s.removed:
-                print(f"  reindexed: +{s.added} ~{s.changed} -{s.removed} ({s.chunks} chunks)")
-            time.sleep(args.interval)
-    except KeyboardInterrupt:
-        print("\nstopped")
+    run_watch(interval=args.interval, use_events=not args.poll_only, verbose=True)
     return 0
 
 
@@ -76,8 +68,9 @@ def main(argv: list[str] | None = None) -> int:
     pt = sub.add_parser("stats", help="index stats")
     pt.set_defaults(func=_cmd_stats)
 
-    pw = sub.add_parser("watch", help="poll the vault and reindex on change")
-    pw.add_argument("--interval", type=float, default=5.0)
+    pw = sub.add_parser("watch", help="watch vault + consume deferred queues (sole index writer)")
+    pw.add_argument("--interval", type=float, default=None, help="poll interval seconds (default from WATCH_INTERVAL)")
+    pw.add_argument("--poll-only", action="store_true", help="disable fsevents; poll on interval only")
     pw.set_defaults(func=_cmd_watch)
 
     args = p.parse_args(argv)

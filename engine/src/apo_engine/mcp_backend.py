@@ -1,7 +1,7 @@
 """MCP backend — sqlite-vec index adapter matching memsearch MCP expectations.
 
-The async methods run the blocking engine calls (embedding HTTP, sqlite) in a
-worker thread so slow embeds never stall the MCP server's event loop.
+Read paths (search, count, lookup) run in worker threads. Index writes are owned by
+apo-engine watch — MCP enqueues via apo_engine.deferred instead of calling index_file here.
 """
 
 from __future__ import annotations
