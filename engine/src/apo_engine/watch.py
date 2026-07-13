@@ -9,6 +9,51 @@ from pathlib import Path
 from . import config, core, deferred
 
 
+class PathDebouncer:
+    """Coalesce path updates: index only after `delay` seconds of silence per path."""
+
+    def __init__(self, delay: float) -> None:
+        self.delay = max(0.0, float(delay))
+        self._pending: dict[Path, float] = {}
+        self._lock = threading.Lock()
+
+    def touch(self, paths: Path | list[Path] | set[Path], *, now: float | None = None) -> None:
+        ts = time.monotonic() if now is None else now
+        if isinstance(paths, Path):
+            items = (paths,)
+        else:
+            items = paths
+        with self._lock:
+            for p in items:
+                self._pending[p] = ts
+
+    def ready(self, *, now: float | None = None) -> list[Path]:
+        ts = time.monotonic() if now is None else now
+        with self._lock:
+            due = [p for p, seen in self._pending.items() if ts - seen >= self.delay]
+            for p in due:
+                del self._pending[p]
+            return sorted(due)
+
+    def discard(self, paths: list[Path] | set[Path]) -> None:
+        with self._lock:
+            for p in paths:
+                self._pending.pop(p, None)
+
+    def waiting(self) -> int:
+        with self._lock:
+            return len(self._pending)
+
+    def next_due_in(self, *, now: float | None = None) -> float | None:
+        """Seconds until the oldest pending path becomes ready, or None if idle."""
+        ts = time.monotonic() if now is None else now
+        with self._lock:
+            if not self._pending:
+                return None
+            oldest = min(self._pending.values())
+            return max(0.0, self.delay - (ts - oldest))
+
+
 def _note_path(root: Path, raw: str) -> Path | None:
     if not raw:
         return None
@@ -20,38 +65,44 @@ def _note_path(root: Path, raw: str) -> Path | None:
         p.relative_to(root.resolve())
     except ValueError:
         return None
-    if p.suffix != ".md" or not p.is_file():
+    if p.suffix != ".md":
         return None
-    return p
+    # Deleted notes still need indexing (purge); keep non-files for deletions.
+    if p.is_file() or not p.exists():
+        return p
+    return None
 
 
-def _index_paths(paths: set[Path], *, verbose: bool) -> int:
-    indexed = 0
+def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
+    """Index ready paths. Returns count of paths that needed an embed or purge."""
+    worked = 0
     for p in sorted(paths):
         try:
-            core.index_file(p, verbose=verbose)
-            indexed += 1
+            n = core.index_file(p, verbose=verbose)
+            if n > 0 or not p.is_file():
+                worked += 1
         except (OSError, ValueError) as e:
             if verbose:
                 print(f"  skip {p}: {e}", flush=True)
-    return indexed
+    return worked
 
 
 def run_watch(interval: float | None = None, *, use_events: bool | None = None, verbose: bool = True) -> None:
     """Watch vault for changes; consume deferred/purge queues; index incrementally."""
     poll = interval if interval is not None else config.WATCH_POLL_INTERVAL
     events_on = config.WATCH_USE_EVENTS if use_events is None else use_events
+    debounce_s = config.WATCH_DEBOUNCE
     root = config.NOTES_ROOT.resolve()
     collection = config.COLLECTION
 
-    pending: set[Path] = set()
+    debouncer = PathDebouncer(debounce_s)
     event_queue: queue.Queue[str] = queue.Queue()
     stop = threading.Event()
 
     def on_fs_event(raw: str) -> None:
         p = _note_path(root, raw)
         if p is not None:
-            pending.add(p)
+            debouncer.touch(p)
             event_queue.put("fs")
 
     observer = None
@@ -82,7 +133,10 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
             observer.schedule(Handler(), str(root), recursive=True)
             observer.start()
             if verbose:
-                print(f"Watching {root} (fsevents + {poll}s poll) → {config.INDEX_PATH}", flush=True)
+                print(
+                    f"Watching {root} (fsevents + {poll}s poll, debounce {debounce_s}s) → {config.INDEX_PATH}",
+                    flush=True,
+                )
         except ImportError:
             observer = None
             if verbose:
@@ -90,7 +144,10 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
 
     if observer is None:
         if verbose:
-            print(f"Watching {root} every {poll}s → {config.INDEX_PATH}", flush=True)
+            print(
+                f"Watching {root} every {poll}s (debounce {debounce_s}s) → {config.INDEX_PATH}",
+                flush=True,
+            )
 
     last_scan = 0.0
     try:
@@ -107,26 +164,56 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
             due_poll = observer is None or (now - last_scan) >= poll
 
             if woke or due_poll:
-                stats = core.process_queues(collection, scan_vault=due_poll, verbose=verbose)
-                if pending:
-                    extra = _index_paths(pending, verbose=verbose)
-                    stats.indexed += extra
-                    pending.clear()
-                if verbose and (stats.indexed or stats.purged or stats.vault_stats):
-                    parts = []
-                    if stats.indexed:
-                        parts.append(f"{stats.indexed} file(s)")
-                    if stats.purged:
-                        parts.append(f"{stats.purged} purged")
-                    if stats.vault_stats and (
-                        stats.vault_stats.added or stats.vault_stats.changed or stats.vault_stats.removed
-                    ):
-                        vs = stats.vault_stats
-                        parts.append(f"scan +{vs.added} ~{vs.changed} -{vs.removed}")
-                    print(f"  indexed: {', '.join(parts)}", flush=True)
+                for raw in deferred.consume_index_queue(collection):
+                    p = _note_path(root, raw)
+                    if p is None:
+                        try:
+                            cand = Path(raw).resolve()
+                            cand.relative_to(root)
+                            p = cand if cand.suffix == ".md" else None
+                        except (OSError, ValueError):
+                            p = None
+                    if p is not None:
+                        debouncer.touch(p, now=now)
+
+                stats = core.process_queues(
+                    collection,
+                    scan_vault=due_poll,
+                    consume_index=False,
+                    verbose=verbose,
+                )
+            else:
+                stats = core.QueueStats()
+
+            now = time.monotonic()
+            ready = debouncer.ready(now=now)
+            if ready:
+                stats.indexed += _index_paths(ready, verbose=verbose)
+
+            if verbose and (stats.indexed or stats.purged or (
+                stats.vault_stats
+                and (stats.vault_stats.added or stats.vault_stats.changed or stats.vault_stats.removed)
+            )):
+                parts = []
+                if stats.indexed:
+                    parts.append(f"{stats.indexed} file(s)")
+                if stats.purged:
+                    parts.append(f"{stats.purged} purged")
+                if stats.vault_stats and (
+                    stats.vault_stats.added or stats.vault_stats.changed or stats.vault_stats.removed
+                ):
+                    vs = stats.vault_stats
+                    parts.append(f"scan +{vs.added} ~{vs.changed} -{vs.removed}")
+                print(f"  indexed: {', '.join(parts)}", flush=True)
+
+            if due_poll:
                 last_scan = now
 
-            timeout = 1.0 if observer is not None else min(poll, 5.0)
+            due_in = debouncer.next_due_in()
+            if due_in is not None:
+                timeout = max(0.05, min(due_in, 1.0 if observer is not None else min(poll, 5.0)))
+            else:
+                timeout = 1.0 if observer is not None else min(poll, 5.0)
             try:
                 event_queue.get(timeout=timeout)
             except queue.Empty:

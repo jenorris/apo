@@ -10,8 +10,10 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -19,6 +21,10 @@ from typing import Iterator
 import sqlite_vec
 
 from . import config
+
+# Query-embedding LRU (identical agent searches within TTL skip Ollama).
+_query_embed_cache: dict[str, tuple[float, list[float]]] = {}
+_query_embed_lock = threading.Lock()
 
 _FRONTMATTER = re.compile(r"^---\n.*?\n---\n", re.DOTALL)
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)")
@@ -126,6 +132,37 @@ def embed(texts: list[str]) -> list[list[float]]:
     if config.EMBED_BACKEND == "ollama":
         return _embed_ollama(texts)
     return _embed_fastembed(texts)
+
+
+def _normalize_query(query: str) -> str:
+    return " ".join(query.split())
+
+
+def query_embed(query: str) -> list[float]:
+    """Embed a search query with a short TTL cache for repeated agent lookups."""
+    key = _normalize_query(query)
+    ttl = config.QUERY_EMBED_TTL
+    now = time.monotonic()
+    if ttl > 0 and key:
+        with _query_embed_lock:
+            hit = _query_embed_cache.get(key)
+            if hit is not None and now - hit[0] < ttl:
+                return hit[1]
+    vec = embed([query])[0]
+    if ttl > 0 and key:
+        with _query_embed_lock:
+            _query_embed_cache[key] = (now, vec)
+            overflow = len(_query_embed_cache) - config.QUERY_EMBED_CACHE_SIZE
+            if overflow > 0:
+                oldest = sorted(_query_embed_cache, key=lambda k: _query_embed_cache[k][0])[:overflow]
+                for k in oldest:
+                    del _query_embed_cache[k]
+    return vec
+
+
+def clear_query_embed_cache() -> None:
+    with _query_embed_lock:
+        _query_embed_cache.clear()
 
 
 # --------------------------------------------------------------------------- #
@@ -459,7 +496,7 @@ def lookup_chunk(chunk_hash: str) -> dict | None:
 
 
 def index_file(full_path: Path, verbose: bool = False) -> int:
-    """Reindex one note by absolute path. Returns chunk count embedded."""
+    """Reindex one note by absolute path. Returns chunk count embedded (0 if unchanged/missing)."""
     root = config.NOTES_ROOT
     full_path = full_path.resolve()
     try:
@@ -473,6 +510,19 @@ def index_file(full_path: Path, verbose: bool = False) -> int:
         db.close()
         return 0
     text = full_path.read_text(encoding="utf-8", errors="replace")
+    file_hash = _file_hash(text)
+    mtime = full_path.stat().st_mtime
+
+    db = connect()
+    prev = db.execute("SELECT hash FROM files WHERE path=?", (rel,)).fetchone()
+    if prev and prev[0] == file_hash:
+        # Content unchanged (common Obsidian touch / duplicate fsevents) — refresh mtime only.
+        db.execute("UPDATE files SET mtime=? WHERE path=?", (mtime, rel))
+        db.commit()
+        db.close()
+        return 0
+    db.close()
+
     pending: list[tuple] = []
     lines = text.split("\n")
     for ordi, (heading, hlevel, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
@@ -499,7 +549,7 @@ def index_file(full_path: Path, verbose: bool = False) -> int:
         _insert_pending_chunks(db, pending, vectors)
     db.execute(
         "INSERT OR REPLACE INTO files(path, mtime, hash) VALUES (?,?,?)",
-        (rel, full_path.stat().st_mtime, _file_hash(text)),
+        (rel, mtime, file_hash),
     )
     _finalize_index_writes(db)
     db.close()
@@ -536,52 +586,64 @@ def search(
     (1.0 = top hit), so scores are monotonic with ranking — comparable within
     one result set, not across queries.
     """
-    qvec = embed([query])[0]
     db = connect()
     if db.execute("SELECT value FROM meta WHERE key='dim'").fetchone() is None:
         db.close()
         raise SystemExit("Index is empty — run `apo-engine index` first.")
 
-    n = max(k * 6, 50)  # candidate pool per retriever
+    n = max(k * 4, config.SEARCH_CANDIDATES)
     fused: dict[int, float] = {}
+    frows: list[tuple] = []
 
-    # --- dense: vector KNN ---
+    # Overlap Ollama query embed with FTS (lexical path does not need the vector).
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        embed_fut = pool.submit(query_embed, query)
+        if hybrid:
+            fts_ready = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
+            if fts_ready and fts_ready[0] == "1":
+                match = _fts_query(query)
+                if match:
+                    try:
+                        frows = db.execute(
+                            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
+                            (match, n),
+                        ).fetchall()
+                    except sqlite3.OperationalError:
+                        frows = []
+        qvec = embed_fut.result()
+
     vrows = db.execute(
         "SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance",
         (sqlite_vec.serialize_float32(qvec), n),
     ).fetchall()
     for rank, (rid, _) in enumerate(vrows):
         fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
-
-    # --- lexical: FTS5 BM25 (index-time backfill only; no writes during search) ---
-    if hybrid:
-        fts_ready = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
-        if fts_ready and fts_ready[0] == "1":
-            match = _fts_query(query)
-            if match:
-                try:
-                    frows = db.execute(
-                        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
-                        (match, n),
-                    ).fetchall()
-                except sqlite3.OperationalError:
-                    frows = []
-                for rank, (rid,) in enumerate(frows):
-                    fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
+    for rank, (rid,) in enumerate(frows):
+        fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
 
     if not fused:
         db.close()
         return []
     top = max(fused.values())
 
-    hits: list[Hit] = []
     folder_prefix = folder.replace("\\", "/").strip("/")
-    for rid in sorted(fused, key=lambda i: fused[i], reverse=True):
-        row = db.execute(
-            """SELECT path, heading, text, chunk_hash, heading_level, start_line, end_line
-               FROM chunks WHERE id = ?""",
-            (rid,),
-        ).fetchone()
+    ranked = sorted(fused, key=lambda i: fused[i], reverse=True)
+    # Over-fetch a bit so folder/exclude filters still fill k; one IN query vs N round-trips.
+    fetch_n = min(len(ranked), max(k * 4, k + 16))
+    ids = ranked[:fetch_n]
+    by_id: dict[int, tuple] = {}
+    if ids:
+        placeholders = ",".join("?" * len(ids))
+        for row in db.execute(
+            f"""SELECT id, path, heading, text, chunk_hash, heading_level, start_line, end_line
+                FROM chunks WHERE id IN ({placeholders})""",
+            ids,
+        ):
+            by_id[row[0]] = row[1:]
+
+    hits: list[Hit] = []
+    for rid in ranked:
+        row = by_id.get(rid)
         if row is None:
             continue
         path, heading, text, chunk_hash, hlevel, start_line, end_line = row
@@ -637,8 +699,18 @@ class QueueStats:
     vault_stats: IndexStats | None = None
 
 
-def process_queues(collection: str | None = None, *, scan_vault: bool = False, verbose: bool = False) -> QueueStats:
-    """Single-writer entry point: consume MCP queues, then optional vault scan."""
+def process_queues(
+    collection: str | None = None,
+    *,
+    scan_vault: bool = False,
+    consume_index: bool = True,
+    verbose: bool = False,
+) -> QueueStats:
+    """Single-writer entry point: consume MCP queues, then optional vault scan.
+
+    When ``consume_index`` is False (watcher debounce path), deferred index paths
+    are left for the caller to coalesce; purge/rebuild/scan still run here.
+    """
     from . import deferred
 
     coll = collection or config.COLLECTION
@@ -653,15 +725,17 @@ def process_queues(collection: str | None = None, *, scan_vault: bool = False, v
         if purge_source(Path(path)):
             out.purged += 1
 
-    for path in deferred.consume_index_queue(coll):
-        p = Path(path)
-        if p.exists():
-            try:
-                index_file(p, verbose=verbose)
-                out.indexed += 1
-            except (OSError, ValueError) as e:
-                if verbose:
-                    print(f"  skip index {path}: {e}", flush=True)
+    if consume_index:
+        for path in deferred.consume_index_queue(coll):
+            p = Path(path)
+            if p.exists():
+                try:
+                    n = index_file(p, verbose=verbose)
+                    if n > 0:
+                        out.indexed += 1
+                except (OSError, ValueError) as e:
+                    if verbose:
+                        print(f"  skip index {path}: {e}", flush=True)
 
     if scan_vault:
         out.vault_stats = index_vault(verbose=verbose)

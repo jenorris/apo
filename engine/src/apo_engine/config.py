@@ -48,3 +48,13 @@ WATCH_USE_EVENTS: bool = os.environ.get("APO_WATCH_EVENTS", "1").lower() not in 
 
 # Fallback poll interval when events are active (seconds).
 WATCH_POLL_INTERVAL: float = float(os.environ.get("WATCH_INTERVAL", "30"))
+
+# Coalesce rapid saves / deferred enqueues before embedding (seconds of quiet).
+WATCH_DEBOUNCE: float = float(os.environ.get("APO_WATCH_DEBOUNCE", "2"))
+
+# Hybrid search candidate pool floor (per retriever). Overridden via APO_SEARCH_CANDIDATES.
+SEARCH_CANDIDATES: int = int(os.environ.get("APO_SEARCH_CANDIDATES", "24"))
+
+# Cache identical query embeddings (seconds TTL; 0 disables).
+QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "120"))
+QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "64"))
