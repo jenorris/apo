@@ -255,6 +255,23 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertTrue(core._path_excluded("projects/a.md", prefs, globs))
         self.assertFalse(core._path_excluded("personal/b.md", prefs, globs))
 
+    def test_lookup_chunk_include_text(self):
+        self.write("a.md", "# A\n\nlookup body here\n")
+        core.index_vault(verbose=False)
+        hits = core.search("lookup body", k=1, hybrid=False)
+        self.assertTrue(hits)
+        ch = hits[0].chunk_hash
+        full = core.lookup_chunk(ch, include_text=True)
+        meta = core.lookup_chunk(ch, include_text=False)
+        self.assertIsNotNone(full)
+        self.assertIsNotNone(meta)
+        assert full is not None and meta is not None
+        self.assertIn("content", full)
+        self.assertNotIn("content", meta)
+        self.assertEqual(full["path"], meta["path"])
+        self.assertEqual(full["start_line"], meta["start_line"])
+        self.assertIn("lookup", (full.get("content") or "").lower())
+
     def test_iter_notes_prunes_obsidian(self):
         obs = self.vault / ".obsidian" / "plugins"
         obs.mkdir(parents=True)

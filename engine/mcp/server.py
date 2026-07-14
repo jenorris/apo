@@ -206,9 +206,11 @@ def _purge_index(v: Vault, full: Path) -> bool:
         return False
 
 
-def _lookup_chunk(v: Vault, chunk_hash: str) -> dict[str, Any] | None:
+def _lookup_chunk(
+    v: Vault, chunk_hash: str, *, include_text: bool = True
+) -> dict[str, Any] | None:
     try:
-        return _ensure_mem(v).store.lookup_chunk(chunk_hash)
+        return _ensure_mem(v).store.lookup_chunk(chunk_hash, include_text=include_text)
     except Exception:
         return None
 
@@ -351,6 +353,10 @@ def _memory_status_sync() -> dict:
 ###############################################################################
 
 
+# Default MCP search payload: anchors + short preview. Pass snippet_chars=0 for full chunk text.
+_DEFAULT_SEARCH_SNIPPET = 240
+
+
 def _write_note_sync(
     path: str,
     content: str,
@@ -455,20 +461,18 @@ def _append_note_sync(
         section = None
         anchor_label = "EOF"
         if chunk_hash:
-            chunk = _lookup_chunk(v, chunk_hash)
+            # Anchor metadata only — skip loading chunk body from SQLite.
+            chunk = _lookup_chunk(v, chunk_hash, include_text=False)
             if not chunk:
                 return _err(path=path, error="anchor_not_found", message=f"chunk_hash {chunk_hash!r} not found")
-            chunk_source = _display_source(v, chunk.get("source", ""))
-            if chunk_source and chunk_source != path.replace("\\", "/"):
+            chunk_path = (chunk.get("path") or "").replace("\\", "/")
+            want = path.replace("\\", "/")
+            if chunk_path and chunk_path != want:
                 return _err(
                     path=path,
                     error="path_mismatch",
-                    message=f"chunk_hash belongs to {chunk_source!r}, not {path!r}",
+                    message=f"chunk_hash belongs to {chunk_path!r}, not {path!r}",
                 )
-            try:
-                Path(chunk.get("source", "")).resolve().relative_to(v.root)
-            except ValueError:
-                return _err(path=path, error="anchor_not_found", message="chunk source outside vault root")
             section = section_from_chunk(
                 lines,
                 int(chunk.get("start_line", 1)),
@@ -757,7 +761,7 @@ async def search_notes(
     top_k: int = 5,
     folder: str = "",
     vault: str = "",
-    snippet_chars: int = 0,
+    snippet_chars: int = _DEFAULT_SEARCH_SNIPPET,
 ) -> dict:
     """Hybrid semantic + BM25 **search** across indexed note content.
 
@@ -766,15 +770,16 @@ async def search_notes(
 
     Each result carries write-ready anchors: pass chunk_hash straight to
     append_note / expand_chunk, or use heading with append_note / patch_note —
-    no read_note round trip needed.
+    no read_note round trip needed. Hit ``content`` is a short preview by default
+    (``snippet_chars``); pass ``0`` for the full indexed chunk, or use expand_chunk
+    for the surrounding section.
 
     Args:
         query: Free-text search query.
         top_k: Number of results to return.
         folder: Scope search to this vault-relative subfolder (e.g. 'projects/').
         vault: Vault name; empty = default vault.
-        snippet_chars: If > 0, truncate each hit's content to this many characters
-            (smaller MCP payloads when only anchors/heading are needed).
+        snippet_chars: Truncate each hit's content (default 240). ``0`` = full chunk text.
     """
     try:
         v = _vault(vault)
@@ -794,22 +799,44 @@ async def search_notes(
     return {"ok": True, "results": results}
 
 
-def _expand_chunk_sync(chunk_hash: str, vault: str = "") -> dict:
+def _expand_chunk_sync(
+    chunk_hash: str,
+    vault: str = "",
+    scope: Literal["section", "chunk"] = "section",
+) -> dict:
     try:
         v = _vault(vault)
     except VaultError as e:
         return _err(error="bad_vault", message=str(e))
-    chunk = _lookup_chunk(v, chunk_hash)
+
+    need_text = scope == "chunk"
+    chunk = _lookup_chunk(v, chunk_hash, include_text=need_text)
     if not chunk:
         return _err(error="anchor_not_found", message=f"chunk_hash {chunk_hash!r} not found in index")
 
-    source = Path(chunk.get("source", "")).expanduser().resolve()
+    rel = (chunk.get("path") or "").replace("\\", "/")
+    if not rel:
+        return _err(error="anchor_not_found", message="chunk has no path")
+
+    if scope == "chunk":
+        heading = chunk.get("heading") or ""
+        hlevel = int(chunk.get("heading_level") or 0)
+        return {
+            "ok": True,
+            "path": rel,
+            "heading": f"{'#' * hlevel} {heading}".strip() if heading else "",
+            "start_line": int(chunk.get("start_line") or 1),
+            "end_line": int(chunk.get("end_line") or 1),
+            "content": chunk.get("content") or "",
+            "scope": "chunk",
+        }
+
     try:
-        source.relative_to(v.root)
-    except ValueError:
-        return _err(error="anchor_not_found", message=f"chunk source outside vault root: {source}")
+        source = _safe_resolve(v, rel)
+    except ValueError as e:
+        return _err(error="anchor_not_found", message=str(e))
     if not source.exists():
-        return _err(error="stale_index", message=f"source file missing: {_display_source(v, str(source))}")
+        return _err(error="stale_index", message=f"source file missing: {rel}")
 
     lines = normalize_lines(source.read_text(encoding="utf-8"))
     section = section_from_chunk(
@@ -820,21 +847,31 @@ def _expand_chunk_sync(chunk_hash: str, vault: str = "") -> dict:
     start = section.heading_line if section.title else section.body_start
     return {
         "ok": True,
-        "path": _display_source(v, str(source)),
+        "path": rel,
         "heading": f"{'#' * section.level} {section.title}" if section.title else "",
         "start_line": start + 1,
         "end_line": section.body_end,
         "content": "\n".join(lines[start : section.body_end]),
+        "scope": "section",
     }
 
 
 @mcp.tool(annotations=_RO)
-async def expand_chunk(chunk_hash: str, vault: str = "") -> dict:
-    """Expand a search-result chunk to its full surrounding markdown section.
+async def expand_chunk(
+    chunk_hash: str,
+    vault: str = "",
+    scope: Literal["section", "chunk"] = "section",
+) -> dict:
+    """Expand a search-result chunk for progressive recall.
 
-    Use chunk_hash values returned by search_notes for progressive recall.
+    Args:
+        chunk_hash: From ``search_notes`` / index.
+        vault: Vault name; empty = default vault.
+        scope: ``section`` (default) reads the note and returns the surrounding
+            markdown section. ``chunk`` returns the indexed chunk body with no
+            disk read — use after snippet search when the chunk itself is enough.
     """
-    return await asyncio.to_thread(_expand_chunk_sync, chunk_hash, vault)
+    return await asyncio.to_thread(_expand_chunk_sync, chunk_hash, vault, scope)
 
 
 def _filter_notes_sync(
@@ -845,15 +882,20 @@ def _filter_notes_sync(
 ) -> dict:
     try:
         v = _vault(vault)
-        base = _safe_resolve(v, folder) if folder else v.root
-    except (VaultError, ValueError) as e:
-        return _err(error="bad_path", message=str(e))
-    if not base.exists():
-        return _err(error="not_found", message=f"folder not found: {folder}")
+    except VaultError as e:
+        return _err(error="bad_vault", message=str(e))
     if not isinstance(where, dict) or not where:
         return _err(error="bad_query", message="`where` must be a non-empty object of field conditions")
 
-    total, matches = apo_core.filter_notes(where, folder, limit)
+    folder_clean = folder.replace("\\", "/").strip("/")
+    # Traversal check only — filter is index-backed and must not require the dir on disk.
+    if folder_clean:
+        try:
+            _safe_resolve(v, folder_clean)
+        except ValueError as e:
+            return _err(error="bad_path", message=str(e))
+
+    total, matches = apo_core.filter_notes(where, folder_clean, limit)
     notes = [
         {
             "path": path,

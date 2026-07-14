@@ -16,8 +16,8 @@ class ApoStore:
     def count(self) -> int:
         return core.count_chunks()
 
-    def lookup_chunk(self, chunk_hash: str) -> dict | None:
-        return core.lookup_chunk(chunk_hash)
+    def lookup_chunk(self, chunk_hash: str, *, include_text: bool = True) -> dict | None:
+        return core.lookup_chunk(chunk_hash, include_text=include_text)
 
 
 def shape_search_hits(

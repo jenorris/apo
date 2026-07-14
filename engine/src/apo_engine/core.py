@@ -990,27 +990,41 @@ def count_chunks() -> int:
     return db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
 
-def lookup_chunk(chunk_hash: str) -> dict | None:
+def lookup_chunk(chunk_hash: str, *, include_text: bool = True) -> dict | None:
+    """Look up a chunk by hash. Set ``include_text=False`` for write-anchor metadata only."""
     db = reader_connect()
-    row = db.execute(
-        """SELECT path, heading, text, start_line, end_line, heading_level, chunk_hash
-           FROM chunks WHERE chunk_hash = ? LIMIT 1""",
-        (chunk_hash,),
-    ).fetchone()
+    if include_text:
+        row = db.execute(
+            """SELECT path, heading, text, start_line, end_line, heading_level, chunk_hash
+               FROM chunks WHERE chunk_hash = ? LIMIT 1""",
+            (chunk_hash,),
+        ).fetchone()
+    else:
+        row = db.execute(
+            """SELECT path, heading, start_line, end_line, heading_level, chunk_hash
+               FROM chunks WHERE chunk_hash = ? LIMIT 1""",
+            (chunk_hash,),
+        ).fetchone()
     if not row:
         return None
-    rel, heading, text, start_line, end_line, hlevel, chash = row
+    if include_text:
+        rel, heading, text, start_line, end_line, hlevel, chash = row
+    else:
+        rel, heading, start_line, end_line, hlevel, chash = row
+        text = None
     root = config.NOTES_ROOT
-    return {
+    out = {
         "source": str(root / rel),
         "path": rel,
         "heading": heading or "",
-        "content": text,
         "start_line": start_line,
         "end_line": end_line,
         "heading_level": hlevel,
         "chunk_hash": chash,
     }
+    if include_text:
+        out["content"] = text
+    return out
 
 
 def _deserialize_vec(blob: bytes) -> list[float]:
