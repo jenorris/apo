@@ -345,6 +345,12 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
         ("end_line", "INTEGER NOT NULL DEFAULT 1"),
         ("heading_level", "INTEGER NOT NULL DEFAULT 0"),
         ("chunk_hash", "TEXT"),
+        # Redundant copy of the vector also stored in vec_chunks: vec0 point/batch lookups
+        # by rowid are ~200x slower than a plain table (measured: 87ms vs 0.4ms for 185
+        # rows) — it's built for KNN search, not this access pattern. Existing rows backfill
+        # lazily (NULL until next touch); _vectors_by_content_hash treats a miss as "not
+        # reusable" and falls back to re-embedding, so this is safe without a forced rebuild.
+        ("embedding", "BLOB"),
     ):
         if name not in cols:
             db.execute(f"ALTER TABLE chunks ADD COLUMN {name} {ddl}")
@@ -460,14 +466,16 @@ def _insert_pending_chunks(
     _ensure_vec_table(db, len(valid[0][1]))
     for row, vec in valid:
         rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id = row
+        blob = sqlite_vec.serialize_float32(vec)
         cur = db.execute(
-            """INSERT INTO chunks(path, ord, heading, text, start_line, end_line, heading_level, chunk_hash)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id),
+            """INSERT INTO chunks(path, ord, heading, text, start_line, end_line, heading_level,
+                                   chunk_hash, embedding)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, blob),
         )
         db.execute(
             "INSERT INTO vec_chunks(rowid, embedding) VALUES (?,?)",
-            (cur.lastrowid, sqlite_vec.serialize_float32(vec)),
+            (cur.lastrowid, blob),
         )
         db.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cur.lastrowid, ctext))
     return len(valid)
@@ -703,13 +711,18 @@ def _deserialize_vec(blob: bytes) -> list[float]:
 
 
 def _vectors_by_content_hash(db: sqlite3.Connection, rel: str) -> dict[str, list[float]]:
-    """Map chunk body hash → embedding for an existing path (before delete)."""
+    """Map chunk body hash → embedding for an existing path (before delete).
+
+    Reads chunks.embedding (a plain column), not vec_chunks — vec0 point/batch lookups by
+    rowid measured ~200x slower than an equivalent plain-table query (it's built for KNN
+    search, not this access pattern). Rows written before this column existed have NULL
+    here until next touched; a miss just means "not reusable", falling back to re-embed.
+    """
     out: dict[str, list[float]] = {}
-    for rid, text in db.execute("SELECT id, text FROM chunks WHERE path=?", (rel,)):
-        row = db.execute("SELECT embedding FROM vec_chunks WHERE rowid=?", (rid,)).fetchone()
-        if not row:
+    for text, blob in db.execute("SELECT text, embedding FROM chunks WHERE path=?", (rel,)):
+        if blob is None:
             continue
-        out[_content_hash(text)] = _deserialize_vec(row[0])
+        out[_content_hash(text)] = _deserialize_vec(blob)
     return out
 
 
