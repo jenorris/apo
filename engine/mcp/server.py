@@ -11,9 +11,10 @@ import os
 from dataclasses import dataclass, field as dc_field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
+from pydantic import Field
 from apo_engine import config as apo_config
 from apo_engine import core as apo_core
 from apo_engine import deferred as index_deferred
@@ -263,7 +264,8 @@ def _top_level_dirs(v: Vault) -> list[str]:
 _LEAN_BOOT = _env_truthy("APO_MCP_LEAN")
 _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown; sqlite-vec hybrid search; files are source of truth. "
-    "Writes: write_note (create/overwrite), append_note (add), patch_note (mutate), "
+    "Writes: write_note (create/overwrite), append_note (add), "
+    "patch_note (mutate — ops use field/value, find/replace, heading/text; not key/old/new), "
     "move_note (rename — not read+write+delete). "
     "search_notes hits expose chunk_hash/heading for append/expand (skip read when possible). "
     "filter_notes = frontmatter catalog; backlinks = [[wiki-links]]. "
@@ -576,10 +578,21 @@ def _patch_note_sync(
     return out
 
 
+_PATCH_OPS_DESC = (
+    "Mutator objects; each needs op=. "
+    "set_field|delete_field: field (+ value for set). "
+    "replace_text: find, replace (count default 1; optional scope.heading). "
+    "replace_section: heading, text. "
+    "append|prepend: text (+ heading, position start|end). "
+    "append_eof: text. "
+    "Keys are field/find/replace — never key/old/new."
+)
+
+
 @mcp.tool(annotations=_MUTATE)
 async def patch_note(
     path: str,
-    ops: list[dict],
+    ops: Annotated[list[dict], Field(description=_PATCH_OPS_DESC)],
     strict: bool = False,
     dry_run: bool = False,
     index: bool | None = None,
@@ -587,7 +600,7 @@ async def patch_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Batch mutate: set_field, delete_field, replace_text (optional scope.heading), replace_section, append/prepend, append_eof."""
+    """Batch mutate: set_field, delete_field, replace_text, replace_section, append/prepend, append_eof. See ops param for required keys."""
     return await asyncio.to_thread(
         _patch_note_sync, path, ops, strict, dry_run, index, verbose, expected_mtime, vault
     )

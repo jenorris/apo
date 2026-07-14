@@ -101,4 +101,5 @@ With fsevents on, the watcher reconciles the full vault every `WATCH_RECONCILE_I
 - Engine is **convention-agnostic**: vault-relative paths + YAML frontmatter only.
 - Opinionated PARA/OKF/thread workflows are **optional vault policy**, not engine requirements.
 - Prefer `append_note` / `patch_note` over full-file `write_note` for edits.
+- `patch_note` `ops[]` keys are named in the MCP schema: `set_field`/`delete_field` → `field` (+ `value`); `replace_text` → `find`/`replace`; `replace_section` → `heading`/`text`. Do not invent `key`/`old`/`new`.
 - Frontmatter and wikilinks are parsed once per index write and cached (`files.frontmatter`, the `backlinks` table) — catalog tools query sqlite, never the filesystem.
