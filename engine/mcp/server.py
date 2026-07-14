@@ -181,8 +181,12 @@ def _check_mtime(full: Path, expected: float | None, path: str) -> dict | None:
     return None
 
 
+def _env_truthy(key: str) -> bool:
+    return os.environ.get(key, "").lower() in ("1", "true", "yes")
+
+
 def _default_index_on_write() -> bool:
-    return os.environ.get("APO_INDEX_ON_WRITE", "").lower() in ("1", "true", "yes")
+    return _env_truthy("APO_INDEX_ON_WRITE")
 
 
 def _maybe_index(v: Vault, full: Path, index: bool | None) -> None:
@@ -269,8 +273,8 @@ mcp = FastMCP(
         "into append_note / patch_note / expand_chunk — no read_note round trip needed. "
         "Query structured frontmatter with filter_notes; trace [[wiki-links]] with backlinks. "
         "MCP never writes index.db — writes enqueue paths in ~/.apo/deferred-*.json; "
-        "apo-engine watch (launchd) is the sole index writer. Call reindex_deferred() after "
-        "batch sweeps to wake the watcher. memory_status() reports vault health and queue depth."
+        "apo-engine watch (launchd) is the sole index writer (enqueue already wakes the watcher). "
+        "Set APO_MCP_LEAN=1 to hide admin tools (reload_config, memory_status, reindex*)."
     ),
 )
 
@@ -283,7 +287,10 @@ _load_vaults()
 ###############################################################################
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
+@mcp.tool(
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    tags={"admin"},
+)
 async def reload_config() -> dict:
     """Rebuild the vault registry from env + optional runtime JSON, dropping the cached index backend.
 
@@ -309,7 +316,7 @@ def _reload_config_sync() -> dict:
     }
 
 
-@mcp.tool(annotations=_RO)
+@mcp.tool(annotations=_RO, tags={"admin"})
 async def memory_status() -> dict:
     """Report vault roots, index health, deferred-index queues, and watcher state.
 
@@ -1069,7 +1076,10 @@ def _reindex_deferred_sync(vault: str = "") -> dict:
     return out
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
+@mcp.tool(
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    tags={"admin"},
+)
 async def reindex_deferred(vault: str = "") -> dict:
     """Signal the watcher to flush the deferred index queue.
 
@@ -1107,7 +1117,10 @@ def _reindex_sync(force: bool = False, vault: str = "") -> dict:
         return _err(error="reindex_failed", message=str(e))
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
+@mcp.tool(
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    tags={"admin"},
+)
 async def reindex(force: bool = False, vault: str = "") -> dict:
     """Signal the watcher to rebuild the index (also prunes chunks of deleted files).
 
@@ -1152,6 +1165,24 @@ def vaults_resource() -> dict:
             for name, v in VAULTS.items()
         },
     }
+
+
+###############################################################################
+# Lean mode — hide admin tools from list_tools / schema (opt-in)
+###############################################################################
+
+_ADMIN_TOOLS = frozenset({"reload_config", "memory_status", "reindex_deferred", "reindex"})
+
+
+def _apply_lean_mode() -> bool:
+    """If APO_MCP_LEAN is truthy, disable admin-tagged tools. Returns whether lean applied."""
+    if not _env_truthy("APO_MCP_LEAN"):
+        return False
+    mcp.disable(tags={"admin"})
+    return True
+
+
+_LEAN_ACTIVE = _apply_lean_mode()
 
 
 ###############################################################################
