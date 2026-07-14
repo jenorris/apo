@@ -50,7 +50,7 @@ Collect evidence for:
 - Where new notes go; rename/archive rules; draft vs done; “don’t rewrite whole files”; inbox triage; etc.
 - Quote short excerpts with paths — do not dump whole files into the proposal.
 
-If Apo tools work: `list_directory` on `.`, `recent_activity`, and one `search_notes` smoke query. If MCP is missing, say so and continue with filesystem reads only.
+If Apo tools work: `filter_notes({}, limit=5)`, `recent_activity`, and one `search_notes` smoke query. If MCP is missing, say so and continue with filesystem reads only.
 
 ### Phase 2 — Infer (structured brief)
 

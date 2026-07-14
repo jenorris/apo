@@ -802,8 +802,8 @@ def _filter_notes_sync(
         v = _vault(vault)
     except VaultError as e:
         return _err(error="bad_vault", message=str(e))
-    if not isinstance(where, dict) or not where:
-        return _err(error="bad_query", message="`where` must be a non-empty object of field conditions")
+    if not isinstance(where, dict):
+        return _err(error="bad_query", message="`where` must be an object (use {} to list all indexed notes in folder)")
 
     folder_clean = folder.replace("\\", "/").strip("/")
     # Traversal check only — filter is index-backed and must not require the dir on disk.
@@ -832,7 +832,7 @@ async def filter_notes(
     limit: int = 20,
     vault: str = "",
 ) -> dict:
-    """Frontmatter catalog filter (no embeddings). where: field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists}. Newest first."""
+    """Frontmatter catalog (no embeddings). where: {} = all in folder; else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists}. Newest first. Example: filter_notes({}, folder=\"inbox/zettels/\", limit=50)."""
     return await asyncio.to_thread(_filter_notes_sync, where, folder, limit, vault)
 
 
@@ -865,46 +865,6 @@ def _backlinks_sync(path: str, limit: int = 100, vault: str = "") -> dict:
 async def backlinks(path: str, limit: int = 100, vault: str = "") -> dict:
     """Notes that [[wiki-link]] this path/stem/title (target need not exist)."""
     return await asyncio.to_thread(_backlinks_sync, path, limit, vault)
-
-
-###############################################################################
-# Tools — navigation
-###############################################################################
-
-
-def _list_directory_sync(directory: str = "", vault: str = "") -> dict:
-    try:
-        v = _vault(vault)
-        target = _safe_resolve(v, directory) if directory else v.root
-    except (VaultError, ValueError) as e:
-        return _err(error="bad_path", message=str(e))
-    if not target.exists():
-        return _err(error="not_found", message=f"directory not found: {directory}")
-    entries = []
-    with os.scandir(target) as it:
-        for ent in sorted(it, key=lambda e: e.name):
-            if ent.name.startswith("."):
-                continue
-            is_dir = ent.is_dir(follow_symlinks=False)
-            size = None
-            if not is_dir and ent.is_file(follow_symlinks=False):
-                try:
-                    size = ent.stat(follow_symlinks=False).st_size
-                except OSError:
-                    size = None
-            entries.append({
-                "name": ent.name,
-                "type": "directory" if is_dir else "note",
-                "path": str(Path(ent.path).relative_to(v.root)),
-                "size": size,
-            })
-    return {"ok": True, "path": directory, "entries": entries}
-
-
-@mcp.tool(annotations=_RO)
-async def list_directory(directory: str = "", vault: str = "") -> dict:
-    """List notes and subdirs; directory empty = vault root."""
-    return await asyncio.to_thread(_list_directory_sync, directory, vault)
 
 
 def _recent_activity_sync(limit: int = 10, folder: str = "", vault: str = "") -> dict:

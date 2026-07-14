@@ -19,7 +19,7 @@ Ollama bge-m3 (or fastembed)     index: engine/index.db
 | Layer | Role |
 |-------|------|
 | **Engine** (`engine/`) | Chunk, embed, hybrid BM25 + vector search; caches frontmatter + a wikilink backlink graph alongside chunks |
-| **MCP** | 16 tools — agents never talk to sqlite directly for writes |
+| **MCP** | 15 tools (11 with `APO_MCP_LEAN=1`) — agents never talk to sqlite directly for writes |
 | **Watcher** | FS events + deferred queue → reindex |
 
 `filter_notes`, `backlinks`, and `recent_activity` are index-backed (query `files.frontmatter` / the `backlinks` table), not vault filesystem walks — they stay fast regardless of vault size.
