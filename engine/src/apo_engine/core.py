@@ -881,6 +881,14 @@ def search(
         raise SystemExit("Index is empty — run `apo-engine index` first.")
 
     n = max(k * 4, config.SEARCH_CANDIDATES)
+    if folder or exclude:
+        # folder/exclude filtering happens after ranking (below) — a small global candidate
+        # pool can silently starve a scoped query even when the folder clearly has matches,
+        # since KNN/FTS rank across the whole corpus with no knowledge of the scope. Widen
+        # the pool so scoped searches draw from (up to) the full index instead of the same
+        # top-N used for unscoped queries.
+        total_chunks = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        n = min(total_chunks, max(n, 2000))
     fused: dict[int, float] = {}
     frows: list[tuple] = []
 
@@ -917,8 +925,14 @@ def search(
 
     folder_prefix = folder.replace("\\", "/").strip("/")
     ranked = sorted(fused, key=lambda i: fused[i], reverse=True)
-    # Over-fetch a bit so folder/exclude filters still fill k; one IN query vs N round-trips.
-    fetch_n = min(len(ranked), max(k * 4, k + 16))
+    if folder or exclude:
+        # Fetch every fused candidate's path — a small overfetch margin still starves the
+        # filter when only a few of the (now much larger) candidate pool are actually in
+        # scope; the whole point of widening `n` above is wasted if we truncate again here.
+        fetch_n = len(ranked)
+    else:
+        # Over-fetch a bit so folder/exclude filters still fill k; one IN query vs N round-trips.
+        fetch_n = min(len(ranked), max(k * 4, k + 16))
     ids = ranked[:fetch_n]
     by_id: dict[int, tuple] = {}
     if ids:
