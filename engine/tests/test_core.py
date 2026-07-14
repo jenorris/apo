@@ -36,7 +36,7 @@ class TestChunkMarkdown(unittest.TestCase):
     def test_real_heading_levels(self):
         text = "# Alpha\n\nalpha body\n\n### Gamma\n\ngamma body\n"
         chunks = core.chunk_markdown(text, max_chars=10, overlap=2)
-        by_text = {c.strip(): (head, level) for head, level, c in chunks}
+        by_text = {c.strip(): (head, level) for head, level, c, *_ in chunks}
         self.assertEqual(by_text["alpha body"], ("Alpha", 1))
         # H3 directly under H1: breadcrumb collapses the skipped level, the level must not.
         self.assertEqual(by_text["gamma body"], ("Alpha › Gamma", 3))
@@ -45,22 +45,31 @@ class TestChunkMarkdown(unittest.TestCase):
         # Greedy packing may merge the preamble with following blocks; the chunk
         # keeps the first block's anchor: no breadcrumb, level 0.
         chunks = core.chunk_markdown("preamble text\n\n# Head\n\nbody\n", max_chars=100, overlap=10)
-        head, level, text = chunks[0]
+        head, level, text, *_ = chunks[0]
         self.assertEqual((head, level), ("", 0))
         self.assertTrue(text.startswith("preamble text"))
 
     def test_frontmatter_stripped(self):
         text = "---\ntitle: T\n---\n\n# Head\n\nbody\n"
         chunks = core.chunk_markdown(text, max_chars=100, overlap=10)
-        self.assertNotIn("title: T", "".join(c for _, _, c in chunks))
+        self.assertNotIn("title: T", "".join(c for _, _, c, *_ in chunks))
 
     def test_oversized_block_splits_with_shared_anchor(self):
         body = "x" * 250
         chunks = core.chunk_markdown(f"## Big\n\n{body}\n", max_chars=100, overlap=20)
         self.assertGreater(len(chunks), 1)
-        for head, level, ctext in chunks:
+        for head, level, ctext, *_ in chunks:
             self.assertEqual((head, level), ("Big", 2))
             self.assertLessEqual(len(ctext), 100)
+
+    def test_line_spans_skip_frontmatter(self):
+        text = "---\ntitle: T\n---\n\n# Head\n\nbody line\n"
+        chunks = core.chunk_markdown(text, max_chars=200, overlap=10)
+        self.assertTrue(chunks)
+        _h, _l, ctext, start, end = next(c for c in chunks if "body line" in c[2])
+        # Frontmatter lines 1-3; blank 4; heading 5; blank 6; body 7
+        self.assertEqual(start, 7)
+        self.assertGreaterEqual(end, start)
 
 
 class VaultTestCase(unittest.TestCase):
@@ -210,6 +219,17 @@ class TestIndexLifecycle(VaultTestCase):
         total, rows = core.filter_notes({"tags": {"$contains": "y"}})
         self.assertEqual(total, 1)
         self.assertEqual(rows[0][1], "b.md")
+
+    def test_filter_notes_sql_limit_pages(self):
+        for i in range(5):
+            self.write(
+                f"n{i}.md",
+                f"---\nstatus: active\nseq: {i}\n---\n\n# N{i}\n\nbody {i}\n",
+            )
+        core.index_vault(verbose=False)
+        total, rows = core.filter_notes({"status": "active"}, limit=2)
+        self.assertEqual(total, 5)
+        self.assertEqual(len(rows), 2)
 
     def test_recent_preview_and_frontmatter_field(self):
         self.write("t.md", "---\ntitle: Hello\n---\n\n# Head\n\npreview body here\n")

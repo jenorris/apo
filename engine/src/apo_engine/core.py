@@ -67,25 +67,66 @@ def strip_frontmatter(text: str) -> str:
     return _FRONTMATTER.sub("", text, count=1)
 
 
-def chunk_markdown(text: str, max_chars: int, overlap: int) -> list[tuple[str, int, str]]:
-    """Return [(heading_breadcrumb, heading_level, chunk_text)] greedily packed to ~max_chars.
+def _body_start_line(text: str) -> tuple[str, int]:
+    """Return (body_text, 1-based line number of the first body line)."""
+    m = _FRONTMATTER.match(text)
+    if not m:
+        return text, 1
+    fm = m.group(0)
+    return text[len(fm) :], fm.count("\n") + 1
 
+
+def _slice_lines(text: str, start_char: int, end_char: int, base_line: int) -> tuple[int, int]:
+    """Inclusive 1-based line span for ``text[start_char:end_char]`` starting at ``base_line``."""
+    if end_char <= start_char:
+        line = base_line + text[:start_char].count("\n")
+        return line, line
+    start = base_line + text[:start_char].count("\n")
+    end = base_line + text[: max(start_char, end_char - 1)].count("\n")
+    return start, end
+
+
+def chunk_markdown(
+    text: str, max_chars: int, overlap: int
+) -> list[tuple[str, int, str, int, int]]:
+    """Return [(heading, level, chunk_text, start_line, end_line)] packed to ~max_chars.
+
+    ``start_line`` / ``end_line`` are 1-based in the raw file (frontmatter-aware).
     heading_level is the markdown level of the chunk's governing heading (0 = preamble).
     The breadcrumb alone can't recover it: skipped levels (H3 directly under H1) are
     collapsed out of the join.
     """
-    body = strip_frontmatter(text)
+    body, body_line = _body_start_line(text)
     heading: list[str] = []
-    blocks: list[tuple[str, int, str]] = []
-    buf: list[str] = []
+    # (breadcrumb, level, text, start_line, end_line)
+    blocks: list[tuple[str, int, str, int, int]] = []
+    buf: list[tuple[str, int]] = []
 
-    def flush_block():
-        if buf:
-            joined = "\n".join(buf).strip()
-            if joined:
-                blocks.append((" › ".join(h for h in heading if h), len(heading), joined))
+    def flush_block() -> None:
+        if not buf:
+            return
+        lo, hi = 0, len(buf) - 1
+        while lo <= hi and not buf[lo][0].strip():
+            lo += 1
+        while hi >= lo and not buf[hi][0].strip():
+            hi -= 1
+        if lo > hi:
             buf.clear()
+            return
+        joined = "\n".join(line for line, _ in buf[lo : hi + 1]).strip()
+        if joined:
+            blocks.append(
+                (
+                    " › ".join(h for h in heading if h),
+                    len(heading),
+                    joined,
+                    buf[lo][1],
+                    buf[hi][1],
+                )
+            )
+        buf.clear()
 
+    lineno = body_line
     for line in body.split("\n"):
         m = _HEADING.match(line)
         if m:
@@ -93,34 +134,45 @@ def chunk_markdown(text: str, max_chars: int, overlap: int) -> list[tuple[str, i
             level, title = len(m.group(1)), m.group(2).strip()
             heading = heading[: level - 1] + [""] * max(0, level - 1 - len(heading)) + [title]
         else:
-            buf.append(line)
+            buf.append((line, lineno))
+        lineno += 1
     flush_block()
 
-    chunks: list[tuple[str, int, str]] = []
+    chunks: list[tuple[str, int, str, int, int]] = []
     cur_head: str | None = None
     cur_level = 0
-    cur: list[str] = []
+    cur: list[tuple[str, int, int]] = []  # (text, start_line, end_line)
     cur_len = 0
 
-    def emit():
+    def emit() -> None:
         nonlocal cur, cur_len, cur_head, cur_level
         if cur:
-            chunks.append((cur_head or "", cur_level, "\n\n".join(cur).strip()))
+            chunks.append(
+                (
+                    cur_head or "",
+                    cur_level,
+                    "\n\n".join(t for t, _, _ in cur).strip(),
+                    cur[0][1],
+                    cur[-1][2],
+                )
+            )
         cur, cur_len, cur_head, cur_level = [], 0, None, 0
 
-    for head, level, btext in blocks:
+    for head, level, btext, bstart, bend in blocks:
         if len(btext) > max_chars:
             emit()
             step = max(1, max_chars - overlap)
             for i in range(0, len(btext), step):
-                chunks.append((head, level, btext[i : i + max_chars]))
+                piece = btext[i : i + max_chars]
+                s, e = _slice_lines(btext, i, i + len(piece), bstart)
+                chunks.append((head, level, piece, s, e))
             continue
         if cur and cur_len + len(btext) > max_chars:
             emit()
         if not cur:
             cur_head = head
             cur_level = level
-        cur.append(btext)
+        cur.append((btext, bstart, bend))
         cur_len += len(btext) + 2
     emit()
     return chunks
@@ -254,14 +306,10 @@ def _content_hash(text: str) -> str:
 
 
 def _locate_chunk_lines(lines: list[str], chunk_text: str, search_from: int = 0) -> tuple[int, int]:
-    """Best-effort 1-based start/end lines for a chunk body.
+    """Best-effort 1-based start/end lines for a chunk body (legacy fallback).
 
-    Searches from `search_from` (0-based) onward, not always from line 1 — callers
-    processing a file's chunks in document order must thread the previous chunk's
-    start_line through as the next search_from. Without this, two chunks that happen
-    to start with identical text (repeated status/template boilerplate is common)
-    both resolve to the *first* occurrence, silently misdirecting chunk_hash-anchored
-    writes (append_note) into the wrong section.
+    Prefer line spans returned by ``chunk_markdown``. Kept for tests / callers that
+    still recover positions from chunk text alone.
     """
     needle = chunk_text.strip().split("\n")[0][:80]
     start = search_from + 1
@@ -878,11 +926,9 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
             stats.changed += 1
         else:
             stats.added += 1
-        lines = text.split("\n")
-        locate_cursor = 0
-        for ordi, (heading, hlevel, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
-            start_line, end_line = _locate_chunk_lines(lines, ctext, search_from=locate_cursor)
-            locate_cursor = start_line
+        for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
+            chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)
+        ):
             chash = _content_hash(ctext)
             chunk_id = compute_chunk_id(
                 f"markdown:{rel}",
@@ -1082,13 +1128,9 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         plan = _FilePlan(
             rel=rel, full_path=full_path, mtime=st_mtime, file_hash=file_hash, text=text
         )
-        lines = text.split("\n")
-        locate_cursor = 0
-        for ordi, (heading, hlevel, ctext) in enumerate(
+        for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
             chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)
         ):
-            start_line, end_line = _locate_chunk_lines(lines, ctext, search_from=locate_cursor)
-            locate_cursor = start_line
             body_hash = _content_hash(ctext)
             chunk_id = compute_chunk_id(
                 f"markdown:{plan.rel}", start_line, end_line, body_hash, config.MODEL_NAME
@@ -1446,44 +1488,46 @@ def filter_notes(where: dict, folder: str = "", limit: int = 20) -> tuple[int, l
     sorted by mtime desc. No filesystem walk — reads the index only. Simple equality /
     exists filters push into SQL via ``json_extract``; richer operators fall back to
     Python over the (already folder-scoped) row set.
+
+    SQL-pushdown path uses ``COUNT(*)`` plus ``ORDER BY mtime DESC LIMIT`` — never
+    materializes every matching frontmatter blob just to page ``limit`` rows.
     """
     folder_prefix = folder.replace("\\", "/").strip("/")
     db = reader_connect()
     sql_pred = _sql_pushdown_predicates(where) if where else ("1", [])
-    base = "SELECT path, mtime, frontmatter FROM files WHERE frontmatter IS NOT NULL"
+    where_parts = ["frontmatter IS NOT NULL"]
     params: list[Any] = []
     if folder_prefix:
-        base += " AND path LIKE ? ESCAPE '\\'"
+        where_parts.append("path LIKE ? ESCAPE '\\'")
         params.append(_escape_like(folder_prefix) + "/%")
 
     if sql_pred is not None:
         pred_sql, pred_params = sql_pred
+        where_parts.append(f"({pred_sql})")
+        params.extend(pred_params)
+        where_sql = " AND ".join(where_parts)
+        total = int(db.execute(f"SELECT COUNT(*) FROM files WHERE {where_sql}", params).fetchone()[0])
         rows = db.execute(
-            f"{base} AND ({pred_sql})",
-            [*params, *pred_params],
+            f"SELECT path, mtime, frontmatter FROM files WHERE {where_sql} "
+            f"ORDER BY mtime DESC LIMIT ?",
+            [*params, limit],
         ).fetchall()
-        matches = []
+        matches: list[tuple[float, str, dict]] = []
         for path, mtime, fm_json in rows:
             try:
                 fm = json.loads(fm_json) if fm_json else {}
             except json.JSONDecodeError:
                 fm = {}
             matches.append((mtime, path, fm))
-        matches.sort(key=lambda t: t[0], reverse=True)
-        return len(matches), matches[:limit]
+        return total, matches
 
     # Complex operators — folder-scoped fetch, then Python match.
-    if folder_prefix:
-        rows = db.execute(
-            "SELECT path, mtime, frontmatter FROM files "
-            "WHERE frontmatter IS NOT NULL AND path LIKE ? ESCAPE '\\'",
-            (_escape_like(folder_prefix) + "/%",),
-        ).fetchall()
-    else:
-        rows = db.execute(
-            "SELECT path, mtime, frontmatter FROM files WHERE frontmatter IS NOT NULL"
-        ).fetchall()
-    matches: list[tuple[float, str, dict]] = []
+    scope_sql = " AND ".join(where_parts)
+    rows = db.execute(
+        f"SELECT path, mtime, frontmatter FROM files WHERE {scope_sql}",
+        params,
+    ).fetchall()
+    matches = []
     for path, mtime, fm_json in rows:
         try:
             fm = json.loads(fm_json) if fm_json else {}
