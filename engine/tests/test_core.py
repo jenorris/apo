@@ -220,6 +220,21 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertEqual(total, 1)
         self.assertEqual(rows[0][1], "b.md")
 
+    def test_filter_notes_in_operator(self):
+        self.write("a.md", "---\nstatus: active\ntags: [x, z]\n---\n\n# A\n\nbody a\n")
+        self.write("b.md", "---\nstatus: waiting\ntags: [y]\n---\n\n# B\n\nbody b\n")
+        self.write("c.md", "---\nstatus: done\ntags: [q]\n---\n\n# C\n\nbody c\n")
+        core.index_vault(verbose=False)
+        total, rows = core.filter_notes({"status": {"$in": ["active", "waiting"]}})
+        self.assertEqual(total, 2)
+        self.assertEqual({r[1] for r in rows}, {"a.md", "b.md"})
+        total, rows = core.filter_notes({"tags": {"$in": ["z"]}})
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "a.md")
+        total, rows = core.filter_notes({"status": {"$in": []}})
+        self.assertEqual(total, 0)
+        self.assertEqual(rows, [])
+
     def test_filter_notes_sql_limit_pages(self):
         for i in range(5):
             self.write(

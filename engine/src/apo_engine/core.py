@@ -377,6 +377,14 @@ def _match_condition(value, cond) -> bool:
                     return False
             else:
                 return False
+        elif op == "$in":
+            if not isinstance(rhs, (list, tuple)) or not rhs:
+                return False
+            if isinstance(value, list):
+                if not any(_loose_eq(x, y) for x in value for y in rhs):
+                    return False
+            elif not any(_loose_eq(value, y) for y in rhs):
+                return False
         elif op in ("$lt", "$lte", "$gt", "$gte"):
             c = _loose_cmp(value, rhs)
             if op == "$lt" and c >= 0:
@@ -1432,6 +1440,8 @@ def _sql_pushdown_predicates(where: dict) -> tuple[str, list[Any]] | None:
     """AND of simple frontmatter predicates as SQL, or None if any clause needs Python.
 
     Supported: bare equality, ``{$eq: v}``, ``{$exists: bool}`` on safe identifier keys.
+    ``{$in: [...]}`` and richer operators fall back to Python (correct for scalar *and*
+    array frontmatter fields).
     ``json_extract`` returns SQL TEXT/INT/REAL for JSON scalars, so we compare to the
     native Python value (bools as 0/1), not wrapped ``json()`` literals.
     """

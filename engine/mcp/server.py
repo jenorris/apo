@@ -835,7 +835,7 @@ async def filter_notes(
     limit: int = 20,
     vault: str = "",
 ) -> dict:
-    """Frontmatter catalog (no embeddings). where: {} = all in folder; else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists}. Newest first. Example: filter_notes({}, folder=\"inbox/zettels/\", limit=50)."""
+    """Frontmatter catalog (no embeddings). where: {} = all in folder; else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in}. Newest first. Example: filter_notes({\"status\": {\"$in\": [\"active\", \"waiting\"]}}, folder=\"areas/threads\")."""
     return await asyncio.to_thread(_filter_notes_sync, where, folder, limit, vault)
 
 
