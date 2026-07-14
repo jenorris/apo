@@ -233,12 +233,20 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
 
 
-def _locate_chunk_lines(lines: list[str], chunk_text: str) -> tuple[int, int]:
-    """Best-effort 1-based start/end lines for a chunk body."""
+def _locate_chunk_lines(lines: list[str], chunk_text: str, search_from: int = 0) -> tuple[int, int]:
+    """Best-effort 1-based start/end lines for a chunk body.
+
+    Searches from `search_from` (0-based) onward, not always from line 1 — callers
+    processing a file's chunks in document order must thread the previous chunk's
+    start_line through as the next search_from. Without this, two chunks that happen
+    to start with identical text (repeated status/template boilerplate is common)
+    both resolve to the *first* occurrence, silently misdirecting chunk_hash-anchored
+    writes (append_note) into the wrong section.
+    """
     needle = chunk_text.strip().split("\n")[0][:80]
-    start = 1
-    for i, line in enumerate(lines):
-        if needle and needle in line:
+    start = search_from + 1
+    for i in range(search_from, len(lines)):
+        if needle and needle in lines[i]:
             start = i + 1
             break
     end = min(len(lines), start + max(1, chunk_text.count("\n") + 3))
@@ -591,8 +599,10 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
         else:
             stats.added += 1
         lines = text.split("\n")
+        locate_cursor = 0
         for ordi, (heading, hlevel, ctext) in enumerate(chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)):
-            start_line, end_line = _locate_chunk_lines(lines, ctext)
+            start_line, end_line = _locate_chunk_lines(lines, ctext, search_from=locate_cursor)
+            locate_cursor = start_line
             chash = _content_hash(ctext)
             chunk_id = compute_chunk_id(
                 f"markdown:{rel}",
@@ -779,10 +789,12 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
             db.execute("UPDATE files SET mtime=? WHERE path=?", (plan.mtime, plan.rel))
             continue
         lines = plan.text.split("\n")
+        locate_cursor = 0
         for ordi, (heading, hlevel, ctext) in enumerate(
             chunk_markdown(plan.text, config.MAX_CHARS, config.OVERLAP)
         ):
-            start_line, end_line = _locate_chunk_lines(lines, ctext)
+            start_line, end_line = _locate_chunk_lines(lines, ctext, search_from=locate_cursor)
+            locate_cursor = start_line
             body_hash = _content_hash(ctext)
             chunk_id = compute_chunk_id(
                 f"markdown:{plan.rel}", start_line, end_line, body_hash, config.MODEL_NAME
