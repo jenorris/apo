@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+import yaml
+
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 
 
@@ -97,17 +99,21 @@ def find_section(
     sections = parse_sections(lines)
     matches = [s for s in sections if _normalize_heading(s.title) == target and (level is None or s.level == level)]
     if not matches:
-        titles = [f"{'#' * s.level} {s.title}" for s in sections]
-        suggestions = [
-            {"heading": h, "line": sections[i].heading_line + 1}
-            for i, h in enumerate(titles)
-            if difflib.SequenceMatcher(None, target, _normalize_heading(sections[i].title)).ratio() > 0.6
-        ]
-        close = difflib.get_close_matches(target, [_normalize_heading(s.title) for s in sections], n=3, cutoff=0.6)
+        # get_close_matches returns best-first, so suggestions[0] is the actual best guess
+        # (not just document order) — and de-duped, unlike running two overlapping matchers.
+        close = difflib.get_close_matches(
+            target, [_normalize_heading(s.title) for s in sections], n=3, cutoff=0.6
+        )
+        suggestions = []
+        seen: set[str] = set()
         for c in close:
+            if c in seen:
+                continue
             for s in sections:
                 if _normalize_heading(s.title) == c:
+                    seen.add(c)
                     suggestions.append({"heading": f"{'#' * s.level} {s.title}", "line": s.heading_line + 1})
+                    break
         msg = f"heading {heading!r} not found"
         if suggestions:
             msg += f" (did you mean {suggestions[0]['heading']}?)"
@@ -173,7 +179,17 @@ def _frontmatter_bounds(lines: list[str]) -> tuple[int, int] | None:
 def _quote_yaml_value(value: str) -> str:
     if not value:
         return '""'
-    if any(c in value for c in ":{}[]#&*!?|>'\"@`") or value.strip() != value:
+    needs_quote = value.strip() != value or any(c in value for c in ":{}[]#&*!?|>'\"@`")
+    if not needs_quote:
+        # YAML 1.1 implicitly types unquoted scalars: bare `2026-07-09` becomes a date,
+        # `yes`/`no`/`true`/`null`/bare integers become bool/None/int. Round-trip through
+        # the real parser rather than hand-maintaining its resolver patterns — cheaper to
+        # keep correct than a punctuation blocklist that will always miss cases like this.
+        try:
+            needs_quote = yaml.safe_load(value) != value
+        except yaml.YAMLError:
+            needs_quote = True
+    if needs_quote:
         escaped = value.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
     return value
@@ -223,16 +239,6 @@ def _insert_text_lines(existing: list[str], insert_lines: list[str], at: int) ->
     return merged, len(insert_lines)
 
 
-def _ensure_separator(lines: list[str], pos: int, text: str) -> str:
-    """Ensure newline separation when appending."""
-    if pos > 0 and pos <= len(lines):
-        prev = lines[pos - 1] if pos - 1 < len(lines) else ""
-        if prev.strip() and not text.startswith("\n") and not prev.endswith("\n"):
-            if not text.startswith("\n"):
-                return "\n" + text
-    return text
-
-
 def apply_append(
     lines: list[str],
     text: str,
@@ -241,11 +247,9 @@ def apply_append(
     section: Section | None = None,
     position: str = "end",
 ) -> tuple[list[str], str]:
+    # str.split("\n") on a "\n"-terminated string already yields a trailing "" element,
+    # so insert_lines is correctly shaped for either case without further adjustment.
     insert_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    if text.endswith("\n") and insert_lines and insert_lines[-1] == "":
-        pass
-    elif text.endswith("\n"):
-        insert_lines.append("")
 
     if section is None and heading:
         section = find_section(lines, heading)
