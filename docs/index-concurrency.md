@@ -62,18 +62,15 @@ MCP writes: `enqueue_index` / `enqueue_many` return the updated queue set (no se
 
 ## Search latency notes
 
-**Desk default (ONNX `BAAI/bge-large-en-v1.5` via fastembed):** warm unique query embed
-~20ms on M4 Air; identical-query TTL cache ~sub-ms; SQLite vec/FTS typically &lt;15ms.
-
-**Optional Ollama `bge-m3`:** unique query ~120–150ms (Metal). Not interchangeable with
-the ONNX index — switch backend/model ⇒ `just reindex`.
-
-To go lower still:
+Cold hybrid search is dominated by **Ollama `bge-m3` query embed** (~120–150ms on M4 Air
+with the model loaded). SQLite vec/FTS is typically &lt;15ms warm. Identical-query TTL
+cache ~15ms. To go lower:
 
 - Repeat identical queries hit the embed TTL cache (near-instant)
 - FTS runs overlapped with the embed call
 - Candidate pool floor is 24 (was hard-coded 50)
-- Smaller FastEmbed models (`bge-small-en-v1.5`) trade recall for ~4ms queries
+- Optional ONNX (`fastembed`) can cut query embed to ~20ms but hurt ticket-ID ranking —
+  switch backend/model ⇒ `just reindex`
 
 ## Recovery
 

@@ -17,17 +17,17 @@ NOTES_ROOT: Path = _path("APO_NOTES_ROOT", "~/Notes")
 # Single-file sqlite-vec index (rebuildable, git-ignored).
 INDEX_PATH: Path = _path("APO_INDEX", str(_ENGINE_ROOT / "index.db"))
 
-# Embedding backend: "fastembed" (ONNX, desk default) or "ollama" (Metal/GPU).
-EMBED_BACKEND: str = os.environ.get("APO_EMBED_BACKEND", "fastembed").lower()
+# Embedding backend: "ollama" (Metal/GPU, desk default) or "fastembed" (ONNX).
+EMBED_BACKEND: str = os.environ.get("APO_EMBED_BACKEND", "ollama").lower()
 
 # Model. Defaults differ per backend — vectors are NOT interchangeable across models.
 _DEFAULT_MODEL = {
     "ollama": "bge-m3",
     "fastembed": "BAAI/bge-large-en-v1.5",
 }
-MODEL_NAME: str = os.environ.get("APO_MODEL", _DEFAULT_MODEL.get(EMBED_BACKEND, "BAAI/bge-large-en-v1.5"))
+MODEL_NAME: str = os.environ.get("APO_MODEL", _DEFAULT_MODEL.get(EMBED_BACKEND, "bge-m3"))
 
-# Ollama endpoint (optional when EMBED_BACKEND=fastembed).
+# Ollama endpoint (required when EMBED_BACKEND=ollama).
 OLLAMA_URL: str = os.environ.get("APO_OLLAMA_URL", "http://localhost:11434").rstrip("/")
 
 # Chunking knobs.
