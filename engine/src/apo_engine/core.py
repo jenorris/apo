@@ -679,6 +679,7 @@ class Hit:
     start_line: int = 0
     end_line: int = 0
     source: str = ""
+    mtime: float = 0.0
 
 
 def count_chunks() -> int:
@@ -962,9 +963,14 @@ def search(
     by_id: dict[int, tuple] = {}
     if ids:
         placeholders = ",".join("?" * len(ids))
+        # Join files.mtime here — one query, versus a filesystem stat() per hit later
+        # (callers commonly want "modified" alongside a result; the value is already
+        # cached in the index and this costs nothing extra to include).
         for row in db.execute(
-            f"""SELECT id, path, heading, text, chunk_hash, heading_level, start_line, end_line
-                FROM chunks WHERE id IN ({placeholders})""",
+            f"""SELECT c.id, c.path, c.heading, c.text, c.chunk_hash, c.heading_level,
+                       c.start_line, c.end_line, f.mtime
+                FROM chunks c LEFT JOIN files f ON f.path = c.path
+                WHERE c.id IN ({placeholders})""",
             ids,
         ):
             by_id[row[0]] = row[1:]
@@ -974,7 +980,7 @@ def search(
         row = by_id.get(rid)
         if row is None:
             continue
-        path, heading, text, chunk_hash, hlevel, start_line, end_line = row
+        path, heading, text, chunk_hash, hlevel, start_line, end_line, mtime = row
         if folder_prefix and not path.startswith(folder_prefix + "/"):
             continue
         if exclude and any(fnmatch.fnmatch(path, pat) for pat in exclude):
@@ -991,6 +997,7 @@ def search(
                 start_line=int(start_line or 1),
                 end_line=int(end_line or 1),
                 source=str(config.NOTES_ROOT / path),
+                mtime=float(mtime or 0.0),
             )
         )
         if len(hits) >= k:

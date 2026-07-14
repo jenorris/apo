@@ -717,11 +717,11 @@ async def search_notes(query: str, top_k: int = 5, folder: str = "", vault: str 
     rows = []
     for r in results:
         src_abs = r.get("source", "")
-        modified = None
-        try:
-            modified = datetime.fromtimestamp(Path(src_abs).stat().st_mtime).isoformat(timespec="seconds")
-        except OSError:
-            pass
+        # mtime comes from the index (files.mtime, joined in core.search) — no per-hit
+        # stat() call needed; it's already cached and was previously refetched from disk
+        # once per result on every single search_notes call.
+        mtime = r.get("mtime") or 0
+        modified = datetime.fromtimestamp(mtime).isoformat(timespec="seconds") if mtime else None
         rows.append({
             "content": r.get("content", ""),
             "score": round(float(r.get("score", 0)), 4),

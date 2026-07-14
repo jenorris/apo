@@ -48,6 +48,7 @@ class ApoMem:
                     "heading_level": h.heading_level,
                     "start_line": h.start_line,
                     "end_line": h.end_line,
+                    "mtime": h.mtime,
                 }
             )
         return rows
