@@ -137,13 +137,16 @@ def _ollama_embed_request(texts: list[str]) -> list[list[float]]:
     return embs
 
 
-def _embed_batch_resilient(texts: list[str], poisoned: list[str]) -> list[list[float] | None]:
+def _embed_batch_resilient(texts: list[str], poisoned: list[int]) -> list[list[float] | None]:
     """Embed a batch; on HTTP error or NaN output, bisect to isolate and skip only the
     poisoned input(s) — a numerically-unstable chunk shouldn't fail the whole reindex.
 
     Seen in practice: some inputs make the quantized bge-m3 GGUF runner emit NaN, which
     Ollama itself then fails to JSON-encode (HTTP 500). Deterministic per input, unrelated
     to obvious content features (charset, length) — bisection is the only cheap isolator.
+
+    `poisoned` collects a placeholder per skipped chunk, not the chunk text itself — vault
+    content must never land in logs (this engine indexes compliance/employer-sensitive notes).
     """
     try:
         embs = _ollama_embed_request(texts)
@@ -152,31 +155,31 @@ def _embed_batch_resilient(texts: list[str], poisoned: list[str]) -> list[list[f
     except (urllib.error.HTTPError, urllib.error.URLError, RuntimeError, TimeoutError):
         pass
     if len(texts) == 1:
-        poisoned.append(texts[0][:80])
+        poisoned.append(1)
         return [None]
     mid = len(texts) // 2
     return _embed_batch_resilient(texts[:mid], poisoned) + _embed_batch_resilient(texts[mid:], poisoned)
 
 
-def _embed_ollama(texts: list[str], batch: int = 64) -> list[list[float] | None]:
+def _embed_ollama(texts: list[str], batch: int = 64, verbose: bool = False) -> list[list[float] | None]:
     out: list[list[float] | None] = []
-    poisoned: list[str] = []
+    poisoned: list[int] = []
     for i in range(0, len(texts), batch):
         out.extend(_embed_batch_resilient(texts[i : i + batch], poisoned))
-    if poisoned:
+    if poisoned and verbose:
         print(
             f"  WARNING: {len(poisoned)} chunk(s) skipped — embedder returned NaN/error "
-            f"(first: {poisoned[0]!r})",
+            f"(content omitted from logs; re-run with a healthy backend to recover them)",
             flush=True,
         )
     return out
 
 
-def embed(texts: list[str]) -> list[list[float] | None]:
+def embed(texts: list[str], verbose: bool = False) -> list[list[float] | None]:
     if not texts:
         return []
     if config.EMBED_BACKEND == "ollama":
-        return _embed_ollama(texts)
+        return _embed_ollama(texts, verbose=verbose)
     return _embed_fastembed(texts)
 
 
@@ -621,7 +624,7 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                 f"  embedding {len(pending)} chunks via {config.EMBED_BACKEND}:{config.MODEL_NAME} ...",
                 flush=True,
             )
-        vectors = embed([t[3] for t in pending])
+        vectors = embed([t[3] for t in pending], verbose=verbose)
         stats.chunks = _insert_pending_chunks(db, pending, vectors)
         _finalize_index_writes(db)
     elif work_done:
@@ -822,7 +825,7 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
                 f"across {len(active)} file(s) ...",
                 flush=True,
             )
-        embs = embed(texts_to_embed)
+        embs = embed(texts_to_embed, verbose=verbose)
         for slot, vec in zip(embed_slots, embs):
             all_vectors[slot] = vec
     elif verbose and active:
@@ -1009,6 +1012,11 @@ def filter_notes(where: dict, folder: str = "", limit: int = 20) -> tuple[int, l
     return len(matches), matches[:limit]
 
 
+def _escape_like(s: str) -> str:
+    """Escape SQLite LIKE wildcards so a literal `_`/`%` in a path segment isn't treated as one."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def recent_notes(limit: int = 10, folder: str = "") -> list[tuple[str, float]]:
     """(path, mtime) for the most recently modified notes, index-backed — no per-file stat()."""
     db = connect()
@@ -1016,8 +1024,8 @@ def recent_notes(limit: int = 10, folder: str = "") -> list[tuple[str, float]]:
         folder_prefix = folder.replace("\\", "/").strip("/")
         if folder_prefix:
             rows = db.execute(
-                "SELECT path, mtime FROM files WHERE path LIKE ? ORDER BY mtime DESC LIMIT ?",
-                (folder_prefix + "/%", limit),
+                "SELECT path, mtime FROM files WHERE path LIKE ? ESCAPE '\\' ORDER BY mtime DESC LIMIT ?",
+                (_escape_like(folder_prefix) + "/%", limit),
             ).fetchall()
         else:
             rows = db.execute(

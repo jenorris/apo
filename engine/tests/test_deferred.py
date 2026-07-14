@@ -77,7 +77,7 @@ class ProcessQueuesTest(unittest.TestCase):
         self._saved_dir = deferred.DEFERRED_DIR
         deferred.DEFERRED_DIR = self.tmp / "apo"
         self._saved_embed = core.embed
-        core.embed = lambda texts: [[1.0, 0.0] * 8 for _ in texts]  # dim 16
+        core.embed = lambda texts, **kwargs: [[1.0, 0.0] * 8 for _ in texts]  # dim 16
 
     def tearDown(self):
         for k, val in self._saved.items():

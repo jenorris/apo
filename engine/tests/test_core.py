@@ -19,7 +19,7 @@ from apo_engine import config, core
 _DIM = 16
 
 
-def _fake_embed(texts: list[str]) -> list[list[float]]:
+def _fake_embed(texts: list[str], **kwargs) -> list[list[float]]:
     """Deterministic unit-norm bag-of-words vectors: shared tokens ⇒ nearby vectors."""
     out = []
     for t in texts:

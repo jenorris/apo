@@ -53,7 +53,7 @@ class IndexFileUnchangedTest(unittest.TestCase):
         self._embed = core.embed
         self.calls = 0
 
-        def counting_embed(texts):
+        def counting_embed(texts, verbose=False):
             self.calls += 1
             return [[1.0] + [0.0] * 15 for _ in texts]
 
@@ -79,7 +79,7 @@ class IndexFileUnchangedTest(unittest.TestCase):
         config.MAX_CHARS = 40
         self.n_texts = 0
 
-        def counting(texts):
+        def counting(texts, **kwargs):
             self.calls += 1
             self.n_texts += len(texts)
             return [[1.0] + [0.0] * 15 for _ in texts]
@@ -120,7 +120,7 @@ class QueryEmbedCacheTest(unittest.TestCase):
         self._ttl = config.QUERY_EMBED_TTL
         config.QUERY_EMBED_TTL = 60.0
 
-        def counting(texts):
+        def counting(texts, **kwargs):
             self.calls += 1
             return [[0.5] * 8 for _ in texts]
 
@@ -161,7 +161,7 @@ class ProcessQueuesConsumeIndexFlag(unittest.TestCase):
         self._dir = deferred.DEFERRED_DIR
         deferred.DEFERRED_DIR = self.tmp / "apo"
         self._embed = core.embed
-        core.embed = lambda texts: [[1.0, 0.0] * 8 for _ in texts]
+        core.embed = lambda texts, **kwargs: [[1.0, 0.0] * 8 for _ in texts]
 
     def tearDown(self):
         for k, val in self._saved.items():
