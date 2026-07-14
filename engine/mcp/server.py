@@ -5,9 +5,9 @@ Apo MCP server — hybrid search + surgical writes over sqlite-vec + Ollama.
 Vault: APO_NOTES_ROOT. Deferred queue: ~/.apo/deferred-<collection>.json
 """
 
+import asyncio
 import json
 import os
-import re
 from dataclasses import dataclass, field as dc_field
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +16,7 @@ from typing import Any, Literal
 import yaml
 from fastmcp import FastMCP
 from apo_engine import config as apo_config
+from apo_engine import core as apo_core
 from apo_engine import deferred as index_deferred
 from apo_engine.mcp_backend import ApoMem
 from apo_engine.markdown_patch import (
@@ -136,7 +137,7 @@ def _vault(name: str = "") -> Vault:
 def _ensure_mem(v: Vault) -> ApoMem:
     """Lazy-init index backend per vault."""
     if v.mem is None:
-        v.mem = ApoMem(v.root)
+        v.mem = ApoMem()
     return v.mem
 
 
@@ -204,9 +205,7 @@ def _purge_index(v: Vault, full: Path) -> bool:
 
 def _lookup_chunk(v: Vault, chunk_hash: str) -> dict[str, Any] | None:
     try:
-        escaped = chunk_hash.replace("\\", "\\\\").replace('"', '\\"')
-        rows = _ensure_mem(v).store.query(filter_expr=f'chunk_hash == "{escaped}"')
-        return rows[0] if rows else None
+        return _ensure_mem(v).store.lookup_chunk(chunk_hash)
     except Exception:
         return None
 
@@ -228,80 +227,10 @@ def _parse_frontmatter(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _iter_notes(base: Path):
-    for p in sorted(base.rglob("*.md")):
-        if any(part.startswith(".") for part in p.relative_to(base).parts):
-            continue
-        yield p
-
-
 def _top_level_dirs(v: Vault) -> list[str]:
     if not v.root.exists():
         return []
     return sorted(p.name for p in v.root.iterdir() if p.is_dir() and not p.name.startswith("."))
-
-
-###############################################################################
-# Frontmatter query matching (filter_notes)
-###############################################################################
-
-
-def _loose_eq(a: Any, b: Any) -> bool:
-    if isinstance(a, type(b)) or isinstance(b, type(a)):
-        return a == b
-    return str(a).strip().lower() == str(b).strip().lower()
-
-
-def _loose_cmp(a: Any, b: Any) -> int:
-    try:
-        fa, fb = float(a), float(b)
-        return (fa > fb) - (fa < fb)
-    except (TypeError, ValueError):
-        sa, sb = str(a), str(b)
-        return (sa > sb) - (sa < sb)
-
-
-def _match_condition(value: Any, cond: Any) -> bool:
-    if not isinstance(cond, dict):
-        if isinstance(value, list):
-            return any(_loose_eq(x, cond) for x in value)
-        return value is not None and _loose_eq(value, cond)
-
-    for op, rhs in cond.items():
-        if op == "$exists":
-            if bool(rhs) != (value is not None):
-                return False
-            continue
-        if value is None:
-            return False
-        if op == "$eq":
-            if not _match_condition(value, rhs):
-                return False
-        elif op == "$ne":
-            if _match_condition(value, rhs):
-                return False
-        elif op == "$contains":
-            if isinstance(value, list):
-                if not any(_loose_eq(x, rhs) for x in value):
-                    return False
-            elif isinstance(value, str):
-                if str(rhs).lower() not in value.lower():
-                    return False
-            else:
-                return False
-        elif op in ("$lt", "$lte", "$gt", "$gte"):
-            c = _loose_cmp(value, rhs)
-            if op == "$lt" and c >= 0:
-                return False
-            if op == "$lte" and c > 0:
-                return False
-            if op == "$gt" and c <= 0:
-                return False
-            if op == "$gte" and c < 0:
-                return False
-        else:
-            return False  # unknown operator never matches
-    return True
 
 
 ###############################################################################
@@ -857,28 +786,16 @@ async def filter_notes(
     if not isinstance(where, dict) or not where:
         return _err(error="bad_query", message="`where` must be a non-empty object of field conditions")
 
-    matches: list[tuple[float, Path, dict]] = []
-    for p in _iter_notes(base):
-        try:
-            fm = _parse_frontmatter(p.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-        if all(_match_condition(fm.get(k), cond) for k, cond in where.items()):
-            matches.append((p.stat().st_mtime, p, fm))
-
-    matches.sort(key=lambda t: t[0], reverse=True)
+    total, matches = await asyncio.to_thread(apo_core.filter_notes, where, folder, limit)
     notes = [
         {
-            "path": str(p.relative_to(v.root)),
+            "path": path,
             "modified": datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
             "frontmatter": _jsonable(fm),
         }
-        for mt, p, fm in matches[:limit]
+        for mt, path, fm in matches
     ]
-    return {"ok": True, "total": len(matches), "notes": notes}
-
-
-_WIKILINK_RE = re.compile(r"\[\[([^\]#|]+)(?:[#|][^\]]*)?\]\]")
+    return {"ok": True, "total": total, "notes": notes}
 
 
 @mcp.tool(annotations=_RO)
@@ -901,30 +818,9 @@ async def backlinks(path: str, limit: int = 100, vault: str = "") -> dict:
         if isinstance(title, str) and title.strip():
             targets.add(title.strip().lower())
 
-    hits: list[dict] = []
-    for p in _iter_notes(v.root):
-        if p == full:
-            continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if "[[" not in text:
-            continue
-        for lineno, line in enumerate(text.splitlines(), 1):
-            for m in _WIKILINK_RE.finditer(line):
-                link = m.group(1).strip().removesuffix(".md").lower()
-                if link in targets or link.rsplit("/", 1)[-1] in targets:
-                    hits.append({
-                        "path": str(p.relative_to(v.root)),
-                        "line": lineno,
-                        "text": line.strip()[:200],
-                    })
-                    break
-            if len(hits) >= limit:
-                break
-        if len(hits) >= limit:
-            break
+    exclude_source = str(full.relative_to(v.root)) if full.exists() else ""
+    rows = await asyncio.to_thread(apo_core.list_backlinks, targets, exclude_source, limit)
+    hits = [{"path": src, "line": line, "text": text} for src, line, text in rows]
     return {"ok": True, "target": path, "total": len(hits), "backlinks": hits}
 
 
@@ -971,21 +867,17 @@ async def recent_activity(limit: int = 10, folder: str = "", vault: str = "") ->
         return _err(error="bad_path", message=str(e))
     if not base.exists():
         return _err(error="not_found", message=f"folder not found: {folder}")
-    md_files = sorted(
-        (p for p in _iter_notes(base)),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    rows = await asyncio.to_thread(apo_core.recent_notes, limit, folder)
     notes = []
-    for p in md_files[:limit]:
+    for path, mtime in rows:
         first_line = ""
         try:
-            first_line = p.read_text(encoding="utf-8").splitlines()[0][:120]
+            first_line = (v.root / path).read_text(encoding="utf-8").splitlines()[0][:120]
         except (OSError, IndexError):
             pass
         notes.append({
-            "path": str(p.relative_to(v.root)),
-            "modified": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
+            "path": path,
+            "modified": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
             "first_line": first_line,
         })
     return {"ok": True, "notes": notes}

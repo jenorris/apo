@@ -18,9 +18,11 @@ Ollama bge-m3 (or fastembed)     index: engine/index.db
 
 | Layer | Role |
 |-------|------|
-| **Engine** (`engine/`) | Chunk, embed, hybrid BM25 + vector search |
+| **Engine** (`engine/`) | Chunk, embed, hybrid BM25 + vector search; caches frontmatter + a wikilink backlink graph alongside chunks |
 | **MCP** | 16 tools — agents never talk to sqlite directly for writes |
 | **Watcher** | FS events + deferred queue → reindex |
+
+`filter_notes`, `backlinks`, and `recent_activity` are index-backed (query `files.frontmatter` / the `backlinks` table), not vault filesystem walks — they stay fast regardless of vault size.
 
 ## Quickstart
 
@@ -62,6 +64,8 @@ claude mcp add -s user apo -- \
 
 Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 
+**Troubleshooting embed failures:** if `apo-engine index` throws `HTTP Error 500` from Ollama's `/api/embed`, check `ollama --version` before assuming it's vault content — older Ollama builds (seen: 0.21.1) can emit NaN for realistic-length embedding inputs while trivial strings still work fine. Upgrading (`curl -fsSL https://ollama.com/install.sh | sh`) has resolved this in practice. The indexer bisects failing batches to skip only genuinely poisoned chunks rather than aborting the whole reindex, but that's a safety net, not a fix — a systemically unhealthy backend will silently skip most of the vault.
+
 ## Background watcher
 
 ```bash
@@ -86,3 +90,4 @@ After pulling engine changes that touch watch/index code: `just setup && just wa
 - Engine is **convention-agnostic**: vault-relative paths + YAML frontmatter only.
 - Opinionated PARA/OKF/thread workflows are **optional vault policy**, not engine requirements.
 - Prefer `append_note` / `patch_note` over full-file `write_note` for edits.
+- Frontmatter and wikilinks are parsed once per index write and cached (`files.frontmatter`, the `backlinks` table) — catalog tools query sqlite, never the filesystem.

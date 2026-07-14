@@ -1,4 +1,4 @@
-"""MCP backend — sqlite-vec index adapter matching memsearch MCP expectations.
+"""MCP backend — async adapter over core's sync sqlite-vec index.
 
 Read paths (search, count, lookup) run in worker threads. Index writes are owned by
 apo-engine watch — MCP enqueues via apo_engine.deferred instead of calling index_file here.
@@ -7,7 +7,6 @@ apo-engine watch — MCP enqueues via apo_engine.deferred instead of calling ind
 from __future__ import annotations
 
 import asyncio
-import re
 from pathlib import Path
 
 from . import config, core
@@ -17,24 +16,12 @@ class ApoStore:
     def count(self) -> int:
         return core.count_chunks()
 
-    def query(self, filter_expr: str) -> list[dict]:
-        m = re.search(r'chunk_hash\s*==\s*"([^"]+)"', filter_expr)
-        if not m:
-            return []
-        row = core.lookup_chunk(m.group(1))
-        return [row] if row else []
-
-    def delete_by_source(self, source: str) -> None:
-        core.purge_source(Path(source))
+    def lookup_chunk(self, chunk_hash: str) -> dict | None:
+        return core.lookup_chunk(chunk_hash)
 
 
 class ApoMem:
-    """Drop-in for memsearch.MemSearch in the ported MCP server."""
-
     store = ApoStore()
-
-    def __init__(self, root: Path):
-        self.root = root.resolve()
 
     async def search(
         self,
@@ -64,10 +51,3 @@ class ApoMem:
                 }
             )
         return rows
-
-    async def index_file(self, path: str | Path) -> None:
-        await asyncio.to_thread(core.index_file, Path(path), verbose=False)
-
-    async def index(self, force: bool = False) -> int:
-        stats = await asyncio.to_thread(core.index_vault, rebuild=force, verbose=False)
-        return stats.added + stats.changed

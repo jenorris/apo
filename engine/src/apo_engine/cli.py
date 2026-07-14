@@ -1,7 +1,4 @@
-"""Command-line interface: index | search | stats | watch.
-
-This is the engine surface the Laravel MCP gateway shells out to (`apo-engine search --json`).
-"""
+"""Command-line interface: index | search | stats | watch."""
 from __future__ import annotations
 
 import argparse

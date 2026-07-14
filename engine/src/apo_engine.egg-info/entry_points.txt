@@ -1,2 +1,0 @@
-[console_scripts]
-apo-engine = apo_engine.cli:main

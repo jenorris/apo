@@ -28,3 +28,4 @@ node_modules/
 # sqlite indexes (any name)
 *.db
 *.db-*
+engine/src/apo_engine.egg-info/

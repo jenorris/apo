@@ -13,6 +13,7 @@ import sqlite3
 import struct
 import threading
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Iterator
 
 import sqlite_vec
+import yaml
 
 from . import config
 
@@ -33,7 +35,9 @@ _schema_ready: set[str] = set()
 _writer_local = threading.local()
 
 _FRONTMATTER = re.compile(r"^---\n.*?\n---\n", re.DOTALL)
+_FRONTMATTER_YAML = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)")
+_WIKILINK = re.compile(r"\[\[([^\]#|]+)(?:[#|][^\]]*)?\]\]")
 
 
 # --------------------------------------------------------------------------- #
@@ -117,22 +121,58 @@ def _embed_fastembed(texts: list[str]) -> list[list[float]]:
     return [v.tolist() for v in _fastembed.embed(texts)]
 
 
-def _embed_ollama(texts: list[str], batch: int = 64) -> list[list[float]]:
-    out: list[list[float]] = []
+def _has_nan(vec: list[float]) -> bool:
+    return any(x != x for x in vec)
+
+
+def _ollama_embed_request(texts: list[str]) -> list[list[float]]:
     url = f"{config.OLLAMA_URL}/api/embed"
+    payload = json.dumps({"model": config.MODEL_NAME, "input": texts}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.load(resp)
+    embs = data.get("embeddings")
+    if not embs or len(embs) != len(texts):
+        raise RuntimeError(f"Ollama returned {len(embs) if embs else 0} embeddings for {len(texts)} inputs")
+    return embs
+
+
+def _embed_batch_resilient(texts: list[str], poisoned: list[str]) -> list[list[float] | None]:
+    """Embed a batch; on HTTP error or NaN output, bisect to isolate and skip only the
+    poisoned input(s) — a numerically-unstable chunk shouldn't fail the whole reindex.
+
+    Seen in practice: some inputs make the quantized bge-m3 GGUF runner emit NaN, which
+    Ollama itself then fails to JSON-encode (HTTP 500). Deterministic per input, unrelated
+    to obvious content features (charset, length) — bisection is the only cheap isolator.
+    """
+    try:
+        embs = _ollama_embed_request(texts)
+        if not any(_has_nan(v) for v in embs):
+            return embs
+    except (urllib.error.HTTPError, urllib.error.URLError, RuntimeError, TimeoutError):
+        pass
+    if len(texts) == 1:
+        poisoned.append(texts[0][:80])
+        return [None]
+    mid = len(texts) // 2
+    return _embed_batch_resilient(texts[:mid], poisoned) + _embed_batch_resilient(texts[mid:], poisoned)
+
+
+def _embed_ollama(texts: list[str], batch: int = 64) -> list[list[float] | None]:
+    out: list[list[float] | None] = []
+    poisoned: list[str] = []
     for i in range(0, len(texts), batch):
-        payload = json.dumps({"model": config.MODEL_NAME, "input": texts[i : i + batch]}).encode()
-        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.load(resp)
-        embs = data.get("embeddings")
-        if not embs:
-            raise RuntimeError(f"Ollama returned no embeddings (model={config.MODEL_NAME}): {data}")
-        out.extend(embs)
+        out.extend(_embed_batch_resilient(texts[i : i + batch], poisoned))
+    if poisoned:
+        print(
+            f"  WARNING: {len(poisoned)} chunk(s) skipped — embedder returned NaN/error "
+            f"(first: {poisoned[0]!r})",
+            flush=True,
+        )
     return out
 
 
-def embed(texts: list[str]) -> list[list[float]]:
+def embed(texts: list[str]) -> list[list[float] | None]:
     if not texts:
         return []
     if config.EMBED_BACKEND == "ollama":
@@ -202,6 +242,99 @@ def _locate_chunk_lines(lines: list[str], chunk_text: str) -> tuple[int, int]:
     return start, end
 
 
+def _parse_frontmatter(text: str) -> dict:
+    m = _FRONTMATTER_YAML.match(text)
+    if not m:
+        return {}
+    try:
+        data = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _extract_wikilinks(text: str) -> list[tuple[int, str, str, str]]:
+    """Return (line, target_key, target_stem, line_text) for each [[wiki-link]] in text."""
+    if "[[" not in text:
+        return []
+    rows: list[tuple[int, str, str, str]] = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for m in _WIKILINK.finditer(line):
+            target = m.group(1).strip().removesuffix(".md").lower()
+            if not target:
+                continue
+            stem = target.rsplit("/", 1)[-1]
+            rows.append((lineno, target, stem, line.strip()[:200]))
+    return rows
+
+
+# --------------------------------------------------------------------------- #
+# Frontmatter query matching (filter_notes)
+# --------------------------------------------------------------------------- #
+def _loose_eq(a, b) -> bool:
+    if isinstance(a, type(b)) or isinstance(b, type(a)):
+        return a == b
+    return str(a).strip().lower() == str(b).strip().lower()
+
+
+def _loose_cmp(a, b) -> int:
+    try:
+        fa, fb = float(a), float(b)
+        return (fa > fb) - (fa < fb)
+    except (TypeError, ValueError):
+        sa, sb = str(a), str(b)
+        return (sa > sb) - (sa < sb)
+
+
+def _match_condition(value, cond) -> bool:
+    if not isinstance(cond, dict):
+        if isinstance(value, list):
+            return any(_loose_eq(x, cond) for x in value)
+        return value is not None and _loose_eq(value, cond)
+
+    for op, rhs in cond.items():
+        if op == "$exists":
+            if bool(rhs) != (value is not None):
+                return False
+            continue
+        if value is None:
+            return False
+        if op == "$eq":
+            if not _match_condition(value, rhs):
+                return False
+        elif op == "$ne":
+            if _match_condition(value, rhs):
+                return False
+        elif op == "$contains":
+            if isinstance(value, list):
+                if not any(_loose_eq(x, rhs) for x in value):
+                    return False
+            elif isinstance(value, str):
+                if str(rhs).lower() not in value.lower():
+                    return False
+            else:
+                return False
+        elif op in ("$lt", "$lte", "$gt", "$gte"):
+            c = _loose_cmp(value, rhs)
+            if op == "$lt" and c >= 0:
+                return False
+            if op == "$lte" and c > 0:
+                return False
+            if op == "$gt" and c <= 0:
+                return False
+            if op == "$gte" and c < 0:
+                return False
+        else:
+            return False  # unknown operator never matches
+    return True
+
+
+def _ensure_files_columns(db: sqlite3.Connection) -> None:
+    cols = {row[1] for row in db.execute("PRAGMA table_info(files)").fetchall()}
+    if "frontmatter" not in cols:
+        db.execute("ALTER TABLE files ADD COLUMN frontmatter TEXT")
+
+
 def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
     cols = {row[1] for row in db.execute("PRAGMA table_info(chunks)").fetchall()}
     for name, ddl in (
@@ -242,9 +375,20 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
             );
             CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text);
+            CREATE TABLE IF NOT EXISTS backlinks (
+                source TEXT NOT NULL,
+                target_key TEXT NOT NULL,
+                target_stem TEXT NOT NULL,
+                line INTEGER NOT NULL,
+                text TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS backlinks_target ON backlinks(target_key);
+            CREATE INDEX IF NOT EXISTS backlinks_stem ON backlinks(target_stem);
+            CREATE INDEX IF NOT EXISTS backlinks_source ON backlinks(source);
             """
         )
         _ensure_chunk_columns(db)
+        _ensure_files_columns(db)
         _schema_ready.add(key)
     return db
 
@@ -304,12 +448,14 @@ def ensure_fts(db: sqlite3.Connection) -> None:
 def _insert_pending_chunks(
     db: sqlite3.Connection,
     pending: list[tuple[str, int, str, str, int, int, int, str]],
-    vectors: list[list[float]],
+    vectors: list[list[float] | None],
 ) -> int:
-    if not pending:
+    """Insert chunks with a real vector; silently drops any paired with a failed (None) embed."""
+    valid = [(row, vec) for row, vec in zip(pending, vectors) if vec is not None]
+    if not valid:
         return 0
-    _ensure_vec_table(db, len(vectors[0]))
-    for row, vec in zip(pending, vectors):
+    _ensure_vec_table(db, len(valid[0][1]))
+    for row, vec in valid:
         rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id = row
         cur = db.execute(
             """INSERT INTO chunks(path, ord, heading, text, start_line, end_line, heading_level, chunk_hash)
@@ -321,7 +467,7 @@ def _insert_pending_chunks(
             (cur.lastrowid, sqlite_vec.serialize_float32(vec)),
         )
         db.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cur.lastrowid, ctext))
-    return len(pending)
+    return len(valid)
 
 
 def _finalize_index_writes(db: sqlite3.Connection) -> None:
@@ -445,9 +591,16 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                 config.MODEL_NAME,
             )
             pending.append((rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id))
+        fm = _parse_frontmatter(text)
+        wikilinks = _extract_wikilinks(text)
+        if wikilinks:
+            db.executemany(
+                "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
+                [(rel, tk, ts, ln, tx) for ln, tk, ts, tx in wikilinks],
+            )
         db.execute(
-            "INSERT OR REPLACE INTO files(path, mtime, hash) VALUES (?,?,?)",
-            (rel, st.st_mtime, h),
+            "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter) VALUES (?,?,?,?)",
+            (rel, st.st_mtime, h, json.dumps(fm, default=str) if fm else None),
         )
 
     if limit is None:
@@ -488,6 +641,7 @@ def _delete_path(db: sqlite3.Connection, rel: str) -> None:
             except sqlite3.OperationalError:
                 pass
         db.execute(f"DELETE FROM chunks WHERE id IN ({qs})", ids)
+    db.execute("DELETE FROM backlinks WHERE source=?", (rel,))
 
 
 # --------------------------------------------------------------------------- #
@@ -564,6 +718,8 @@ class _FilePlan:
     file_hash: str
     text: str = ""
     pending: list[tuple[str, int, str, str, int, int, int, str]] = field(default_factory=list)
+    frontmatter_json: str | None = None
+    wikilinks: list[tuple[int, str, str, str]] = field(default_factory=list)
 
 
 def index_file(full_path: Path, verbose: bool = False) -> int:
@@ -618,6 +774,9 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
             plan.pending.append(
                 (plan.rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id)
             )
+        fm = _parse_frontmatter(plan.text)
+        plan.frontmatter_json = json.dumps(fm, default=str) if fm else None
+        plan.wikilinks = _extract_wikilinks(plan.text)
         active.append(plan)
 
     # Load reusable embeddings before deletes.
@@ -629,6 +788,11 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         _delete_path_by_rel(db, rel)
     for plan in active:
         _delete_path(db, plan.rel)
+        if plan.wikilinks:
+            db.executemany(
+                "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
+                [(plan.rel, tk, ts, ln, tx) for ln, tk, ts, tx in plan.wikilinks],
+            )
     db.commit()
 
     # Assign vectors: reuse by body hash, else queue for embed.
@@ -668,8 +832,8 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         _insert_pending_chunks(db, all_pending, all_vectors)
     for plan in active:
         db.execute(
-            "INSERT OR REPLACE INTO files(path, mtime, hash) VALUES (?,?,?)",
-            (plan.rel, plan.mtime, plan.file_hash),
+            "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter) VALUES (?,?,?,?)",
+            (plan.rel, plan.mtime, plan.file_hash, plan.frontmatter_json),
         )
     if purge_rels or active:
         _finalize_index_writes(db)
@@ -812,6 +976,79 @@ def stats() -> dict:
         out[key] = row[0] if row else None
     db.close()
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Catalog queries — frontmatter filter, backlinks, recent (index-backed, no vault scan)
+# --------------------------------------------------------------------------- #
+def filter_notes(where: dict, folder: str = "", limit: int = 20) -> tuple[int, list[tuple[float, str, dict]]]:
+    """Deterministic frontmatter query over the cached `files.frontmatter` column.
+
+    Returns (total_matches, top-`limit` matches), each match (mtime, path, frontmatter),
+    sorted by mtime desc. No filesystem walk — reads the index only.
+    """
+    db = connect()
+    try:
+        rows = db.execute(
+            "SELECT path, mtime, frontmatter FROM files WHERE frontmatter IS NOT NULL"
+        ).fetchall()
+    finally:
+        db.close()
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    matches: list[tuple[float, str, dict]] = []
+    for path, mtime, fm_json in rows:
+        if folder_prefix and not path.startswith(folder_prefix + "/"):
+            continue
+        try:
+            fm = json.loads(fm_json) if fm_json else {}
+        except json.JSONDecodeError:
+            fm = {}
+        if all(_match_condition(fm.get(k), cond) for k, cond in where.items()):
+            matches.append((mtime, path, fm))
+    matches.sort(key=lambda t: t[0], reverse=True)
+    return len(matches), matches[:limit]
+
+
+def recent_notes(limit: int = 10, folder: str = "") -> list[tuple[str, float]]:
+    """(path, mtime) for the most recently modified notes, index-backed — no per-file stat()."""
+    db = connect()
+    try:
+        folder_prefix = folder.replace("\\", "/").strip("/")
+        if folder_prefix:
+            rows = db.execute(
+                "SELECT path, mtime FROM files WHERE path LIKE ? ORDER BY mtime DESC LIMIT ?",
+                (folder_prefix + "/%", limit),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT path, mtime FROM files ORDER BY mtime DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return rows
+    finally:
+        db.close()
+
+
+def list_backlinks(
+    target_keys: set[str], exclude_source: str = "", limit: int = 100
+) -> list[tuple[str, int, str]]:
+    """(source path, line, line text) for notes linking to any of target_keys (stem or full path)."""
+    if not target_keys:
+        return []
+    db = connect()
+    try:
+        keys = list(target_keys)
+        qs = ",".join("?" * len(keys))
+        sql = f"""SELECT source, line, text FROM backlinks
+                  WHERE (target_key IN ({qs}) OR target_stem IN ({qs}))"""
+        params: list = [*keys, *keys]
+        if exclude_source:
+            sql += " AND source != ?"
+            params.append(exclude_source)
+        sql += " ORDER BY source, line LIMIT ?"
+        params.append(limit)
+        return db.execute(sql, params).fetchall()
+    finally:
+        db.close()
 
 
 @dataclass
