@@ -2,7 +2,7 @@
 
 Markdown vault as source of truth + hybrid search MCP for Cursor / Claude Code.
 
-**You need:** macOS or Linux, Homebrew (or equivalent), a folder of `.md` notes, ~3 GB free while the embedding model is loaded.
+**You need:** macOS or Linux, Homebrew (or equivalent), a folder of `.md` notes, disk for the ONNX model (~1.2 GB for `bge-large-en-v1.5` on first run).
 
 This guide is **local engine only** — one machine, one vault root. No cloud gateway.
 
@@ -11,7 +11,7 @@ This guide is **local engine only** — one machine, one vault root. No cloud ga
 ```bash
 git clone <apo-repo-url> ~/Code/apo   # or your preferred path
 cd ~/Code/apo
-brew install ollama just
+brew install just
 cp config.env.example .env            # if present; else cp config.env .env
 ```
 
@@ -21,13 +21,22 @@ Edit `.env` (or `config.env`):
 |----------|--------|
 | `APO_NOTES_ROOT` | Absolute path to **your** markdown vault |
 | `APO_INDEX` | e.g. `~/Code/apo/engine/index.db` (local to this clone) |
-| `OLLAMA_KEEP_ALIVE` | `5m` while working; `0` to unload the model when idle |
+| `APO_EMBED_BACKEND` | `fastembed` (default) or `ollama` |
+| `APO_MODEL` | `BAAI/bge-large-en-v1.5` (default) or `bge-m3` with Ollama |
 
 ```bash
 just setup
-just ollama && ollama pull bge-m3
 just index
 just search "a phrase you know is in your vault"
+```
+
+Optional Metal/GPU path (Ollama):
+
+```bash
+# in .env: APO_EMBED_BACKEND=ollama  APO_MODEL=bge-m3
+brew install ollama
+just ollama && ollama pull bge-m3
+just reindex
 ```
 
 Optional background indexer (recommended):
@@ -49,9 +58,8 @@ Add an `apo` block to `~/.cursor/mcp.json` (merge into existing `mcpServers`):
   "env": {
     "APO_NOTES_ROOT": "/ABSOLUTE/PATH/TO/YOUR/VAULT",
     "APO_INDEX": "/ABSOLUTE/PATH/TO/apo/engine/index.db",
-    "APO_EMBED_BACKEND": "ollama",
-    "APO_OLLAMA_URL": "http://127.0.0.1:11434",
-    "OLLAMA_KEEP_ALIVE": "5m"
+    "APO_EMBED_BACKEND": "fastembed",
+    "APO_MODEL": "BAAI/bge-large-en-v1.5"
   }
 }
 ```
@@ -71,10 +79,10 @@ Ensure the same env vars as above are visible to that process (`~/.claude.json` 
 ## 4. Verify
 
 ```bash
-cd ~/Code/apo && just inspect    # expect ~16 tools
+cd ~/Code/apo && just inspect    # expect ~11 tools with APO_MCP_LEAN=1
 ```
 
-In the agent, run Apo `memory_status` — expect `root_exists: true`, watcher optionally running, index ok.
+In the agent, run a known `search_notes` query — expect hits without Ollama running.
 
 ## 5. Agent onboard (important)
 
@@ -89,15 +97,15 @@ Install gets the engine running. **Persistent write habits** should match *your*
 
 | Symptom | Fix |
 |---------|-----|
-| 0 Apo tools in Cursor | Full quit/reopen; confirm `apo` key (not a stale rename); Ollama up with `bge-m3` |
-| Empty / stale search | `just index`; confirm `APO_NOTES_ROOT`; `just watch-status` |
-| Writes don’t show in search | Ensure watcher installed; after large batches call `reindex_deferred` (or wait for debounce/poll) |
+| 0 Apo tools in Cursor | Full quit/reopen; confirm `apo` key (not a stale rename) |
+| Empty / stale search | `just reindex` after model/backend change; confirm `APO_NOTES_ROOT`; `just watch-status` |
+| Writes don’t show in search | Ensure watcher installed; wait for debounce/poll (enqueue wakes watcher) |
+| `Model … is not supported` | Use a FastEmbed `TextEmbedding` id (e.g. `BAAI/bge-large-en-v1.5`); `bge-m3` is Ollama-only |
 
 Health one-liner:
 
 ```bash
-curl -sf http://127.0.0.1:11434/api/tags | grep -q bge-m3 && \
-  test -f "${APO_INDEX:-$HOME/Code/apo/engine/index.db}" && echo "Apo OK"
+test -f "${APO_INDEX:-$HOME/Code/apo/engine/index.db}" && echo "Apo index OK"
 ```
 
 ## What Apo is (one paragraph)

@@ -11,10 +11,12 @@ dependencies = [
     "sqlite-vec>=0.1.6",
     "pyyaml>=6.0",
     "watchdog>=4.0.0",
+    # Desk default embedder (ONNX). Ollama remains an optional APO_EMBED_BACKEND.
+    "fastembed>=0.8.0",
 ]
 
 [project.optional-dependencies]
-# CPU fallback embedder. Not needed with the Ollama backend.
+# Kept for docs/scripts that still install .[cpu]; same as the main fastembed dep.
 cpu = ["fastembed>=0.8.0"]
 mcp = [
     "fastmcp>=2.0.0",

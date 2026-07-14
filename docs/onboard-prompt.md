@@ -76,7 +76,7 @@ Produce **draft markdown** for me to approve, tailored to the inferred vault:
 **Draft B — Optional vault root pointer**
 Short `AGENT.md` (or patch) only if missing or hollow: purpose, routing table from inference, pointer to agent-specific files.
 
-**Draft C — Checklist** for me: MCP env paths, Ollama `bge-m3`, full app restart, smoke `search_notes` query using a term from this vault.
+**Draft C — Checklist** for me: MCP env paths, embed backend (`fastembed` / `BAAI/bge-large-en-v1.5` by default), full app restart, smoke `search_notes` query using a term from this vault.
 
 Label drafts clearly as PROPOSED. Do not write them yet.
 

@@ -13,7 +13,7 @@ engine/mcp/server.py
       ▼
 apo-engine watch (optional launchd/systemd)  — sole index.db writer
       ▼
-Ollama bge-m3 (or fastembed)     index: engine/index.db
+fastembed ONNX bge-large (or Ollama)  index: engine/index.db
 ```
 
 | Layer | Role |
@@ -34,10 +34,11 @@ Then run the **[vault onboard prompt](docs/onboard-prompt.md)** against *your* n
 brew install ollama just
 cp config.env.example .env   # set APO_NOTES_ROOT
 just setup
-just ollama && ollama pull bge-m3
 just index
 just search "something you know is in the vault"
 ```
+
+Optional Metal/GPU embeddings: set `APO_EMBED_BACKEND=ollama`, `APO_MODEL=bge-m3`, then `just ollama && ollama pull bge-m3` and rebuild (`just reindex`). Vectors are not interchangeable across models.
 
 **Cursor:** add the `apo` block from the quickstart doc to `~/.cursor/mcp.json`, then **fully quit and reopen** Cursor.
 
@@ -57,14 +58,17 @@ claude mcp add -s user apo -- \
 | `APO_INDEX` | `engine/index.db` | sqlite-vec database |
 | `APO_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace |
 | `APO_INGEST_DIR` | `resources/wiki` | Convention: wiki path for defuddle→`write_note` (advisory) |
-| `APO_EMBED_BACKEND` | `ollama` | `ollama` or `fastembed` |
-| `OLLAMA_KEEP_ALIVE` | `5m` | Keep embed model warm; `0` = unload when idle |
+| `APO_EMBED_BACKEND` | `fastembed` | `fastembed` (ONNX) or `ollama` (Metal/GPU) |
+| `APO_MODEL` | `BAAI/bge-large-en-v1.5` | FastEmbed model id, or `bge-m3` under Ollama |
+| `OLLAMA_KEEP_ALIVE` | `0` | Only matters for `ollama` backend; `5m` keeps model warm |
 | `WATCH_INTERVAL` | `30` | Periodic mtime scan (seconds) |
 | `APO_WATCH_DEBOUNCE` | `2` | Quiet seconds before re-embedding a path |
 
 Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 
-**Troubleshooting embed failures:** if `apo-engine index` throws `HTTP Error 500` from Ollama's `/api/embed`, check `ollama --version` before assuming it's vault content — older Ollama builds (seen: 0.21.1) can emit NaN for realistic-length embedding inputs while trivial strings still work fine. Upgrading (`curl -fsSL https://ollama.com/install.sh | sh`) has resolved this in practice. The indexer bisects failing batches to skip only genuinely poisoned chunks rather than aborting the whole reindex, but that's a safety net, not a fix — a systemically unhealthy backend will silently skip most of the vault.
+**Troubleshooting embed failures (Ollama backend):** if `apo-engine index` throws `HTTP Error 500` from Ollama's `/api/embed`, check `ollama --version` before assuming it's vault content — older Ollama builds (seen: 0.21.1) can emit NaN for realistic-length embedding inputs while trivial strings still work fine. Upgrading (`curl -fsSL https://ollama.com/install.sh | sh`) has resolved this in practice. The indexer bisects failing batches to skip only genuinely poisoned chunks rather than aborting the whole reindex, but that's a safety net, not a fix — a systemically unhealthy backend will silently skip most of the vault.
+
+**Desk default (2026-07-14):** ONNX `BAAI/bge-large-en-v1.5` via fastembed — warm query embeds ~20 ms on M4 Air (vs ~120–150 ms for Ollama `bge-m3`). Full vault rebuild required when switching models.
 
 ## Background watcher
 

@@ -1,7 +1,7 @@
 """Core: chunk markdown, embed, build a sqlite-vec index, and search it.
 
 No server, no daemon. One sqlite file holds notes metadata + vectors.
-Embeddings come from Ollama (GPU) by default, or fastembed (CPU) as fallback.
+Embeddings come from fastembed (ONNX) by default, or Ollama (Metal/GPU) when configured.
 """
 from __future__ import annotations
 
