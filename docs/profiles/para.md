@@ -114,7 +114,7 @@ Completed projects and dead areas → `archives/` via `move_note`, preserving hi
 | Need | Tool |
 |------|------|
 | Semantic recall | `search_notes` |
-| Status / field sweeps | `find_notes` |
+| Status / field sweeps | `filter_notes` |
 | Known path | `read_note` |
 | Health | `memory_status` first on failures |
 

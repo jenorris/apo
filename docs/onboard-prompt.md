@@ -13,7 +13,7 @@ Do **not** invent employer/gateway/multi-vault architecture. Stay on local engin
 ````
 You are onboarding Apo for this markdown vault.
 
-Apo is a local MCP memory engine: files on disk are source of truth; sqlite-vec is a rebuildable index; tools search and surgically write notes (append_note, patch_note, write_note, find_notes, etc.).
+Apo is a local MCP memory engine: files on disk are source of truth; sqlite-vec is a rebuildable index; tools search and surgically write notes (append_note, patch_note, write_note, filter_notes, etc.).
 
 ### Hard rules for this session
 

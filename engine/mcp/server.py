@@ -242,7 +242,7 @@ def _top_level_dirs(v: Vault) -> list[str]:
 
 
 ###############################################################################
-# Frontmatter query matching (find_notes)
+# Frontmatter query matching (filter_notes)
 ###############################################################################
 
 
@@ -319,7 +319,7 @@ mcp = FastMCP(
         "or targeted replace → patch_note; relocate → move_note (never rewrite+delete by hand). "
         "search_notes results carry anchors (chunk_hash, heading, start_line) that feed directly "
         "into append_note / patch_note / expand_chunk — no read_note round trip needed. "
-        "Query structured frontmatter with find_notes; trace [[wiki-links]] with backlinks. "
+        "Query structured frontmatter with filter_notes; trace [[wiki-links]] with backlinks. "
         "MCP never writes index.db — writes enqueue paths in ~/.apo/deferred-*.json; "
         "apo-engine watch (launchd) is the sole index writer. Call reindex_deferred() after "
         "batch sweeps to wake the watcher. memory_status() reports vault health and queue depth."
@@ -735,7 +735,10 @@ async def read_note(path: str, heading: str | None = None, vault: str = "") -> d
 
 @mcp.tool(annotations=_RO)
 async def search_notes(query: str, top_k: int = 5, folder: str = "", vault: str = "") -> dict:
-    """Hybrid semantic + BM25 search across indexed notes.
+    """Hybrid semantic + BM25 **search** across indexed note content.
+
+    Contrast with ``filter_notes`` (frontmatter catalog filter). Use for meaning /
+    recall: “what text is about this?”
 
     Each result carries write-ready anchors: pass chunk_hash straight to
     append_note / expand_chunk, or use heading with append_note / patch_note —
@@ -819,13 +822,16 @@ async def expand_chunk(chunk_hash: str, vault: str = "") -> dict:
 
 
 @mcp.tool(annotations=_RO)
-async def find_notes(
+async def filter_notes(
     where: dict,
     folder: str = "",
     limit: int = 20,
     vault: str = "",
 ) -> dict:
-    """Query notes by YAML frontmatter metadata (deterministic — no embeddings).
+    """Filter notes by YAML frontmatter (deterministic catalog query — no embeddings).
+
+    Contrast with ``search_notes`` (ranked content recall). Use for status / tag /
+    date sweeps: “which notes match these fields?”
 
     `where` maps field names to a scalar (loose equality; list fields match by
     membership) or an operator object:
@@ -835,9 +841,9 @@ async def find_notes(
     ISO dates compare correctly as strings.
 
     Examples:
-        find_notes({"status": "active"}, folder="threads/")
-        find_notes({"last_checked": {"$lt": "2026-07-01"}, "status": {"$ne": "resolved"}})
-        find_notes({"tags": {"$contains": "compliance"}})
+        filter_notes({"status": "active"}, folder="threads/")
+        filter_notes({"last_checked": {"$lt": "2026-07-01"}, "status": {"$ne": "resolved"}})
+        filter_notes({"tags": {"$contains": "compliance"}})
 
     Returns matches sorted by modification time (newest first) with full frontmatter.
     """
