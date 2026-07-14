@@ -372,9 +372,14 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     db.enable_load_extension(True)
     sqlite_vec.load(db)
     db.enable_load_extension(False)
-    db.execute("PRAGMA journal_mode=WAL")
+    # busy_timeout is per-connection (must be set every time); journal_mode is a persistent
+    # property of the database file itself — setting it on an already-WAL file still forces
+    # SQLite to open/verify the -wal file each time (measured ~0.28ms), pure overhead paid on
+    # every read-only connect() (search/filter_notes/recent_notes/... open one per call).
+    # Only need to assert it once per process, same lifetime as the schema-bootstrap check.
     db.execute(f"PRAGMA busy_timeout={int(config.DB_TIMEOUT * 1000)}")
     if key not in _schema_ready:
+        db.execute("PRAGMA journal_mode=WAL")
         db.executescript(
             """
             CREATE TABLE IF NOT EXISTS meta   (key TEXT PRIMARY KEY, value TEXT);
