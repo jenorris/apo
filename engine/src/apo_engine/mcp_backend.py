@@ -7,9 +7,9 @@ apo-engine watch — MCP enqueues via apo_engine.deferred instead of calling ind
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+from datetime import datetime
 
-from . import config, core
+from . import core
 
 
 class ApoStore:
@@ -20,6 +20,33 @@ class ApoStore:
         return core.lookup_chunk(chunk_hash)
 
 
+def shape_search_hits(
+    hits: list[core.Hit],
+) -> list[dict]:
+    """Vault-relative rows for MCP — no Path.resolve() on the event loop."""
+    rows: list[dict] = []
+    for h in hits:
+        mtime = h.mtime or 0.0
+        modified = (
+            datetime.fromtimestamp(mtime).isoformat(timespec="seconds") if mtime else None
+        )
+        rows.append(
+            {
+                "content": h.text,
+                "score": round(float(h.score), 4),
+                # ``Hit.path`` is already vault-relative; skip resolve/display.
+                "source": h.path,
+                "chunk_hash": h.chunk_hash,
+                "heading": h.heading,
+                "heading_level": h.heading_level,
+                "start_line": h.start_line,
+                "end_line": h.end_line,
+                "modified": modified,
+            }
+        )
+    return rows
+
+
 class ApoMem:
     store = ApoStore()
 
@@ -27,28 +54,16 @@ class ApoMem:
         self,
         query: str,
         top_k: int = 5,
-        source_prefix: str | None = None,
+        folder: str = "",
+        snippet_chars: int = 0,
     ) -> list[dict]:
-        folder = ""
-        if source_prefix:
-            try:
-                folder = Path(source_prefix).resolve().relative_to(config.NOTES_ROOT).as_posix()
-            except ValueError:
-                folder = source_prefix
-        hits = await asyncio.to_thread(core.search, query, k=top_k, folder=folder)
-        rows: list[dict] = []
-        for h in hits:
-            rows.append(
-                {
-                    "content": h.text,
-                    "score": h.score,
-                    "source": h.source or str(config.NOTES_ROOT / h.path),
-                    "chunk_hash": h.chunk_hash,
-                    "heading": h.heading,
-                    "heading_level": h.heading_level,
-                    "start_line": h.start_line,
-                    "end_line": h.end_line,
-                    "mtime": h.mtime,
-                }
+        def run() -> list[dict]:
+            hits = core.search(
+                query,
+                k=top_k,
+                folder=folder,
+                snippet_chars=snippet_chars,
             )
-        return rows
+            return shape_search_hits(hits)
+
+        return await asyncio.to_thread(run)

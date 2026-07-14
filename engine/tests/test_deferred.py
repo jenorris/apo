@@ -67,6 +67,16 @@ class DeferredQueueTest(unittest.TestCase):
         self.assertIn(new, q)
         self.assertEqual(deferred.consume_index_queue(self.collection), [new])
 
+    def test_dequeue_paths(self):
+        a = str(Path("/tmp/a.md").resolve())
+        b = str(Path("/tmp/b.md").resolve())
+        deferred.enqueue_many(self.collection, [a, b], wake=False)
+        q = deferred.dequeue_paths(self.collection, [a])
+        self.assertNotIn(a, q)
+        self.assertIn(b, q)
+        loaded = deferred.load_index_queue(self.collection)
+        self.assertEqual(loaded, {b})
+
 
 class ProcessQueuesTest(unittest.TestCase):
     def setUp(self):

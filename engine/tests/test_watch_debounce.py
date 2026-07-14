@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from apo_engine import config, core
-from apo_engine.watch import PathDebouncer
+from apo_engine.watch import PathDebouncer, _event_path_noise
 
 
 class PathDebouncerTest(unittest.TestCase):
@@ -34,6 +34,18 @@ class PathDebouncerTest(unittest.TestCase):
         self.assertIsNone(d.next_due_in(now=100.0))
         d.touch(Path("/tmp/x.md"), now=100.0)
         self.assertAlmostEqual(d.next_due_in(now=100.4) or -1, 0.6, places=2)
+
+
+class EventPathNoiseTest(unittest.TestCase):
+    def test_skips_obsidian_and_non_md(self):
+        root = Path("/vault")
+        ignore = core._compile_ignore([".obsidian/*", "templates/*"])
+        self.assertTrue(
+            _event_path_noise("/vault/.obsidian/workspace.json", root, ignore)
+        )
+        self.assertTrue(_event_path_noise("/vault/note.txt", root, ignore))
+        self.assertFalse(_event_path_noise("/vault/inbox/a.md", root, ignore))
+        self.assertTrue(_event_path_noise("/vault/templates/x.md", root, ignore))
 
 
 class IndexFileUnchangedTest(unittest.TestCase):

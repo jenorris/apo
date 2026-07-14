@@ -696,8 +696,8 @@ def _delete_note_sync(path: str, vault: str = "") -> dict:
     abs_path = str(full.resolve())
     purged = _purge_index(v, full)
     full.unlink()
-    v.deferred.discard(abs_path)
-    _save_deferred(v)
+    # Flocked dequeue — avoid unlocked discard + full-queue rewrite.
+    v.deferred = index_deferred.dequeue_paths(v.collection, [abs_path])
     out: dict[str, Any] = {"ok": True, "path": path, "index_purged": purged}
     if not purged:
         out["warning"] = "purge not queued — watcher may retain stale chunks"
@@ -752,7 +752,13 @@ async def read_note(path: str, heading: str | None = None, vault: str = "") -> d
     return await asyncio.to_thread(_read_note_sync, path, heading, vault)
 
 @mcp.tool(annotations=_RO)
-async def search_notes(query: str, top_k: int = 5, folder: str = "", vault: str = "") -> dict:
+async def search_notes(
+    query: str,
+    top_k: int = 5,
+    folder: str = "",
+    vault: str = "",
+    snippet_chars: int = 0,
+) -> dict:
     """Hybrid semantic + BM25 **search** across indexed note content.
 
     Contrast with ``filter_notes`` (frontmatter catalog filter). Use for meaning /
@@ -767,37 +773,25 @@ async def search_notes(query: str, top_k: int = 5, folder: str = "", vault: str 
         top_k: Number of results to return.
         folder: Scope search to this vault-relative subfolder (e.g. 'projects/').
         vault: Vault name; empty = default vault.
+        snippet_chars: If > 0, truncate each hit's content to this many characters
+            (smaller MCP payloads when only anchors/heading are needed).
     """
     try:
         v = _vault(vault)
     except VaultError as e:
         return _err(error="bad_vault", message=str(e))
-    source_prefix = str(v.root / folder) if folder else None
+    folder_clean = folder.replace("\\", "/").strip("/")
     try:
-        results = await _ensure_mem(v).search(query, top_k=top_k, source_prefix=source_prefix)
+        # Shape (incl. relative ``source``) runs in the worker — no Path.resolve on the loop.
+        results = await _ensure_mem(v).search(
+            query,
+            top_k=top_k,
+            folder=folder_clean,
+            snippet_chars=snippet_chars,
+        )
     except Exception as e:
         return _err(error="search_failed", message=str(e))
-
-    rows = []
-    for r in results:
-        src_abs = r.get("source", "")
-        # mtime comes from the index (files.mtime, joined in core.search) — no per-hit
-        # stat() call needed; it's already cached and was previously refetched from disk
-        # once per result on every single search_notes call.
-        mtime = r.get("mtime") or 0
-        modified = datetime.fromtimestamp(mtime).isoformat(timespec="seconds") if mtime else None
-        rows.append({
-            "content": r.get("content", ""),
-            "score": round(float(r.get("score", 0)), 4),
-            "source": _display_source(v, src_abs),
-            "chunk_hash": r.get("chunk_hash", ""),
-            "heading": r.get("heading", ""),
-            "heading_level": r.get("heading_level", 0),
-            "start_line": r.get("start_line", 0),
-            "end_line": r.get("end_line", 0),
-            "modified": modified,
-        })
-    return {"ok": True, "results": rows}
+    return {"ok": True, "results": results}
 
 
 def _expand_chunk_sync(chunk_hash: str, vault: str = "") -> dict:

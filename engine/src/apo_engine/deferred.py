@@ -37,14 +37,27 @@ def _locked_update(path: Path, updater: Callable[[list], list]) -> list:
         return result
 
 
+def _locked_read(path: Path) -> list:
+    if not path.is_file():
+        return []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_SH)
+        f.seek(0)
+        raw = f.read()
+        try:
+            data = json.loads(raw) if raw.strip() else []
+        except json.JSONDecodeError:
+            data = []
+        return data if isinstance(data, list) else []
+
+
 def load_index_queue(collection: str) -> set[str]:
-    p = _queue_path(collection, "deferred")
-    if not p.is_file():
-        return set()
+    """Flocked shared-lock read of the deferred index queue."""
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return {str(x) for x in data} if isinstance(data, list) else set()
-    except (OSError, json.JSONDecodeError):
+        data = _locked_read(_queue_path(collection, "deferred"))
+        return {str(x) for x in data}
+    except OSError:
         return set()
 
 
@@ -140,6 +153,18 @@ def requeue_move(collection: str, old_path: str, new_path: str) -> set[str]:
 
     result = _locked_update(_queue_path(collection, "deferred"), upd)
     touch_wake(collection)
+    return {str(x) for x in result}
+
+
+
+def dequeue_paths(collection: str, paths: Iterable[str]) -> set[str]:
+    """Remove one or more absolute paths from the deferred index queue (flocked)."""
+    drop = {str(Path(p).resolve()) for p in paths}
+
+    def upd(items: list) -> list:
+        return [x for x in items if str(x) not in drop]
+
+    result = _locked_update(_queue_path(collection, "deferred"), upd)
     return {str(x) for x in result}
 
 

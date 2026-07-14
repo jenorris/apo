@@ -73,6 +73,36 @@ def _note_path(root: Path, raw: str) -> Path | None:
     return None
 
 
+
+
+def _event_path_noise(raw: str, root: Path, ignore_res: list) -> bool:
+    """True if this FS event should be ignored before debounce/wake.
+
+    Cheap segment checks reject ``.obsidian`` / ``.git`` traffic; ignore globs
+    match vault-relative paths when the prefix is under ``root``.
+    """
+    if not raw:
+        return True
+    norm = str(raw).replace("\\", "/")
+    base = norm.rsplit("/", 1)[-1]
+    if base and not base.endswith(".md"):
+        return True
+    root_s = str(root).replace("\\", "/")
+    if not root_s.endswith("/"):
+        root_s += "/"
+    rel = None
+    if norm.startswith(root_s):
+        rel = norm[len(root_s):]
+    elif norm.startswith(str(root) + "/"):
+        rel = norm[len(str(root)) + 1 :]
+    if rel is None:
+        # May still be under root via unresolved path — let _note_path decide.
+        return False
+    for part in rel.split("/"):
+        if part in {".git", ".obsidian", ".trash"}:
+            return True
+    return bool(core._is_ignored(rel, ignore_res))
+
 def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
     """Index ready paths in one embed batch. Returns files updated or purged."""
     items = list(paths)
@@ -101,9 +131,20 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
     event_queue: queue.Queue[str] = queue.Queue()
     stop = threading.Event()
 
+    ignore_res = core._compile_ignore(core._load_ignore())
+
     def on_fs_event(raw: str) -> None:
+        if _event_path_noise(raw, root, ignore_res):
+            return
         p = _note_path(root, raw)
         if p is not None:
+            # Second pass: resolved relative path may still match ignore globs
+            try:
+                rel = p.relative_to(root).as_posix()
+            except ValueError:
+                return
+            if core._is_ignored(rel, ignore_res):
+                return
             debouncer.touch(p)
             event_queue.put("fs")
 

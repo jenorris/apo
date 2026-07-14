@@ -6,6 +6,7 @@ Embeddings come from Ollama (GPU) by default, or fastembed (CPU) as fallback.
 from __future__ import annotations
 
 import fnmatch
+import os
 import hashlib
 import json
 import re
@@ -18,6 +19,7 @@ import urllib.request
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -431,14 +433,22 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 def writer_connect() -> sqlite3.Connection:
     """Process-local connection for the sole index writer (watch / index CLI)."""
     db = getattr(_writer_local, "conn", None)
+    now = time.monotonic()
+    ping_iv = float(getattr(config, "READER_PING_INTERVAL", 5.0))
     if db is not None:
-        try:
-            db.execute("SELECT 1")
+        last = float(getattr(_writer_local, "ping_at", 0.0))
+        if ping_iv <= 0 or (now - last) >= ping_iv:
+            try:
+                db.execute("SELECT 1")
+                _writer_local.ping_at = now
+                return db
+            except sqlite3.Error:
+                writer_close()
+        else:
             return db
-        except sqlite3.Error:
-            writer_close()
     db = connect()
     _writer_local.conn = db
+    _writer_local.ping_at = now
     return db
 
 
@@ -655,13 +665,31 @@ def _is_ignored(rel: str, ignore_res: list[re.Pattern[str]]) -> bool:
     return any(r.fullmatch(rel) is not None for r in ignore_res)
 
 
+def _prune_dir_names(ignore: list[str]) -> set[str]:
+    """Directory basenames to drop during ``os.walk`` (from ``name/*`` ignore patterns)."""
+    names = {".git", ".obsidian", ".trash"}
+    for raw in ignore:
+        pat = raw.replace("\\", "/").strip()
+        if pat.endswith("/*") and "/" not in pat[:-2] and not any(c in pat[:-2] for c in "*?["):
+            names.add(pat[:-2])
+    return names
+
+
 def _iter_notes(root: Path, ignore: list[str]) -> Iterator[Path]:
+    """Yield note paths, pruning ignored directories so we never descend into ``.obsidian`` etc."""
     ignore_res = _compile_ignore(ignore)
-    for p in root.rglob("*.md"):
-        rel = p.relative_to(root).as_posix()
-        if _is_ignored(rel, ignore_res):
-            continue
-        yield p
+    prune = _prune_dir_names(ignore)
+    root = root.resolve()
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        dirnames[:] = [d for d in dirnames if d not in prune]
+        for name in filenames:
+            if not name.endswith(".md"):
+                continue
+            p = Path(dirpath) / name
+            rel = p.relative_to(root).as_posix()
+            if _is_ignored(rel, ignore_res):
+                continue
+            yield p
 
 
 def _file_hash(text: str) -> str:
@@ -714,11 +742,12 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
     stats = IndexStats()
     mtime_refreshed = False
 
-    notes = list(_iter_notes(root, ignore))
-    if limit:
-        notes = notes[:limit]
+    # Stream paths — avoid materializing the full vault path list in memory.
+    notes_iter = _iter_notes(root, ignore)
+    if limit is not None:
+        notes_iter = islice(notes_iter, limit)
 
-    for p in notes:
+    for p in notes_iter:
         rel = p.relative_to(root).as_posix()
         on_disk.add(rel)
         try:
@@ -1057,12 +1086,39 @@ def purge_source(full_path: Path) -> bool:
     return True
 
 
+
+def _compile_excludes(exclude: list[str] | None) -> tuple[list[str], list[re.Pattern[str]]]:
+    """Split exclude globs into path-prefix checks vs compiled fullmatch patterns.
+
+    Patterns like ``projects/*`` become a ``projects/`` prefix (startswith).
+    """
+    prefixes: list[str] = []
+    globs: list[re.Pattern[str]] = []
+    for raw in exclude or []:
+        pat = raw.replace("\\", "/").strip()
+        if not pat:
+            continue
+        if pat.endswith("/*") and not any(c in pat[:-2] for c in "*?["):
+            prefixes.append(pat[:-1])
+        else:
+            globs.append(re.compile(fnmatch.translate(pat)))
+    return prefixes, globs
+
+
+def _path_excluded(path: str, prefixes: list[str], globs: list[re.Pattern[str]]) -> bool:
+    for pref in prefixes:
+        if path.startswith(pref):
+            return True
+    return any(g.fullmatch(path) is not None for g in globs)
+
+
 def search(
     query: str,
     k: int = 8,
     exclude: list[str] | None = None,
     folder: str = "",
     hybrid: bool = True,
+    snippet_chars: int = 0,
 ) -> list[Hit]:
     """Hybrid retrieval: dense KNN + FTS5 BM25 fused with reciprocal-rank fusion.
 
@@ -1078,6 +1134,7 @@ def search(
         raise SystemExit("Index is empty — run `apo-engine index` first.")
 
     folder_prefix = folder.replace("\\", "/").strip("/")
+    excl_prefixes, excl_globs = _compile_excludes(exclude)
     n = max(k * 4, config.SEARCH_CANDIDATES)
     if exclude and not folder_prefix:
         total_chunks = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
@@ -1160,14 +1217,15 @@ def search(
         path, heading, text, chunk_hash, hlevel, start_line, end_line, mtime = row
         if folder_prefix and not path.startswith(folder_prefix + "/"):
             continue
-        if exclude and any(fnmatch.fnmatch(path, pat) for pat in exclude):
+        if _path_excluded(path, excl_prefixes, excl_globs):
             continue
         score = fused[rid] / top
+        out_text = text if snippet_chars <= 0 else text[:snippet_chars]
         hits.append(
             Hit(
                 path=path,
                 heading=heading or "",
-                text=text,
+                text=out_text,
                 score=score,
                 chunk_hash=chunk_hash or "",
                 heading_level=int(hlevel or 0),
@@ -1355,31 +1413,26 @@ def recent_notes(limit: int = 10, folder: str = "") -> list[tuple[str, float]]:
 def recent_notes_preview(
     limit: int = 10, folder: str = ""
 ) -> list[tuple[str, float, str]]:
-    """(path, mtime, preview) with first-chunk text prefix — no vault file reads."""
+    """(path, mtime, preview) with first-chunk text prefix — no vault file reads.
+
+    Joins ``chunks`` on ``ord = 0`` instead of a correlated subquery per row.
+    """
     db = reader_connect()
     folder_prefix = folder.replace("\\", "/").strip("/")
     if folder_prefix:
         sql = """
-            SELECT f.path, f.mtime,
-                   COALESCE(
-                     (SELECT substr(c.text, 1, 120) FROM chunks c
-                      WHERE c.path = f.path ORDER BY c.ord LIMIT 1),
-                     ''
-                   )
+            SELECT f.path, f.mtime, COALESCE(substr(c.text, 1, 120), '')
             FROM files f
+            LEFT JOIN chunks c ON c.path = f.path AND c.ord = 0
             WHERE f.path LIKE ? ESCAPE '\\'
             ORDER BY f.mtime DESC LIMIT ?
         """
         rows = db.execute(sql, (_escape_like(folder_prefix) + "/%", limit)).fetchall()
     else:
         sql = """
-            SELECT f.path, f.mtime,
-                   COALESCE(
-                     (SELECT substr(c.text, 1, 120) FROM chunks c
-                      WHERE c.path = f.path ORDER BY c.ord LIMIT 1),
-                     ''
-                   )
+            SELECT f.path, f.mtime, COALESCE(substr(c.text, 1, 120), '')
             FROM files f
+            LEFT JOIN chunks c ON c.path = f.path AND c.ord = 0
             ORDER BY f.mtime DESC LIMIT ?
         """
         rows = db.execute(sql, (limit,)).fetchall()

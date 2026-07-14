@@ -221,6 +221,30 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertIn("preview", preview.lower())
         self.assertEqual(core.frontmatter_field("t.md", "title"), "Hello")
 
+    def test_snippet_chars_and_exclude_compile(self):
+        self.write("projects/a.md", "# A\n\nzebra alpha long body text for snippet\n")
+        self.write("personal/b.md", "# B\n\nzebra beta\n")
+        core.index_vault(verbose=False)
+        full = core.search("zebra", k=5, hybrid=False)
+        self.assertTrue(full)
+        snip = core.search("zebra", k=5, hybrid=False, snippet_chars=12)
+        self.assertTrue(all(len(h.text) <= 12 for h in snip))
+        prefs, globs = core._compile_excludes(["projects/*", "**/secret*.md"])
+        self.assertEqual(prefs, ["projects/"])
+        self.assertTrue(globs)
+        self.assertTrue(core._path_excluded("projects/a.md", prefs, globs))
+        self.assertFalse(core._path_excluded("personal/b.md", prefs, globs))
+
+    def test_iter_notes_prunes_obsidian(self):
+        obs = self.vault / ".obsidian" / "plugins"
+        obs.mkdir(parents=True)
+        (obs / "noise.md").write_text("# noise\n", encoding="utf-8")
+        self.write("ok.md", "# Ok\n\nvisible\n")
+        paths = list(core._iter_notes(self.vault, core._load_ignore()))
+        rels = {p.relative_to(self.vault).as_posix() for p in paths}
+        self.assertIn("ok.md", rels)
+        self.assertNotIn(".obsidian/plugins/noise.md", rels)
+
 
 if __name__ == "__main__":
     unittest.main()
