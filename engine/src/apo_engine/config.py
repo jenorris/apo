@@ -37,7 +37,7 @@ IGNORE_FILE: Path = _path("APO_IGNORE", str(_ENGINE_ROOT / ".indexignore"))
 # Deferred-queue namespace (MCP + watcher).
 COLLECTION: str = os.environ.get("APO_COLLECTION", "notes_global")
 
-# Default vault-relative dir for ingest_uri when dest_dir is omitted.
+# Default wiki path convention for agents (defuddle → write_note); not an MCP tool knob.
 INGEST_DIR: str = os.environ.get("APO_INGEST_DIR", "resources/wiki")
 
 # SQLite busy-handler timeout (seconds) — cross-process writer contention.

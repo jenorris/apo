@@ -5,12 +5,11 @@ Apo MCP server — hybrid search + surgical writes over sqlite-vec + Ollama.
 Vault: APO_NOTES_ROOT. Deferred queue: ~/.apo/deferred-<collection>.json
 """
 
-import asyncio
 import json
 import os
 import re
 from dataclasses import dataclass, field as dc_field
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -987,123 +986,8 @@ async def recent_activity(limit: int = 10, folder: str = "", vault: str = "") ->
 
 
 ###############################################################################
-# Tools — ingestion & indexing
+# Tools — indexing
 ###############################################################################
-
-
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True})
-async def ingest_uri(
-    uri: str,
-    tags: list[str] | None = None,
-    force: bool = False,
-    dest_dir: str = "",
-    vault: str = "",
-) -> dict:
-    """Fetch a URI, store clean markdown in the vault's ingest directory, and index it.
-
-    Supports http(s), file://, bare local paths, and network URIs (anything
-    trafilatura can fetch). Output lands at <dest_dir>/<domain>/<slug>.md.
-
-    Args:
-        uri: Resource to ingest (URL or local path).
-        tags: Optional tags written into the note frontmatter.
-        force: Overwrite if already ingested.
-        dest_dir: Vault-relative destination dir; default = the vault's configured
-            ingest_dir (APO_INGEST_DIR / vault config).
-        vault: Vault name; empty = default vault.
-    """
-    try:
-        import trafilatura
-        from trafilatura.settings import use_config as _traf_config
-    except ImportError:
-        return _err(error="missing_dependency", message="trafilatura not installed: pip install trafilatura")
-
-    try:
-        v = _vault(vault)
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-    dest = (dest_dir or "").strip().strip("/") or v.ingest_dir
-
-    from urllib.parse import urlparse
-
-    def _to_slug(s: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:80]
-
-    def _parse_uri(raw: str) -> tuple[str, str, bool]:
-        """Return (normalized_uri, domain_for_output_path, is_remote)."""
-        parsed = urlparse(raw)
-        scheme = parsed.scheme.lower()
-        if scheme in ("http", "https") or (scheme and scheme not in ("file", "")):
-            domain = re.sub(r"^www\.", "", parsed.netloc) or scheme
-            return raw, domain, True
-        local_path = parsed.path if scheme == "file" else raw
-        return local_path, "local", False
-
-    def _slug_from_uri(u: str, is_remote: bool) -> str:
-        parsed = urlparse(u)
-        part = (parsed.path.rstrip("/").split("/")[-1] or parsed.netloc) if is_remote else Path(u).stem
-        part = re.sub(r"\.[a-z0-9]{1,5}$", "", part)
-        return _to_slug(part)
-
-    def _extract_remote(u: str) -> tuple[str, str]:
-        downloaded = trafilatura.fetch_url(u)
-        if not downloaded:
-            raise ValueError(f"Failed to fetch: {u}")
-        cfg = _traf_config()
-        cfg.set("DEFAULT", "EXTRACTION_TIMEOUT", "30")
-        text = trafilatura.extract(
-            downloaded,
-            include_comments=False,
-            include_tables=True,
-            favor_precision=True,
-            output_format="markdown",
-            config=cfg,
-        )
-        if not text:
-            raise ValueError(f"No extractable content at: {u}")
-        meta = trafilatura.extract_metadata(downloaded)
-        title = (meta.title if meta and meta.title else None) or u.split("/")[-1]
-        return title, text
-
-    def _extract_local(path_str: str) -> tuple[str, str]:
-        p = Path(path_str).expanduser().resolve()
-        if not p.exists():
-            raise FileNotFoundError(f"Not found: {p}")
-        text = p.read_text(encoding="utf-8", errors="replace")
-        title = p.stem.replace("-", " ").replace("_", " ").title()
-        return title, text
-
-    resolved, domain, is_remote = _parse_uri(uri)
-    try:
-        # Network fetch / file read off the event loop so other tool calls aren't stalled.
-        title, content = await asyncio.to_thread(
-            _extract_remote if is_remote else _extract_local, resolved
-        )
-    except Exception as e:
-        return _err(uri=uri, error="fetch_failed", message=str(e))
-
-    slug = _slug_from_uri(resolved, is_remote) or _to_slug(title)
-    try:
-        out_path = _safe_resolve(v, f"{dest}/{domain}/{slug}.md")
-    except ValueError as e:
-        return _err(uri=uri, error="bad_path", message=str(e))
-
-    rel = str(out_path.relative_to(v.root))
-    if out_path.exists() and not force:
-        return _err(uri=uri, path=rel, error="already_ingested", message="pass force=true to overwrite")
-
-    fm: dict[str, Any] = {"title": title, "source": uri, "ingested": date.today().isoformat()}
-    if tags:
-        fm["tags"] = list(tags)
-    frontmatter = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True).strip()
-    document = f"---\n{frontmatter}\n---\n\n# {title}\n\n> Source: {uri}\n\n{content}\n"
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(document, encoding="utf-8")
-
-    v.deferred = index_deferred.enqueue_index(v.collection, str(out_path.resolve()))
-
-    return {"ok": True, "uri": uri, "path": rel, "chars": len(content), "indexed": False, "queued": True}
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})

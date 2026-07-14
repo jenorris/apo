@@ -81,7 +81,7 @@ Never `write_note` / `patch_note` under `raw/` except creating a human-requested
 - Point `APO_NOTES_ROOT` at `<wiki-root>` (or a parent vault that contains this tree).
 - Scope tools: `folder=wiki/`, `folder=raw/` as appropriate.
 - Prefer `search_notes` over re-reading entire `raw/` for queries once compiled.
-- `ingest_uri` (if enabled) may land under `raw/` or `resources/wiki/` depending on host config — keep **immutable** semantics.
+- Land new sources under `raw/` (human) via defuddle/copy + `write_note`; keep **immutable** semantics for `raw/`.
 - Surgical updates to wiki pages: `patch_note` / `append_note`; log lines: `append_note` on the day log.
 
 Install engine via [../quickstart.md](../quickstart.md). Use [../onboard-prompt.md](../onboard-prompt.md) to emit host rules that encode these ops — or point Cursor/Claude at this file + your schema.

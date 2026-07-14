@@ -19,7 +19,7 @@ Ollama bge-m3 (or fastembed)     index: engine/index.db
 | Layer | Role |
 |-------|------|
 | **Engine** (`engine/`) | Chunk, embed, hybrid BM25 + vector search |
-| **MCP** | 17 tools — agents never talk to sqlite directly for writes |
+| **MCP** | 16 tools — agents never talk to sqlite directly for writes |
 | **Watcher** | FS events + deferred queue → reindex |
 
 ## Quickstart
@@ -54,7 +54,7 @@ claude mcp add -s user apo -- \
 | `APO_NOTES_ROOT` | (set me) | Vault root to index |
 | `APO_INDEX` | `engine/index.db` | sqlite-vec database |
 | `APO_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace |
-| `APO_INGEST_DIR` | `resources/wiki` | Default `ingest_uri` destination (vault-relative) |
+| `APO_INGEST_DIR` | `resources/wiki` | Convention: wiki path for defuddle→`write_note` (advisory) |
 | `APO_EMBED_BACKEND` | `ollama` | `ollama` or `fastembed` |
 | `OLLAMA_KEEP_ALIVE` | `5m` | Keep embed model warm; `0` = unload when idle |
 | `WATCH_INTERVAL` | `30` | Periodic mtime scan (seconds) |

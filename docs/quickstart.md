@@ -71,7 +71,7 @@ Ensure the same env vars as above are visible to that process (`~/.claude.json` 
 ## 4. Verify
 
 ```bash
-cd ~/Code/apo && just inspect    # expect ~17 tools
+cd ~/Code/apo && just inspect    # expect ~16 tools
 ```
 
 In the agent, run Apo `memory_status` — expect `root_exists: true`, watcher optionally running, index ok.
