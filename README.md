@@ -101,5 +101,19 @@ With fsevents on, the watcher reconciles the full vault every `WATCH_RECONCILE_I
 - Engine is **convention-agnostic**: vault-relative paths + YAML frontmatter only.
 - Opinionated PARA/OKF/thread workflows are **optional vault policy**, not engine requirements.
 - Prefer `append_note` / `patch_note` over full-file `write_note` for edits.
-- `patch_note` `ops[]` keys are named in the MCP schema: `set_field`/`delete_field` → `field` (+ `value`); `replace_text` → `find`/`replace`; `replace_section` → `heading`/`text`. Do not invent `key`/`old`/`new`.
 - Frontmatter and wikilinks are parsed once per index write and cached (`files.frontmatter`, the `backlinks` table) — catalog tools query sqlite, never the filesystem.
+
+### `patch_note` typed ops (v2)
+
+`ops[]` is a **Pydantic discriminated union** on `op` (`apo_engine.patch_ops`). MCP emits JSON Schema `oneOf` with `additionalProperties: false` so hosts that support it reject invented keys (`key`/`old`/`new`). Models that only read the Field description still get the same contract text.
+
+| `op` | Required | Optional |
+|------|----------|----------|
+| `set_field` | `field` | `value` |
+| `delete_field` | `field` | — |
+| `replace_text` | `find` | `replace`, `count`, `scope.heading` |
+| `replace_section` | `heading` | `text` |
+| `append` / `prepend` | `text` | `heading`, `position` |
+| `append_eof` | `text` | — |
+
+Hot-path adds still prefer standalone `append_note` (heading / `chunk_hash` / `create`).

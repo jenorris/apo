@@ -28,6 +28,7 @@ from apo_engine.markdown_patch import (
     normalize_lines,
     section_from_chunk,
 )
+from apo_engine.patch_ops import OPS_FIELD_DESC, PatchOp, ops_to_dicts
 
 WATCH_PID_FILE = Path.home() / ".apo" / "watch.pid"
 DEFERRED_DIR = Path.home() / ".apo"
@@ -519,7 +520,7 @@ async def append_note(
 
 def _patch_note_sync(
     path: str,
-    ops: list[dict],
+    ops: list[Any],
     strict: bool = False,
     dry_run: bool = False,
     index: bool | None = None,
@@ -540,7 +541,7 @@ def _patch_note_sync(
         return guard
 
     content = full.read_text(encoding="utf-8")
-    result = apply_patch(content, ops, strict=strict)
+    result = apply_patch(content, ops_to_dicts(ops), strict=strict)
 
     if dry_run:
         return {
@@ -578,21 +579,10 @@ def _patch_note_sync(
     return out
 
 
-_PATCH_OPS_DESC = (
-    "Mutator objects; each needs op=. "
-    "set_field|delete_field: field (+ value for set). "
-    "replace_text: find, replace (count default 1; optional scope.heading). "
-    "replace_section: heading, text. "
-    "append|prepend: text (+ heading, position start|end). "
-    "append_eof: text. "
-    "Keys are field/find/replace — never key/old/new."
-)
-
-
 @mcp.tool(annotations=_MUTATE)
 async def patch_note(
     path: str,
-    ops: Annotated[list[dict], Field(description=_PATCH_OPS_DESC)],
+    ops: Annotated[list[PatchOp], Field(description=OPS_FIELD_DESC)],
     strict: bool = False,
     dry_run: bool = False,
     index: bool | None = None,
@@ -600,7 +590,7 @@ async def patch_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Batch mutate: set_field, delete_field, replace_text, replace_section, append/prepend, append_eof. See ops param for required keys."""
+    """Batch mutate: set_field, delete_field, replace_text, replace_section, append/prepend, append_eof. Ops are typed by op."""
     return await asyncio.to_thread(
         _patch_note_sync, path, ops, strict, dry_run, index, verbose, expected_mtime, vault
     )
