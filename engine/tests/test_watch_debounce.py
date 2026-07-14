@@ -64,6 +64,7 @@ class IndexFileUnchangedTest(unittest.TestCase):
             setattr(config, k, val)
         core.embed = self._embed
         core.writer_close()
+        core.reader_close()
         core._schema_ready.discard(str(config.INDEX_PATH.resolve()))
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -169,6 +170,7 @@ class ProcessQueuesConsumeIndexFlag(unittest.TestCase):
         self.deferred.DEFERRED_DIR = self._dir
         core.embed = self._embed
         core.writer_close()
+        core.reader_close()
         core._schema_ready.discard(str(config.INDEX_PATH.resolve()))
         shutil.rmtree(self.tmp, ignore_errors=True)
 

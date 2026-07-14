@@ -85,6 +85,7 @@ class ProcessQueuesTest(unittest.TestCase):
         deferred.DEFERRED_DIR = self._saved_dir
         core.embed = self._saved_embed
         core.writer_close()
+        core.reader_close()
         core._schema_ready.discard(str(config.INDEX_PATH.resolve()))
         shutil.rmtree(self.tmp, ignore_errors=True)
 

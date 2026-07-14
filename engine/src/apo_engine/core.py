@@ -33,6 +33,8 @@ _query_embed_lock = threading.Lock()
 _schema_ready: set[str] = set()
 # Sole index-writer connection (watch / CLI index) — reuse across commits.
 _writer_local = threading.local()
+# Cached read-only connection per thread — reused across search/filter_notes/etc. calls.
+_reader_local = threading.local()
 
 _FRONTMATTER = re.compile(r"^---\n.*?\n---\n", re.DOTALL)
 _FRONTMATTER_YAML = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
@@ -440,6 +442,41 @@ def writer_close() -> None:
     _writer_local.conn = None
 
 
+def reader_connect() -> sqlite3.Connection:
+    """Thread-local cached read-only connection.
+
+    Every read function (search, filter_notes, recent_notes, list_backlinks,
+    count_chunks, lookup_chunk, stats) previously opened a fresh connect() per call and
+    closed it at the end — ~0.25ms of connect+extension-load+close overhead paid on every
+    single read, when only the writer path cached a connection. Safe to keep open across
+    calls: bare SELECTs aren't wrapped in an explicit transaction (nothing here holds a
+    WAL read snapshot open past one query), and SQLite recompiles transparently if the
+    schema changes underneath it (verified: a cached reader survives an external full
+    rebuild — DROP+CREATE from another connection — with no error and no stale results).
+    """
+    db = getattr(_reader_local, "conn", None)
+    if db is not None:
+        try:
+            db.execute("SELECT 1")
+            return db
+        except sqlite3.Error:
+            pass
+    db = connect()
+    _reader_local.conn = db
+    return db
+
+
+def reader_close() -> None:
+    db = getattr(_reader_local, "conn", None)
+    if db is None:
+        return
+    try:
+        db.close()
+    except sqlite3.Error:
+        pass
+    _reader_local.conn = None
+
+
 def _index_key() -> str:
     return str(Path(config.INDEX_PATH).resolve())
 
@@ -688,37 +725,31 @@ class Hit:
 
 
 def count_chunks() -> int:
-    db = connect()
-    try:
-        return db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-    finally:
-        db.close()
+    db = reader_connect()
+    return db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
 
 def lookup_chunk(chunk_hash: str) -> dict | None:
-    db = connect()
-    try:
-        row = db.execute(
-            """SELECT path, heading, text, start_line, end_line, heading_level, chunk_hash
-               FROM chunks WHERE chunk_hash = ? LIMIT 1""",
-            (chunk_hash,),
-        ).fetchone()
-        if not row:
-            return None
-        rel, heading, text, start_line, end_line, hlevel, chash = row
-        root = config.NOTES_ROOT
-        return {
-            "source": str(root / rel),
-            "path": rel,
-            "heading": heading or "",
-            "content": text,
-            "start_line": start_line,
-            "end_line": end_line,
-            "heading_level": hlevel,
-            "chunk_hash": chash,
-        }
-    finally:
-        db.close()
+    db = reader_connect()
+    row = db.execute(
+        """SELECT path, heading, text, start_line, end_line, heading_level, chunk_hash
+           FROM chunks WHERE chunk_hash = ? LIMIT 1""",
+        (chunk_hash,),
+    ).fetchone()
+    if not row:
+        return None
+    rel, heading, text, start_line, end_line, hlevel, chash = row
+    root = config.NOTES_ROOT
+    return {
+        "source": str(root / rel),
+        "path": rel,
+        "heading": heading or "",
+        "content": text,
+        "start_line": start_line,
+        "end_line": end_line,
+        "heading_level": hlevel,
+        "chunk_hash": chash,
+    }
 
 
 def _deserialize_vec(blob: bytes) -> list[float]:
@@ -912,9 +943,8 @@ def search(
     (1.0 = top hit), so scores are monotonic with ranking — comparable within
     one result set, not across queries.
     """
-    db = connect()
+    db = reader_connect()
     if db.execute("SELECT value FROM meta WHERE key='dim'").fetchone() is None:
-        db.close()
         raise SystemExit("Index is empty — run `apo-engine index` first.")
 
     n = max(k * 4, config.SEARCH_CANDIDATES)
@@ -956,7 +986,6 @@ def search(
         fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
 
     if not fused:
-        db.close()
         return []
     top = max(fused.values())
 
@@ -1013,12 +1042,11 @@ def search(
         )
         if len(hits) >= k:
             break
-    db.close()
     return hits
 
 
 def stats() -> dict:
-    db = connect()
+    db = reader_connect()
     out = {
         "notes": db.execute("SELECT COUNT(*) FROM files").fetchone()[0],
         "chunks": 0,
@@ -1034,7 +1062,6 @@ def stats() -> dict:
     for key in ("model", "backend", "dim"):
         row = db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         out[key] = row[0] if row else None
-    db.close()
     return out
 
 
@@ -1048,24 +1075,21 @@ def filter_notes(where: dict, folder: str = "", limit: int = 20) -> tuple[int, l
     sorted by mtime desc. No filesystem walk — reads the index only.
     """
     folder_prefix = folder.replace("\\", "/").strip("/")
-    db = connect()
-    try:
-        # Push the folder scope into SQL like recent_notes/list_backlinks already do — a
-        # narrow folder= previously still fetched and JSON-decoded every frontmatter blob
-        # in the vault before filtering in Python (measured: 1894 rows read/decoded for a
-        # query scoped to a 70-file folder).
-        if folder_prefix:
-            rows = db.execute(
-                "SELECT path, mtime, frontmatter FROM files "
-                "WHERE frontmatter IS NOT NULL AND path LIKE ? ESCAPE '\\'",
-                (_escape_like(folder_prefix) + "/%",),
-            ).fetchall()
-        else:
-            rows = db.execute(
-                "SELECT path, mtime, frontmatter FROM files WHERE frontmatter IS NOT NULL"
-            ).fetchall()
-    finally:
-        db.close()
+    db = reader_connect()
+    # Push the folder scope into SQL like recent_notes/list_backlinks already do — a
+    # narrow folder= previously still fetched and JSON-decoded every frontmatter blob
+    # in the vault before filtering in Python (measured: 1894 rows read/decoded for a
+    # query scoped to a 70-file folder).
+    if folder_prefix:
+        rows = db.execute(
+            "SELECT path, mtime, frontmatter FROM files "
+            "WHERE frontmatter IS NOT NULL AND path LIKE ? ESCAPE '\\'",
+            (_escape_like(folder_prefix) + "/%",),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT path, mtime, frontmatter FROM files WHERE frontmatter IS NOT NULL"
+        ).fetchall()
     matches: list[tuple[float, str, dict]] = []
     for path, mtime, fm_json in rows:
         try:
@@ -1085,21 +1109,18 @@ def _escape_like(s: str) -> str:
 
 def recent_notes(limit: int = 10, folder: str = "") -> list[tuple[str, float]]:
     """(path, mtime) for the most recently modified notes, index-backed — no per-file stat()."""
-    db = connect()
-    try:
-        folder_prefix = folder.replace("\\", "/").strip("/")
-        if folder_prefix:
-            rows = db.execute(
-                "SELECT path, mtime FROM files WHERE path LIKE ? ESCAPE '\\' ORDER BY mtime DESC LIMIT ?",
-                (_escape_like(folder_prefix) + "/%", limit),
-            ).fetchall()
-        else:
-            rows = db.execute(
-                "SELECT path, mtime FROM files ORDER BY mtime DESC LIMIT ?", (limit,)
-            ).fetchall()
-        return rows
-    finally:
-        db.close()
+    db = reader_connect()
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    if folder_prefix:
+        rows = db.execute(
+            "SELECT path, mtime FROM files WHERE path LIKE ? ESCAPE '\\' ORDER BY mtime DESC LIMIT ?",
+            (_escape_like(folder_prefix) + "/%", limit),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT path, mtime FROM files ORDER BY mtime DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return rows
 
 
 def list_backlinks(
@@ -1108,21 +1129,18 @@ def list_backlinks(
     """(source path, line, line text) for notes linking to any of target_keys (stem or full path)."""
     if not target_keys:
         return []
-    db = connect()
-    try:
-        keys = list(target_keys)
-        qs = ",".join("?" * len(keys))
-        sql = f"""SELECT source, line, text FROM backlinks
-                  WHERE (target_key IN ({qs}) OR target_stem IN ({qs}))"""
-        params: list = [*keys, *keys]
-        if exclude_source:
-            sql += " AND source != ?"
-            params.append(exclude_source)
-        sql += " ORDER BY source, line LIMIT ?"
-        params.append(limit)
-        return db.execute(sql, params).fetchall()
-    finally:
-        db.close()
+    db = reader_connect()
+    keys = list(target_keys)
+    qs = ",".join("?" * len(keys))
+    sql = f"""SELECT source, line, text FROM backlinks
+              WHERE (target_key IN ({qs}) OR target_stem IN ({qs}))"""
+    params: list = [*keys, *keys]
+    if exclude_source:
+        sql += " AND source != ?"
+        params.append(exclude_source)
+    sql += " ORDER BY source, line LIMIT ?"
+    params.append(limit)
+    return db.execute(sql, params).fetchall()
 
 
 @dataclass
