@@ -743,6 +743,19 @@ def _migrate_hash_algo(db: sqlite3.Connection, *, verbose: bool = False) -> None
             file_updates.append((_file_hash(text), rel))
     if file_updates:
         db.executemany("UPDATE files SET hash=? WHERE path=?", file_updates)
+    else:
+        n_files = int(db.execute("SELECT COUNT(*) FROM files").fetchone()[0])
+        if n_files and not root.exists():
+            raise SystemExit(
+                f"hash migration: NOTES_ROOT does not exist ({root}) but index has "
+                f"{n_files} files — set APO_NOTES_ROOT before migrating"
+            )
+        if n_files and root.exists() and verbose:
+            print(
+                f"  hash migration: 0/{n_files} files readable under {root} "
+                f"(check APO_NOTES_ROOT)",
+                flush=True,
+            )
 
     chunk_updates = [
         (_content_hash(text or ""), rid)
