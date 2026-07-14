@@ -305,22 +305,6 @@ def _content_hash(text: str) -> str:
     return hashlib.blake2b(text.encode("utf-8", "replace"), digest_size=8).hexdigest()
 
 
-def _locate_chunk_lines(lines: list[str], chunk_text: str, search_from: int = 0) -> tuple[int, int]:
-    """Best-effort 1-based start/end lines for a chunk body (legacy fallback).
-
-    Prefer line spans returned by ``chunk_markdown``. Kept for tests / callers that
-    still recover positions from chunk text alone.
-    """
-    needle = chunk_text.strip().split("\n")[0][:80]
-    start = search_from + 1
-    for i in range(search_from, len(lines)):
-        if needle and needle in lines[i]:
-            start = i + 1
-            break
-    end = min(len(lines), start + max(1, chunk_text.count("\n") + 3))
-    return start, end
-
-
 def _parse_frontmatter(text: str) -> dict:
     m = _FRONTMATTER_YAML.match(text)
     if not m:
