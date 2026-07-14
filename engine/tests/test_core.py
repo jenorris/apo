@@ -180,6 +180,37 @@ class TestIndexLifecycle(VaultTestCase):
             db.close()
         self.assertEqual(n, 0)
 
+    def test_rebuild_clears_backlinks(self):
+        self.write(
+            "src.md",
+            "---\ntitle: Src\n---\n\nSee [[Target Note]] and [[other]].\n",
+        )
+        core.index_vault(verbose=False)
+        db = sqlite3.connect(config.INDEX_PATH)
+        try:
+            n1 = db.execute("SELECT COUNT(*) FROM backlinks").fetchone()[0]
+        finally:
+            db.close()
+        self.assertGreaterEqual(n1, 2)
+        core.index_vault(rebuild=True, verbose=False)
+        db = sqlite3.connect(config.INDEX_PATH)
+        try:
+            n2 = db.execute("SELECT COUNT(*) FROM backlinks").fetchone()[0]
+        finally:
+            db.close()
+        self.assertEqual(n1, n2)
+
+    def test_filter_notes_equality_and_contains(self):
+        self.write("a.md", "---\nstatus: active\ntags: [x]\n---\n\n# A\n\nbody a\n")
+        self.write("b.md", "---\nstatus: done\ntags: [y]\n---\n\n# B\n\nbody b\n")
+        core.index_vault(verbose=False)
+        total, rows = core.filter_notes({"status": "active"})
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "a.md")
+        total, rows = core.filter_notes({"tags": {"$contains": "y"}})
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "b.md")
+
 
 if __name__ == "__main__":
     unittest.main()

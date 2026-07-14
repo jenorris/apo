@@ -75,6 +75,9 @@ just watch-status
 
 After pulling engine changes that touch watch/index code: `just setup && just watch-install`.
 
+Full rebuilds (`just reindex`) commit embeddings in batches with progress lines and clear
+the backlinks table — safe to interrupt and restart without duplicating the graph.
+
 ## Docs map
 
 | Doc | For |
