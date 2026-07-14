@@ -187,9 +187,14 @@ def _default_index_on_write() -> bool:
     return os.environ.get("APO_INDEX_ON_WRITE", "").lower() in ("1", "true", "yes")
 
 
-async def _maybe_index(v: Vault, full: Path, index: bool | None) -> None:
-    """Queue path for the watcher — MCP never writes index.db (single-writer policy)."""
-    del index  # API compat; watcher owns all SQLite writes
+def _maybe_index(v: Vault, full: Path, index: bool | None) -> None:
+    """Queue path for the watcher — MCP never writes index.db (single-writer policy).
+
+    Sync on purpose: write/read tools run via ``asyncio.to_thread``, so flock/queue I/O
+    must not sit in an ``async def`` body (that would still block the event loop).
+    ``index`` is API-compat only; the watcher owns all SQLite writes.
+    """
+    del index
     # enqueue_index returns the updated set — avoid a second flock/re-read.
     v.deferred = index_deferred.enqueue_index(v.collection, str(full.resolve()))
 
@@ -353,8 +358,52 @@ async def memory_status() -> dict:
 
 
 ###############################################################################
-# Tools — writing
+# Tools — writing (sync bodies; async wrappers offload via to_thread)
 ###############################################################################
+
+
+def _write_note_sync(
+    path: str,
+    content: str,
+    append: bool = False,
+    index: bool | None = None,
+    expected_mtime: float | None = None,
+    vault: str = "",
+) -> dict:
+    try:
+        v = _vault(vault)
+        full = _safe_resolve(v, path)
+    except (VaultError, ValueError) as e:
+        return _err(path=path, error="bad_path", message=str(e))
+
+    if (guard := _check_mtime(full, expected_mtime, path)):
+        return guard
+
+    existed = full.exists()
+    parts = Path(path.replace("\\", "/")).parts
+    new_top = len(parts) > 1 and not (v.root / parts[0]).exists()
+
+    full.parent.mkdir(parents=True, exist_ok=True)
+    if append and existed:
+        with full.open("a", encoding="utf-8") as f:
+            f.write("\n" + content)
+    else:
+        full.write_text(content, encoding="utf-8")
+    _maybe_index(v, full, index)
+
+    out: dict[str, Any] = {
+        "ok": True,
+        "path": path,
+        "action": "appended" if (append and existed) else ("overwrote" if existed else "created"),
+        "bytes": full.stat().st_size,
+        "mtime": _mtime(full),
+    }
+    if new_top:
+        out["warning"] = (
+            f"created new top-level directory {parts[0]!r} — "
+            f"existing top-level dirs: {_top_level_dirs(v)}"
+        )
+    return out
 
 
 @mcp.tool(annotations=_MUTATE)
@@ -379,44 +428,12 @@ async def write_note(
         expected_mtime: If set, fail with stale_write when the file changed since this mtime.
         vault: Vault name; empty = default vault.
     """
-    try:
-        v = _vault(vault)
-        full = _safe_resolve(v, path)
-    except (VaultError, ValueError) as e:
-        return _err(path=path, error="bad_path", message=str(e))
-
-    if (guard := _check_mtime(full, expected_mtime, path)):
-        return guard
-
-    existed = full.exists()
-    parts = Path(path.replace("\\", "/")).parts
-    new_top = len(parts) > 1 and not (v.root / parts[0]).exists()
-
-    full.parent.mkdir(parents=True, exist_ok=True)
-    if append and existed:
-        with full.open("a", encoding="utf-8") as f:
-            f.write("\n" + content)
-    else:
-        full.write_text(content, encoding="utf-8")
-    await _maybe_index(v, full, index)
-
-    out: dict[str, Any] = {
-        "ok": True,
-        "path": path,
-        "action": "appended" if (append and existed) else ("overwrote" if existed else "created"),
-        "bytes": full.stat().st_size,
-        "mtime": _mtime(full),
-    }
-    if new_top:
-        out["warning"] = (
-            f"created new top-level directory {parts[0]!r} — "
-            f"existing top-level dirs: {_top_level_dirs(v)}"
-        )
-    return out
+    return await asyncio.to_thread(
+        _write_note_sync, path, content, append, index, expected_mtime, vault
+    )
 
 
-@mcp.tool(annotations=_WRITE)
-async def append_note(
+def _append_note_sync(
     path: str,
     text: str,
     heading: str | None = None,
@@ -427,17 +444,6 @@ async def append_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Add content to a note (under a heading, at an indexed chunk, or at the file tail).
-
-    Examples:
-        append_note("logs/2026-07-09.md", "**15:30** — …\\n\\n",
-                    heading="## Session log", position="start")
-        append_note("threads/foo.md", "- update\\n", heading="## History")
-        append_note("threads/foo.md", "- follow-up\\n", chunk_hash="<from search_notes>")
-
-    Anchor resolution: chunk_hash → heading → file tail (EOF).
-    On anchor_not_found the error includes fuzzy heading suggestions.
-    """
     try:
         v = _vault(vault)
         full = _safe_resolve(v, path)
@@ -493,7 +499,7 @@ async def append_note(
     if content.endswith("\n") and not new_content.endswith("\n"):
         new_content += "\n"
     full.write_text(new_content, encoding="utf-8")
-    await _maybe_index(v, full, index)
+    _maybe_index(v, full, index)
 
     return {
         "ok": True,
@@ -506,8 +512,44 @@ async def append_note(
     }
 
 
-@mcp.tool(annotations=_MUTATE)
-async def patch_note(
+@mcp.tool(annotations=_WRITE)
+async def append_note(
+    path: str,
+    text: str,
+    heading: str | None = None,
+    chunk_hash: str | None = None,
+    position: Literal["end", "start"] = "end",
+    create: bool = False,
+    index: bool | None = None,
+    expected_mtime: float | None = None,
+    vault: str = "",
+) -> dict:
+    """Add content to a note (under a heading, at an indexed chunk, or at the file tail).
+
+    Examples:
+        append_note("logs/2026-07-09.md", "**15:30** — …\\n\\n",
+                    heading="## Session log", position="start")
+        append_note("threads/foo.md", "- update\\n", heading="## History")
+        append_note("threads/foo.md", "- follow-up\\n", chunk_hash="<from search_notes>")
+
+    Anchor resolution: chunk_hash → heading → file tail (EOF).
+    On anchor_not_found the error includes fuzzy heading suggestions.
+    """
+    return await asyncio.to_thread(
+        _append_note_sync,
+        path,
+        text,
+        heading,
+        chunk_hash,
+        position,
+        create,
+        index,
+        expected_mtime,
+        vault,
+    )
+
+
+def _patch_note_sync(
     path: str,
     ops: list[dict],
     strict: bool = False,
@@ -517,18 +559,6 @@ async def patch_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Mutate a note in place — frontmatter fields, targeted replace, batch upsert.
-
-    Ops: set_field, delete_field, replace_text (optional scope.heading + count),
-    replace_section, append / prepend (batch only), append_eof.
-
-    Example batch upsert (history bullet + frontmatter in one call):
-        patch_note("threads/foo.md", [
-            {"op": "append", "heading": "## History", "text": "- 2026-07-09 …"},
-            {"op": "set_field", "field": "last_checked", "value": "2026-07-09 15:30"},
-            {"op": "set_field", "field": "status", "value": "resolved"},
-        ])
-    """
     try:
         v = _vault(vault)
         full = _safe_resolve(v, path)
@@ -565,7 +595,7 @@ async def patch_note(
         )
 
     full.write_text(result.content, encoding="utf-8")
-    await _maybe_index(v, full, index)
+    _maybe_index(v, full, index)
 
     out: dict[str, Any] = {
         "ok": True,
@@ -577,6 +607,68 @@ async def patch_note(
     if verbose:
         out["results"] = result.results
         out["lines_added"] = result.lines_added
+    return out
+
+
+@mcp.tool(annotations=_MUTATE)
+async def patch_note(
+    path: str,
+    ops: list[dict],
+    strict: bool = False,
+    dry_run: bool = False,
+    index: bool | None = None,
+    verbose: bool = False,
+    expected_mtime: float | None = None,
+    vault: str = "",
+) -> dict:
+    """Mutate a note in place — frontmatter fields, targeted replace, batch upsert.
+
+    Ops: set_field, delete_field, replace_text (optional scope.heading + count),
+    replace_section, append / prepend (batch only), append_eof.
+
+    Example batch upsert (history bullet + frontmatter in one call):
+        patch_note("threads/foo.md", [
+            {"op": "append", "heading": "## History", "text": "- 2026-07-09 …"},
+            {"op": "set_field", "field": "last_checked", "value": "2026-07-09 15:30"},
+            {"op": "set_field", "field": "status", "value": "resolved"},
+        ])
+    """
+    return await asyncio.to_thread(
+        _patch_note_sync, path, ops, strict, dry_run, index, verbose, expected_mtime, vault
+    )
+
+
+def _move_note_sync(
+    src: str,
+    dst: str,
+    overwrite: bool = False,
+    index: bool | None = None,
+    vault: str = "",
+) -> dict:
+    try:
+        v = _vault(vault)
+        src_full = _safe_resolve(v, src)
+        dst_full = _safe_resolve(v, dst)
+    except (VaultError, ValueError) as e:
+        return _err(src=src, dst=dst, error="bad_path", message=str(e))
+
+    if not src_full.exists():
+        return _err(src=src, dst=dst, error="not_found", message=f"source note not found: {src}")
+    if dst_full.exists() and not overwrite:
+        return _err(src=src, dst=dst, error="destination_exists", message="pass overwrite=true to replace")
+
+    dst_full.parent.mkdir(parents=True, exist_ok=True)
+    src_abs = str(src_full.resolve())
+    os.replace(src_full, dst_full)
+
+    purged = _purge_index(v, Path(src_abs))
+    v.deferred.discard(src_abs)
+    _save_deferred(v)
+    _maybe_index(v, dst_full, index)
+
+    out: dict[str, Any] = {"ok": True, "src": src, "dst": dst, "index_purged": purged, "mtime": _mtime(dst_full)}
+    if not purged:
+        out["warning"] = "purge not queued — watcher may retain stale chunks"
     return out
 
 
@@ -601,36 +693,10 @@ async def move_note(
         index: Deprecated — always queues for the watcher (single-writer policy).
         vault: Vault name; empty = default vault.
     """
-    try:
-        v = _vault(vault)
-        src_full = _safe_resolve(v, src)
-        dst_full = _safe_resolve(v, dst)
-    except (VaultError, ValueError) as e:
-        return _err(src=src, dst=dst, error="bad_path", message=str(e))
-
-    if not src_full.exists():
-        return _err(src=src, dst=dst, error="not_found", message=f"source note not found: {src}")
-    if dst_full.exists() and not overwrite:
-        return _err(src=src, dst=dst, error="destination_exists", message="pass overwrite=true to replace")
-
-    dst_full.parent.mkdir(parents=True, exist_ok=True)
-    src_abs = str(src_full.resolve())
-    os.replace(src_full, dst_full)
-
-    purged = _purge_index(v, Path(src_abs))
-    v.deferred.discard(src_abs)
-    _save_deferred(v)
-    await _maybe_index(v, dst_full, index)
-
-    out: dict[str, Any] = {"ok": True, "src": src, "dst": dst, "index_purged": purged, "mtime": _mtime(dst_full)}
-    if not purged:
-        out["warning"] = "purge not queued — watcher may retain stale chunks"
-    return out
+    return await asyncio.to_thread(_move_note_sync, src, dst, overwrite, index, vault)
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False})
-async def delete_note(path: str, vault: str = "") -> dict:
-    """Delete a note and purge its chunks from the search index. Cannot be undone."""
+def _delete_note_sync(path: str, vault: str = "") -> dict:
     try:
         v = _vault(vault)
         full = _safe_resolve(v, path)
@@ -649,21 +715,18 @@ async def delete_note(path: str, vault: str = "") -> dict:
     return out
 
 
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False})
+async def delete_note(path: str, vault: str = "") -> dict:
+    """Delete a note and purge its chunks from the search index. Cannot be undone."""
+    return await asyncio.to_thread(_delete_note_sync, path, vault)
+
+
 ###############################################################################
 # Tools — reading & search
 ###############################################################################
 
 
-@mcp.tool(annotations=_RO)
-async def read_note(path: str, heading: str | None = None, vault: str = "") -> dict:
-    """Read a note, optionally scoped to one section.
-
-    Args:
-        path: Vault-relative path.
-        heading: If set (e.g. '## Next action'), return only that section —
-            avoids loading large notes when one section is needed.
-        vault: Vault name; empty = default vault.
-    """
+def _read_note_sync(path: str, heading: str | None = None, vault: str = "") -> dict:
     try:
         v = _vault(vault)
         full = _safe_resolve(v, path)
@@ -686,6 +749,18 @@ async def read_note(path: str, heading: str | None = None, vault: str = "") -> d
         out["content"] = content
     return out
 
+
+@mcp.tool(annotations=_RO)
+async def read_note(path: str, heading: str | None = None, vault: str = "") -> dict:
+    """Read a note, optionally scoped to one section.
+
+    Args:
+        path: Vault-relative path.
+        heading: If set (e.g. '## Next action'), return only that section —
+            avoids loading large notes when one section is needed.
+        vault: Vault name; empty = default vault.
+    """
+    return await asyncio.to_thread(_read_note_sync, path, heading, vault)
 
 @mcp.tool(annotations=_RO)
 async def search_notes(query: str, top_k: int = 5, folder: str = "", vault: str = "") -> dict:
@@ -736,12 +811,7 @@ async def search_notes(query: str, top_k: int = 5, folder: str = "", vault: str 
     return {"ok": True, "results": rows}
 
 
-@mcp.tool(annotations=_RO)
-async def expand_chunk(chunk_hash: str, vault: str = "") -> dict:
-    """Expand a search-result chunk to its full surrounding markdown section.
-
-    Use chunk_hash values returned by search_notes for progressive recall.
-    """
+def _expand_chunk_sync(chunk_hash: str, vault: str = "") -> dict:
     try:
         v = _vault(vault)
     except VaultError as e:
@@ -773,6 +843,15 @@ async def expand_chunk(chunk_hash: str, vault: str = "") -> dict:
         "end_line": section.body_end,
         "content": "\n".join(lines[start : section.body_end]),
     }
+
+
+@mcp.tool(annotations=_RO)
+async def expand_chunk(chunk_hash: str, vault: str = "") -> dict:
+    """Expand a search-result chunk to its full surrounding markdown section.
+
+    Use chunk_hash values returned by search_notes for progressive recall.
+    """
+    return await asyncio.to_thread(_expand_chunk_sync, chunk_hash, vault)
 
 
 @mcp.tool(annotations=_RO)
@@ -854,14 +933,7 @@ async def backlinks(path: str, limit: int = 100, vault: str = "") -> dict:
 ###############################################################################
 
 
-@mcp.tool(annotations=_RO)
-async def list_directory(directory: str = "", vault: str = "") -> dict:
-    """List notes and subdirectories within the vault.
-
-    Args:
-        directory: Vault-relative path (empty = vault root).
-        vault: Vault name; empty = default vault.
-    """
+def _list_directory_sync(directory: str = "", vault: str = "") -> dict:
     try:
         v = _vault(vault)
         target = _safe_resolve(v, directory) if directory else v.root
@@ -880,6 +952,17 @@ async def list_directory(directory: str = "", vault: str = "") -> dict:
             "size": p.stat().st_size if p.is_file() else None,
         })
     return {"ok": True, "path": directory, "entries": entries}
+
+
+@mcp.tool(annotations=_RO)
+async def list_directory(directory: str = "", vault: str = "") -> dict:
+    """List notes and subdirectories within the vault.
+
+    Args:
+        directory: Vault-relative path (empty = vault root).
+        vault: Vault name; empty = default vault.
+    """
+    return await asyncio.to_thread(_list_directory_sync, directory, vault)
 
 
 @mcp.tool(annotations=_RO)
