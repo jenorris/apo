@@ -245,6 +245,56 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertIn("ok.md", rels)
         self.assertNotIn(".obsidian/plugins/noise.md", rels)
 
+    def test_blake2_hashes_and_migration_without_reembed(self):
+        sample = "hello vault\n"
+        self.assertEqual(len(core._file_hash(sample)), 64)
+        self.assertEqual(len(core._content_hash(sample)), 16)
+        self.assertNotEqual(
+            core._file_hash(sample),
+            hashlib.sha256(sample.encode()).hexdigest(),
+        )
+
+        self.write("keep.md", "---\ntitle: Keep\n---\n\n# Keep\n\nstable body zebra\n")
+        core.index_vault(verbose=False)
+        # Simulate a pre-blake2 index: sha256 digests + stale meta.
+        db = core.writer_connect(ensure_hash=False)
+        text = (self.vault / "keep.md").read_text(encoding="utf-8")
+        db.execute(
+            "UPDATE files SET hash=?",
+            (hashlib.sha256(text.encode()).hexdigest(),),
+        )
+        for rid, ctext in db.execute("SELECT id, text FROM chunks"):
+            db.execute(
+                "UPDATE chunks SET content_hash=? WHERE id=?",
+                (hashlib.sha256((ctext or "").encode()).hexdigest()[:16], rid),
+            )
+        db.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES('hash_algo', 'sha256')"
+        )
+        db.commit()
+        core.writer_close()
+
+        embed_calls = {"n": 0}
+        real_embed = core.embed
+
+        def counting(texts, **kwargs):
+            embed_calls["n"] += len(texts)
+            return real_embed(texts, **kwargs)
+
+        core.embed = counting
+        try:
+            core.index_vault(verbose=False)
+        finally:
+            core.embed = real_embed
+        self.assertEqual(embed_calls["n"], 0)
+        db = core.reader_connect()
+        algo = db.execute("SELECT value FROM meta WHERE key='hash_algo'").fetchone()[0]
+        self.assertEqual(algo, core.HASH_ALGO)
+        stored = db.execute("SELECT hash FROM files WHERE path='keep.md'").fetchone()[0]
+        self.assertEqual(stored, core._file_hash(text))
+        ch = db.execute("SELECT content_hash, text FROM chunks LIMIT 1").fetchone()
+        self.assertEqual(ch[0], core._content_hash(ch[1]))
+
 
 if __name__ == "__main__":
     unittest.main()

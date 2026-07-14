@@ -36,10 +36,17 @@ _search_pool = ThreadPoolExecutor(max_workers=1)
 
 # Schema bootstrap once per index path per process.
 _schema_ready: set[str] = set()
+# Process-local: skip meta check after the first ensure for this index path.
+_hash_algo_ready: set[str] = set()
 # Sole index-writer connection (watch / CLI index) — reuse across commits.
 _writer_local = threading.local()
 # Cached read-only connection per thread — reused across search/filter_notes/etc. calls.
 _reader_local = threading.local()
+
+# Content identity for files.hash / chunks.content_hash. blake2b is stdlib-only and
+# substantially faster than SHA-256 on large notes; digest sizes keep hex widths stable
+# (64-char file hash, 16-char content hash) so columns and logs stay comparable.
+HASH_ALGO = "blake2b"
 
 _FRONTMATTER = re.compile(r"^---\n.*?\n---\n", re.DOTALL)
 _FRONTMATTER_YAML = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
@@ -242,7 +249,8 @@ def compute_chunk_id(
 
 
 def _content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
+    """16-hex-char body hash (blake2b-64) — embed reuse key, not a security digest."""
+    return hashlib.blake2b(text.encode("utf-8", "replace"), digest_size=8).hexdigest()
 
 
 def _locate_chunk_lines(lines: list[str], chunk_text: str, search_from: int = 0) -> tuple[int, int]:
@@ -430,8 +438,10 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     return db
 
 
-def writer_connect() -> sqlite3.Connection:
-    """Process-local connection for the sole index writer (watch / index CLI)."""
+def writer_connect(
+    *, migrate_verbose: bool = False, ensure_hash: bool = True
+) -> sqlite3.Connection:
+    """Process-local connection for the sole index writer (watch / CLI index)."""
     db = getattr(_writer_local, "conn", None)
     now = time.monotonic()
     ping_iv = float(getattr(config, "READER_PING_INTERVAL", 5.0))
@@ -441,14 +451,20 @@ def writer_connect() -> sqlite3.Connection:
             try:
                 db.execute("SELECT 1")
                 _writer_local.ping_at = now
+                if ensure_hash:
+                    _ensure_hash_algo(db, verbose=migrate_verbose)
                 return db
             except sqlite3.Error:
                 writer_close()
         else:
+            if ensure_hash:
+                _ensure_hash_algo(db, verbose=migrate_verbose)
             return db
     db = connect()
     _writer_local.conn = db
     _writer_local.ping_at = now
+    if ensure_hash:
+        _ensure_hash_algo(db, verbose=migrate_verbose)
     return db
 
 
@@ -461,6 +477,8 @@ def writer_close() -> None:
     except sqlite3.Error:
         pass
     _writer_local.conn = None
+    # Allow re-check if the process opens a different/replaced index.db later.
+    _hash_algo_ready.discard(_index_key())
 
 
 def reader_connect() -> sqlite3.Connection:
@@ -693,7 +711,79 @@ def _iter_notes(root: Path, ignore: list[str]) -> Iterator[Path]:
 
 
 def _file_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+    """Full-file content identity (blake2b-256 hex) stored in ``files.hash``."""
+    return hashlib.blake2b(text.encode("utf-8", "replace"), digest_size=32).hexdigest()
+
+
+def _stamp_hash_algo(db: sqlite3.Connection) -> None:
+    db.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES('hash_algo', ?)",
+        (HASH_ALGO,),
+    )
+
+
+def _migrate_hash_algo(db: sqlite3.Connection, *, verbose: bool = False) -> None:
+    """Rewritten hashes for an existing index — no re-embed, chunk_hash anchors kept.
+
+    Updates ``files.hash`` from vault files and ``chunks.content_hash`` from stored
+    chunk text. Leaves ``chunk_hash`` alone so search anchors stay valid until a file
+    is naturally reindexed.
+    """
+    root = config.NOTES_ROOT
+    file_updates: list[tuple[str, str]] = []
+    if root.exists():
+        for (rel,) in db.execute("SELECT path FROM files"):
+            full = root / rel
+            if not full.is_file():
+                continue
+            try:
+                text = full.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            file_updates.append((_file_hash(text), rel))
+    if file_updates:
+        db.executemany("UPDATE files SET hash=? WHERE path=?", file_updates)
+
+    chunk_updates = [
+        (_content_hash(text or ""), rid)
+        for rid, text in db.execute("SELECT id, text FROM chunks")
+    ]
+    if chunk_updates:
+        db.executemany("UPDATE chunks SET content_hash=? WHERE id=?", chunk_updates)
+
+    _stamp_hash_algo(db)
+    db.commit()
+    if verbose:
+        print(
+            f"  migrated hash_algo → {HASH_ALGO} "
+            f"({len(file_updates)} files, {len(chunk_updates)} chunks)",
+            flush=True,
+        )
+
+
+def _ensure_hash_algo(db: sqlite3.Connection, *, verbose: bool = False) -> None:
+    """Guarantee ``files``/``chunks`` digests match ``HASH_ALGO`` before writes."""
+    key = _index_key()
+    if key in _hash_algo_ready:
+        return
+    row = db.execute("SELECT value FROM meta WHERE key='hash_algo'").fetchone()
+    if row and row[0] == HASH_ALGO:
+        _hash_algo_ready.add(key)
+        return
+    try:
+        n_files = int(db.execute("SELECT COUNT(*) FROM files").fetchone()[0])
+    except sqlite3.OperationalError:
+        n_files = 0
+    try:
+        n_chunks = int(db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+    except sqlite3.OperationalError:
+        n_chunks = 0
+    if n_files == 0 and n_chunks == 0:
+        _stamp_hash_algo(db)
+        db.commit()
+    else:
+        _migrate_hash_algo(db, verbose=verbose)
+    _hash_algo_ready.add(key)
 
 
 # Pending chunk row: path, ord, heading, text, start, end, hlevel, chunk_hash, body_hash
@@ -718,7 +808,9 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
     if rebuild:
         writer_close()
         _schema_ready.discard(_index_key())
-        db = writer_connect()
+        _hash_algo_ready.discard(_index_key())
+        # Skip hash migrate — we're about to wipe tables anyway.
+        db = writer_connect(ensure_hash=False)
         db.executescript(
             """
             DROP TABLE IF EXISTS chunks;
@@ -732,8 +824,9 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
         db.commit()
         writer_close()
         _schema_ready.discard(_index_key())
+        _hash_algo_ready.discard(_index_key())
 
-    db = writer_connect()
+    db = writer_connect(migrate_verbose=verbose)
     ignore = _load_ignore()
     known = {row[0]: (row[1], row[2]) for row in db.execute("SELECT path, mtime, hash FROM files")}
     on_disk: set[str] = set()
