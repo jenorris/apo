@@ -260,23 +260,21 @@ def _top_level_dirs(v: Vault) -> list[str]:
 # Server
 ###############################################################################
 
-mcp = FastMCP(
-    "Apo",
-    instructions=(
-        "Apo — persistent semantic memory for AI agents: plain Markdown files under a single "
-        "vault root, indexed into sqlite-vec (hybrid FTS5 BM25 + dense vector search). Files are the "
-        "source of truth; the index is rebuildable. All paths are vault-relative; omit `vault` "
-        "to use the default vault. "
-        "Write routing: new note → write_note; add to a log/section → append_note; frontmatter "
-        "or targeted replace → patch_note; relocate → move_note (never rewrite+delete by hand). "
-        "search_notes results carry anchors (chunk_hash, heading, start_line) that feed directly "
-        "into append_note / patch_note / expand_chunk — no read_note round trip needed. "
-        "Query structured frontmatter with filter_notes; trace [[wiki-links]] with backlinks. "
-        "MCP never writes index.db — writes enqueue paths in ~/.apo/deferred-*.json; "
-        "apo-engine watch (launchd) is the sole index writer (enqueue already wakes the watcher). "
-        "Set APO_MCP_LEAN=1 to hide admin tools (reload_config, memory_status, reindex*)."
-    ),
+_LEAN_BOOT = _env_truthy("APO_MCP_LEAN")
+_MCP_INSTRUCTIONS = (
+    "Apo: vault-relative Markdown; sqlite-vec hybrid search; files are source of truth. "
+    "Writes: write_note (create/overwrite), append_note (add), patch_note (mutate), "
+    "move_note (rename — not read+write+delete). "
+    "search_notes hits expose chunk_hash/heading for append/expand (skip read when possible). "
+    "filter_notes = frontmatter catalog; backlinks = [[wiki-links]]. "
+    "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole index.db "
+    "writer and wakes on enqueue."
+) + (
+    ""
+    if _LEAN_BOOT
+    else " Admin (APO_MCP_LEAN off): reload_config, memory_status, reindex_deferred, reindex."
 )
+mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
 
 # Load vault registry at import (fast); the index backend connects lazily per vault.
 _load_vaults()
@@ -292,14 +290,7 @@ _load_vaults()
     tags={"admin"},
 )
 async def reload_config() -> dict:
-    """Rebuild the vault registry from env + optional runtime JSON, dropping the cached index backend.
-
-    Use after editing the runtime JSON file (``APO_RUNTIME_CONFIG``; default
-    ``~/.apo/mcp-runtime.<collection>.json``) to apply changes without restarting the
-    MCP host. Supported JSON keys: ``APO_COLLECTION``, ``APO_INGEST_DIR``.
-    The vault root is fixed at process start (APO_NOTES_ROOT / APO_INDEX env) — changing
-    it requires a server restart.
-    """
+    """Reload runtime JSON overrides (APO_RUNTIME_CONFIG) without restarting the host. Vault root / APO_INDEX still need a process restart."""
     return await asyncio.to_thread(_reload_config_sync)
 
 
@@ -318,10 +309,7 @@ def _reload_config_sync() -> dict:
 
 @mcp.tool(annotations=_RO, tags={"admin"})
 async def memory_status() -> dict:
-    """Report vault roots, index health, deferred-index queues, and watcher state.
-
-    Use to self-diagnose before retrying failed search/index calls.
-    """
+    """Vault roots, index health, deferred queues, watcher state — diagnose before retrying failures."""
     return await asyncio.to_thread(_memory_status_sync)
 
 
@@ -417,19 +405,7 @@ async def write_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Create a note, or fully overwrite an existing one.
-
-    For edits to existing notes prefer append_note (additive) or patch_note (targeted
-    mutation) — they avoid clobbering concurrent changes and need no prior read.
-
-    Args:
-        path: Vault-relative path, e.g. 'notes/topic.md'.
-        content: Markdown content to write.
-        append: If True, append to the raw file tail instead of overwriting.
-        index: Deprecated — always queues for the watcher (single-writer policy).
-        expected_mtime: If set, fail with stale_write when the file changed since this mtime.
-        vault: Vault name; empty = default vault.
-    """
+    """Create or overwrite a note. Prefer append_note / patch_note for edits. append=True = raw file tail."""
     return await asyncio.to_thread(
         _write_note_sync, path, content, append, index, expected_mtime, vault
     )
@@ -611,18 +587,7 @@ async def patch_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Mutate a note in place — frontmatter fields, targeted replace, batch upsert.
-
-    Ops: set_field, delete_field, replace_text (optional scope.heading + count),
-    replace_section, append / prepend (batch only), append_eof.
-
-    Example batch upsert (history bullet + frontmatter in one call):
-        patch_note("threads/foo.md", [
-            {"op": "append", "heading": "## History", "text": "- 2026-07-09 …"},
-            {"op": "set_field", "field": "last_checked", "value": "2026-07-09 15:30"},
-            {"op": "set_field", "field": "status", "value": "resolved"},
-        ])
-    """
+    """Batch mutate: set_field, delete_field, replace_text (optional scope.heading), replace_section, append/prepend, append_eof."""
     return await asyncio.to_thread(
         _patch_note_sync, path, ops, strict, dry_run, index, verbose, expected_mtime, vault
     )
@@ -670,19 +635,7 @@ async def move_note(
     index: bool | None = None,
     vault: str = "",
 ) -> dict:
-    """Move or rename a note, keeping the search index consistent.
-
-    Removes the old path's indexed chunks and queues (or performs) indexing of the
-    new path. Always prefer this over read + write + delete: it is atomic on disk
-    and never leaves stale chunks pointing at the old location.
-
-    Args:
-        src: Current vault-relative path.
-        dst: New vault-relative path (parent dirs are created).
-        overwrite: Allow replacing an existing destination note.
-        index: Deprecated — always queues for the watcher (single-writer policy).
-        vault: Vault name; empty = default vault.
-    """
+    """Atomic rename/move (updates index). Prefer over read+write+delete. overwrite=True replaces dst."""
     return await asyncio.to_thread(_move_note_sync, src, dst, overwrite, index, vault)
 
 
@@ -742,14 +695,7 @@ def _read_note_sync(path: str, heading: str | None = None, vault: str = "") -> d
 
 @mcp.tool(annotations=_RO)
 async def read_note(path: str, heading: str | None = None, vault: str = "") -> dict:
-    """Read a note, optionally scoped to one section.
-
-    Args:
-        path: Vault-relative path.
-        heading: If set (e.g. '## Next action'), return only that section —
-            avoids loading large notes when one section is needed.
-        vault: Vault name; empty = default vault.
-    """
+    """Read a note; optional heading= returns that section only."""
     return await asyncio.to_thread(_read_note_sync, path, heading, vault)
 
 @mcp.tool(annotations=_RO)
@@ -760,24 +706,7 @@ async def search_notes(
     vault: str = "",
     snippet_chars: int = _DEFAULT_SEARCH_SNIPPET,
 ) -> dict:
-    """Hybrid semantic + BM25 **search** across indexed note content.
-
-    Contrast with ``filter_notes`` (frontmatter catalog filter). Use for meaning /
-    recall: “what text is about this?”
-
-    Each result carries write-ready anchors: pass chunk_hash straight to
-    append_note / expand_chunk, or use heading with append_note / patch_note —
-    no read_note round trip needed. Hit ``content`` is a short preview by default
-    (``snippet_chars``); pass ``0`` for the full indexed chunk, or use expand_chunk
-    for the surrounding section.
-
-    Args:
-        query: Free-text search query.
-        top_k: Number of results to return.
-        folder: Scope search to this vault-relative subfolder (e.g. 'projects/').
-        vault: Vault name; empty = default vault.
-        snippet_chars: Truncate each hit's content (default 240). ``0`` = full chunk text.
-    """
+    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). folder= scopes. Hits include chunk_hash/heading for append/expand. content is a snippet (snippet_chars; 0=full)."""
     try:
         v = _vault(vault)
     except VaultError as e:
@@ -859,15 +788,7 @@ async def expand_chunk(
     vault: str = "",
     scope: Literal["section", "chunk"] = "section",
 ) -> dict:
-    """Expand a search-result chunk for progressive recall.
-
-    Args:
-        chunk_hash: From ``search_notes`` / index.
-        vault: Vault name; empty = default vault.
-        scope: ``section`` (default) reads the note and returns the surrounding
-            markdown section. ``chunk`` returns the indexed chunk body with no
-            disk read — use after snippet search when the chunk itself is enough.
-    """
+    """Expand search chunk_hash: scope=section (default, surrounding markdown) or chunk (indexed body, no disk read)."""
     return await asyncio.to_thread(_expand_chunk_sync, chunk_hash, vault, scope)
 
 
@@ -911,25 +832,7 @@ async def filter_notes(
     limit: int = 20,
     vault: str = "",
 ) -> dict:
-    """Filter notes by YAML frontmatter (deterministic catalog query — no embeddings).
-
-    Contrast with ``search_notes`` (ranked content recall). Use for status / tag /
-    date sweeps: “which notes match these fields?”
-
-    `where` maps field names to a scalar (loose equality; list fields match by
-    membership) or an operator object:
-        {"$eq": x} {"$ne": x} {"$lt": x} {"$lte": x} {"$gt": x} {"$gte": x}
-        {"$contains": x}   substring (strings) or membership (lists)
-        {"$exists": bool}
-    ISO dates compare correctly as strings.
-
-    Examples:
-        filter_notes({"status": "active"}, folder="threads/")
-        filter_notes({"last_checked": {"$lt": "2026-07-01"}, "status": {"$ne": "resolved"}})
-        filter_notes({"tags": {"$contains": "compliance"}})
-
-    Returns matches sorted by modification time (newest first) with full frontmatter.
-    """
+    """Frontmatter catalog filter (no embeddings). where: field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists}. Newest first."""
     return await asyncio.to_thread(_filter_notes_sync, where, folder, limit, vault)
 
 
@@ -960,11 +863,7 @@ def _backlinks_sync(path: str, limit: int = 100, vault: str = "") -> dict:
 
 @mcp.tool(annotations=_RO)
 async def backlinks(path: str, limit: int = 100, vault: str = "") -> dict:
-    """Find notes that reference this note via [[wiki-links]].
-
-    Matches links against the note's file stem, its vault-relative path (with or
-    without .md), and its frontmatter title. The target itself need not exist yet.
-    """
+    """Notes that [[wiki-link]] this path/stem/title (target need not exist)."""
     return await asyncio.to_thread(_backlinks_sync, path, limit, vault)
 
 
@@ -1004,12 +903,7 @@ def _list_directory_sync(directory: str = "", vault: str = "") -> dict:
 
 @mcp.tool(annotations=_RO)
 async def list_directory(directory: str = "", vault: str = "") -> dict:
-    """List notes and subdirectories within the vault.
-
-    Args:
-        directory: Vault-relative path (empty = vault root).
-        vault: Vault name; empty = default vault.
-    """
+    """List notes and subdirs; directory empty = vault root."""
     return await asyncio.to_thread(_list_directory_sync, directory, vault)
 
 
@@ -1035,7 +929,7 @@ def _recent_activity_sync(limit: int = 10, folder: str = "", vault: str = "") ->
 
 @mcp.tool(annotations=_RO)
 async def recent_activity(limit: int = 10, folder: str = "", vault: str = "") -> dict:
-    """Return the most recently modified markdown notes (optionally scoped to a folder)."""
+    """Most recently modified notes; optional folder= scope."""
     return await asyncio.to_thread(_recent_activity_sync, limit, folder, vault)
 
 
@@ -1071,13 +965,7 @@ def _reindex_deferred_sync(vault: str = "") -> dict:
     tags={"admin"},
 )
 async def reindex_deferred(vault: str = "") -> dict:
-    """Signal the watcher to flush the deferred index queue.
-
-    MCP does not write index.db — the watcher consumes ~/.apo/deferred-*.json. If no
-    watcher is running, this still returns ok (the signal itself succeeded) but nothing
-    will actually get indexed — check the response's `watcher_running` field.
-    Call at the end of batch sweeps for faster pickup (otherwise watcher poll/events).
-    """
+    """Wake watcher to flush deferred queue. Check watcher_running; enqueue already wakes on write."""
     return await asyncio.to_thread(_reindex_deferred_sync, vault)
 
 
@@ -1112,16 +1000,7 @@ def _reindex_sync(force: bool = False, vault: str = "") -> dict:
     tags={"admin"},
 )
 async def reindex(force: bool = False, vault: str = "") -> dict:
-    """Signal the watcher to rebuild the index (also prunes chunks of deleted files).
-
-    MCP does not run index_vault directly — the watcher is the sole SQLite writer. If no
-    watcher is running, this still returns ok (the signal itself succeeded) but the rebuild
-    will never happen — check the response's `watcher_running` field.
-
-    Args:
-        force: Re-embed all content even if unchanged (slow).
-        vault: Vault name; empty = default vault.
-    """
+    """Signal full index rebuild (prunes deleted). force=True re-embeds all. Check watcher_running."""
     return await asyncio.to_thread(_reindex_sync, force, vault)
 
 
