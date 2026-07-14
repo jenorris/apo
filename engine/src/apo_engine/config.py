@@ -46,11 +46,20 @@ DB_TIMEOUT: float = float(os.environ.get("APO_DB_TIMEOUT", "30"))
 # Watcher: prefer filesystem events over poll-only scan.
 WATCH_USE_EVENTS: bool = os.environ.get("APO_WATCH_EVENTS", "1").lower() not in ("0", "false", "no")
 
-# Fallback poll interval when events are active (seconds).
+# Fallback poll interval when events are inactive (seconds).
 WATCH_POLL_INTERVAL: float = float(os.environ.get("WATCH_INTERVAL", "30"))
+
+# Full-vault reconcile when fsevents are on (seconds). Defaults to 5 minutes —
+# day-to-day indexing is event + deferred driven; the walk is a safety net only.
+WATCH_RECONCILE_INTERVAL: float = float(
+    os.environ.get("WATCH_RECONCILE_INTERVAL", "300")
+)
 
 # Coalesce rapid saves / deferred enqueues before embedding (seconds of quiet).
 WATCH_DEBOUNCE: float = float(os.environ.get("APO_WATCH_DEBOUNCE", "2"))
+
+# How often to ping a cached reader connection (seconds). 0 = every call.
+READER_PING_INTERVAL: float = float(os.environ.get("APO_READER_PING", "5"))
 
 # Hybrid search candidate pool floor (per retriever). Overridden via APO_SEARCH_CANDIDATES.
 SEARCH_CANDIDATES: int = int(os.environ.get("APO_SEARCH_CANDIDATES", "24"))

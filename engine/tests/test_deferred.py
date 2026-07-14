@@ -58,6 +58,15 @@ class DeferredQueueTest(unittest.TestCase):
         self.assertEqual(payload, {"force": True})
         self.assertIsNone(deferred.consume_rebuild(self.collection))
 
+    def test_requeue_move(self):
+        old = str(Path("/tmp/old.md").resolve())
+        new = str(Path("/tmp/new.md").resolve())
+        deferred.enqueue_index(self.collection, old)
+        q = deferred.requeue_move(self.collection, old, new)
+        self.assertNotIn(old, q)
+        self.assertIn(new, q)
+        self.assertEqual(deferred.consume_index_queue(self.collection), [new])
+
 
 class ProcessQueuesTest(unittest.TestCase):
     def setUp(self):

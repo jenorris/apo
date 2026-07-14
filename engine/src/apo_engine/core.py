@@ -363,6 +363,8 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
         ("end_line", "INTEGER NOT NULL DEFAULT 1"),
         ("heading_level", "INTEGER NOT NULL DEFAULT 0"),
         ("chunk_hash", "TEXT"),
+        # Body-only hash for embed reuse without re-hashing chunk text on every save.
+        ("content_hash", "TEXT"),
         # Redundant copy of the vector also stored in vec_chunks: vec0 point/batch lookups
         # by rowid are ~200x slower than a plain table (measured: 87ms vs 0.4ms for 185
         # rows) — it's built for KNN search, not this access pattern. Existing rows backfill
@@ -373,6 +375,7 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
         if name not in cols:
             db.execute(f"ALTER TABLE chunks ADD COLUMN {name} {ddl}")
     db.execute("CREATE INDEX IF NOT EXISTS chunks_hash ON chunks(chunk_hash)")
+    db.execute("CREATE INDEX IF NOT EXISTS chunks_content_hash ON chunks(content_hash)")
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
@@ -463,14 +466,22 @@ def reader_connect() -> sqlite3.Connection:
     rebuild — DROP+CREATE from another connection — with no error and no stale results).
     """
     db = getattr(_reader_local, "conn", None)
+    now = time.monotonic()
+    ping_iv = float(getattr(config, "READER_PING_INTERVAL", 5.0))
     if db is not None:
-        try:
-            db.execute("SELECT 1")
+        last = float(getattr(_reader_local, "ping_at", 0.0))
+        if ping_iv <= 0 or (now - last) >= ping_iv:
+            try:
+                db.execute("SELECT 1")
+                _reader_local.ping_at = now
+                return db
+            except sqlite3.Error:
+                pass
+        else:
             return db
-        except sqlite3.Error:
-            pass
     db = connect()
     _reader_local.conn = db
+    _reader_local.ping_at = now
     return db
 
 
@@ -493,23 +504,35 @@ RRF_K = 60  # reciprocal-rank-fusion damping
 
 
 def _fts_query(query: str) -> str | None:
-    """Turn a natural-language query into a safe FTS5 MATCH (OR of quoted terms)."""
+    """Turn a natural-language query into a safe FTS5 MATCH string.
+
+    Short queries (≤4 terms) use AND for precision; longer ones keep OR for recall
+    (agent searches are often multi-keyword phrases that would under-match with AND).
+    """
     terms = [t for t in re.findall(r"\w+", query.lower()) if len(t) > 1][:24]
-    return " OR ".join(f'"{t}"' for t in terms) if terms else None
+    if not terms:
+        return None
+    # ≤2 terms: AND (precise agent lookups). Longer: OR (multi-keyword recall).
+    joined = (
+        " AND ".join(f'"{t}"' for t in terms)
+        if len(terms) <= 2
+        else " OR ".join(f'"{t}"' for t in terms)
+    )
+    return joined
 
 
 def ensure_fts(db: sqlite3.Connection) -> None:
-    """Backfill the FTS index from existing chunks (for indexes built pre-FTS). No embedding."""
+    """Backfill the FTS index from existing chunks (for indexes built pre-FTS). No embedding.
+
+    Uses INSERT…SELECT so chunk text never materializes in Python. Does not commit —
+    callers (_finalize_index_writes) own the transaction boundary.
+    """
     row = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
     if row and row[0] == "1":
         return
     db.execute("DELETE FROM chunks_fts")
-    db.executemany(
-        "INSERT INTO chunks_fts(rowid, text) VALUES (?,?)",
-        db.execute("SELECT id, text FROM chunks").fetchall(),
-    )
+    db.execute("INSERT INTO chunks_fts(rowid, text) SELECT id, text FROM chunks")
     db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_ready','1')")
-    db.commit()
 
 
 def _insert_pending_chunks(
@@ -533,16 +556,29 @@ def _insert_pending_chunks(
     for i, (row, vec) in enumerate(valid):
         rid = start_id + 1 + i
         rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id = row[:8]
+        body_hash = row[8] if len(row) > 8 else _content_hash(ctext)
         blob = sqlite_vec.serialize_float32(vec)
         chunk_rows.append(
-            (rid, rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, blob)
+            (
+                rid,
+                rel,
+                ordi,
+                heading,
+                ctext,
+                start_line,
+                end_line,
+                hlevel,
+                chunk_id,
+                body_hash,
+                blob,
+            )
         )
         vec_rows.append((rid, blob))
         fts_rows.append((rid, ctext))
     db.executemany(
         """INSERT INTO chunks(id, path, ord, heading, text, start_line, end_line, heading_level,
-                               chunk_hash, embedding)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                               chunk_hash, content_hash, embedding)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         chunk_rows,
     )
     db.executemany("INSERT INTO vec_chunks(rowid, embedding) VALUES (?,?)", vec_rows)
@@ -817,19 +853,35 @@ def _deserialize_vec(blob: bytes) -> list[float]:
     return list(struct.unpack(f"{n}f", blob))
 
 
+def _l2_sq_blob(qvec: list[float], blob: bytes) -> float:
+    """Squared L2 between a query vector and a float32 embedding blob (no intermediate list)."""
+    n = len(blob) // 4
+    vals = struct.unpack_from(f"{n}f", blob)
+    dist = 0.0
+    # zip stops at shorter; dims must match — missized blobs get a huge distance.
+    for a, b in zip(qvec, vals):
+        d = a - b
+        dist += d * d
+    if len(vals) != len(qvec):
+        return dist + 1e9
+    return dist
+
+
 def _vectors_by_content_hash(db: sqlite3.Connection, rel: str) -> dict[str, list[float]]:
     """Map chunk body hash → embedding for an existing path (before delete).
 
-    Reads chunks.embedding (a plain column), not vec_chunks — vec0 point/batch lookups by
-    rowid measured ~200x slower than an equivalent plain-table query (it's built for KNN
-    search, not this access pattern). Rows written before this column existed have NULL
-    here until next touched; a miss just means "not reusable", falling back to re-embed.
+    Prefers the ``content_hash`` column (no re-hash). Rows written before that column
+    existed fall back to hashing ``text``. Reads ``chunks.embedding``, not vec_chunks.
     """
     out: dict[str, list[float]] = {}
-    for text, blob in db.execute("SELECT text, embedding FROM chunks WHERE path=?", (rel,)):
+    for chash, text, blob in db.execute(
+        "SELECT content_hash, text, embedding FROM chunks WHERE path=?",
+        (rel,),
+    ):
         if blob is None:
             continue
-        out[_content_hash(text)] = _deserialize_vec(blob)
+        key = chash or _content_hash(text)
+        out[key] = _deserialize_vec(blob)
     return out
 
 
@@ -858,7 +910,7 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
     """Index many notes with partial chunk reuse and one batched Ollama embed."""
     root = config.NOTES_ROOT
     db = writer_connect()
-    plans: list[_FilePlan] = []
+    candidates: list[tuple[str, Path, float]] = []  # rel, path, mtime
     purge_rels: list[str] = []
 
     for raw in sorted(paths, key=lambda p: str(p)):
@@ -870,28 +922,35 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         if not full_path.is_file():
             purge_rels.append(rel)
             continue
-        st_mtime = full_path.stat().st_mtime
-        # mtime match ⇒ skip read+hash entirely (mirrors index_vault's fast path).
-        prev_mtime_hash = db.execute("SELECT mtime, hash FROM files WHERE path=?", (rel,)).fetchone()
-        if prev_mtime_hash is not None and abs(float(prev_mtime_hash[0]) - st_mtime) < 1e-6:
+        candidates.append((rel, full_path, full_path.stat().st_mtime))
+
+    # One catalog lookup for the whole batch instead of N+1 SELECTs.
+    known: dict[str, tuple[float, str]] = {}
+    if candidates:
+        rels = [c[0] for c in candidates]
+        ph = ",".join("?" * len(rels))
+        for path, mtime, h in db.execute(
+            f"SELECT path, mtime, hash FROM files WHERE path IN ({ph})", rels
+        ):
+            known[path] = (float(mtime), h)
+
+    plans: list[_FilePlan] = []
+    for rel, full_path, st_mtime in candidates:
+        prev = known.get(rel)
+        if prev is not None and abs(prev[0] - st_mtime) < 1e-6:
             continue
         text = full_path.read_text(encoding="utf-8", errors="replace")
         file_hash = _file_hash(text)
-        plans.append(
-            _FilePlan(rel=rel, full_path=full_path, mtime=st_mtime, file_hash=file_hash, text=text)
-        )
-
-    # Hash-skip unchanged; keep only plans that need work.
-    active: list[_FilePlan] = []
-    for plan in plans:
-        prev = db.execute("SELECT hash FROM files WHERE path=?", (plan.rel,)).fetchone()
-        if prev and prev[0] == plan.file_hash:
-            db.execute("UPDATE files SET mtime=? WHERE path=?", (plan.mtime, plan.rel))
+        if prev is not None and prev[1] == file_hash:
+            db.execute("UPDATE files SET mtime=? WHERE path=?", (st_mtime, rel))
             continue
-        lines = plan.text.split("\n")
+        plan = _FilePlan(
+            rel=rel, full_path=full_path, mtime=st_mtime, file_hash=file_hash, text=text
+        )
+        lines = text.split("\n")
         locate_cursor = 0
         for ordi, (heading, hlevel, ctext) in enumerate(
-            chunk_markdown(plan.text, config.MAX_CHARS, config.OVERLAP)
+            chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)
         ):
             start_line, end_line = _locate_chunk_lines(lines, ctext, search_from=locate_cursor)
             locate_cursor = start_line
@@ -902,10 +961,12 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
             plan.pending.append(
                 (plan.rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, body_hash)
             )
-        fm = _parse_frontmatter(plan.text)
+        fm = _parse_frontmatter(text)
         plan.frontmatter_json = json.dumps(fm, default=str) if fm else None
-        plan.wikilinks = _extract_wikilinks(plan.text)
-        active.append(plan)
+        plan.wikilinks = _extract_wikilinks(text)
+        plans.append(plan)
+
+    active = plans
 
     # Load reusable embeddings before deletes.
     reuse: dict[str, dict[str, list[float]]] = {}
@@ -957,7 +1018,6 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         print(f"  reused all chunks for {len(active)} file(s) (no embed)", flush=True)
 
     if all_pending:
-        # Insert in durable batches (reuse vectors already filled).
         for i in range(0, len(all_pending), _EMBED_COMMIT_BATCH):
             part_p = all_pending[i : i + _EMBED_COMMIT_BATCH]
             part_v = all_vectors[i : i + _EMBED_COMMIT_BATCH]
@@ -1136,13 +1196,7 @@ def _scoped_vector_hits(
     ).fetchall()
     scored: list[tuple[float, int]] = []
     for rid, blob in rows:
-        vec = _deserialize_vec(blob)
-        # Squared L2 — monotonic with distance for ranking; skip sqrt.
-        dist = 0.0
-        for a, b in zip(qvec, vec):
-            d = a - b
-            dist += d * d
-        scored.append((dist, rid))
+        scored.append((_l2_sq_blob(qvec, blob), rid))
     scored.sort()
     return [(rid, dist) for dist, rid in scored[:n]]
 
@@ -1296,6 +1350,56 @@ def recent_notes(limit: int = 10, folder: str = "") -> list[tuple[str, float]]:
             "SELECT path, mtime FROM files ORDER BY mtime DESC LIMIT ?", (limit,)
         ).fetchall()
     return rows
+
+
+def recent_notes_preview(
+    limit: int = 10, folder: str = ""
+) -> list[tuple[str, float, str]]:
+    """(path, mtime, preview) with first-chunk text prefix — no vault file reads."""
+    db = reader_connect()
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    if folder_prefix:
+        sql = """
+            SELECT f.path, f.mtime,
+                   COALESCE(
+                     (SELECT substr(c.text, 1, 120) FROM chunks c
+                      WHERE c.path = f.path ORDER BY c.ord LIMIT 1),
+                     ''
+                   )
+            FROM files f
+            WHERE f.path LIKE ? ESCAPE '\\'
+            ORDER BY f.mtime DESC LIMIT ?
+        """
+        rows = db.execute(sql, (_escape_like(folder_prefix) + "/%", limit)).fetchall()
+    else:
+        sql = """
+            SELECT f.path, f.mtime,
+                   COALESCE(
+                     (SELECT substr(c.text, 1, 120) FROM chunks c
+                      WHERE c.path = f.path ORDER BY c.ord LIMIT 1),
+                     ''
+                   )
+            FROM files f
+            ORDER BY f.mtime DESC LIMIT ?
+        """
+        rows = db.execute(sql, (limit,)).fetchall()
+    return [(p, mt, preview or "") for p, mt, preview in rows]
+
+
+def frontmatter_field(rel_path: str, field: str) -> Any:
+    """Read one cached frontmatter field for a vault-relative path (index only)."""
+    rel = rel_path.replace("\\", "/")
+    if not rel.endswith(".md"):
+        rel = rel + ".md"
+    db = reader_connect()
+    row = db.execute("SELECT frontmatter FROM files WHERE path=?", (rel,)).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        fm = json.loads(row[0])
+    except json.JSONDecodeError:
+        return None
+    return fm.get(field) if isinstance(fm, dict) else None
 
 
 def list_backlinks(

@@ -152,6 +152,13 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
             )
 
     last_scan = 0.0
+    reconcile = (
+        poll
+        if observer is None
+        else max(poll, float(getattr(config, "WATCH_RECONCILE_INTERVAL", 300.0)))
+    )
+    if verbose and observer is not None:
+        print(f"  reconcile walk every {reconcile:.0f}s (events drive day-to-day index)", flush=True)
     try:
         while not stop.is_set():
             woke = deferred.wake_pending(collection)
@@ -163,7 +170,7 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
                     break
 
             now = time.monotonic()
-            due_poll = observer is None or (now - last_scan) >= poll
+            due_poll = observer is None or (now - last_scan) >= reconcile
 
             if woke or due_poll:
                 for raw in deferred.consume_index_queue(collection):

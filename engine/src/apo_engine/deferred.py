@@ -115,12 +115,32 @@ def consume_purge_queue(collection: str) -> list[str]:
 
 
 def save_index_queue(collection: str, paths: set[str]) -> None:
-    p = _queue_path(collection, "deferred")
+    """Replace the deferred index queue (flocked — safe vs concurrent MCP enqueues)."""
+    ordered = sorted(str(p) for p in paths)
+
+    def replace(_items: list) -> list:
+        return ordered
+
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(sorted(paths)), encoding="utf-8")
+        _locked_update(_queue_path(collection, "deferred"), replace)
     except OSError:
         pass
+
+
+def requeue_move(collection: str, old_path: str, new_path: str) -> set[str]:
+    """Atomically drop ``old_path`` from the deferred queue and enqueue ``new_path``."""
+    old_abs = str(Path(old_path).resolve())
+    new_abs = str(Path(new_path).resolve())
+
+    def upd(items: list) -> list:
+        out = [x for x in items if str(x) != old_abs]
+        if new_abs not in out:
+            out.append(new_abs)
+        return out
+
+    result = _locked_update(_queue_path(collection, "deferred"), upd)
+    touch_wake(collection)
+    return {str(x) for x in result}
 
 
 def signal_rebuild(collection: str, *, force: bool = False) -> None:

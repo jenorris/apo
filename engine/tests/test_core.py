@@ -211,6 +211,16 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertEqual(total, 1)
         self.assertEqual(rows[0][1], "b.md")
 
+    def test_recent_preview_and_frontmatter_field(self):
+        self.write("t.md", "---\ntitle: Hello\n---\n\n# Head\n\npreview body here\n")
+        core.index_vault(verbose=False)
+        rows = core.recent_notes_preview(limit=5)
+        self.assertTrue(rows)
+        path, _mt, preview = rows[0]
+        self.assertEqual(path, "t.md")
+        self.assertIn("preview", preview.lower())
+        self.assertEqual(core.frontmatter_field("t.md", "title"), "Hello")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -78,6 +78,9 @@ After pulling engine changes that touch watch/index code: `just setup && just wa
 Full rebuilds (`just reindex`) commit embeddings in batches with progress lines and clear
 the backlinks table — safe to interrupt and restart without duplicating the graph.
 
+With fsevents on, the watcher reconciles the full vault every `WATCH_RECONCILE_INTERVAL`
+(default 300s); day-to-day indexing is event + deferred-queue driven.
+
 ## Docs map
 
 | Doc | For |

@@ -13,7 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
 from fastmcp import FastMCP
 from apo_engine import config as apo_config
 from apo_engine import core as apo_core
@@ -21,7 +20,6 @@ from apo_engine import deferred as index_deferred
 from apo_engine.mcp_backend import ApoMem
 from apo_engine.markdown_patch import (
     PatchError,
-    _frontmatter_bounds,
     apply_append,
     apply_patch,
     find_section,
@@ -215,23 +213,6 @@ def _lookup_chunk(v: Vault, chunk_hash: str) -> dict[str, Any] | None:
         return None
 
 
-def _jsonable(obj: Any) -> Any:
-    """Coerce YAML-parsed values (dates, etc.) into JSON-safe structures."""
-    return json.loads(json.dumps(obj, default=str))
-
-
-def _parse_frontmatter(text: str) -> dict:
-    lines = normalize_lines(text)
-    bounds = _frontmatter_bounds(lines)
-    if bounds is None:
-        return {}
-    try:
-        data = yaml.safe_load("\n".join(lines[bounds[0] + 1 : bounds[1]]))
-    except yaml.YAMLError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def _watcher_status() -> dict[str, Any]:
     """Best-effort liveness check for the watcher PID file.
 
@@ -310,6 +291,10 @@ async def reload_config() -> dict:
     The vault root is fixed at process start (APO_NOTES_ROOT / APO_INDEX env) — changing
     it requires a server restart.
     """
+    return await asyncio.to_thread(_reload_config_sync)
+
+
+def _reload_config_sync() -> dict:
     _load_vaults()
     return {
         "ok": True,
@@ -328,6 +313,10 @@ async def memory_status() -> dict:
 
     Use to self-diagnose before retrying failed search/index calls.
     """
+    return await asyncio.to_thread(_memory_status_sync)
+
+
+def _memory_status_sync() -> dict:
     vaults: dict[str, Any] = {}
     for name, v in VAULTS.items():
         info: dict[str, Any] = {
@@ -662,9 +651,9 @@ def _move_note_sync(
     os.replace(src_full, dst_full)
 
     purged = _purge_index(v, Path(src_abs))
-    v.deferred.discard(src_abs)
-    _save_deferred(v)
-    _maybe_index(v, dst_full, index)
+    v.deferred = index_deferred.requeue_move(v.collection, src_abs, str(dst_full.resolve()))
+    # requeue_move already wakes + enqueues dst; skip a second flock/_maybe_index.
+    del index  # API compat
 
     out: dict[str, Any] = {"ok": True, "src": src, "dst": dst, "index_purged": purged, "mtime": _mtime(dst_full)}
     if not purged:
@@ -854,6 +843,34 @@ async def expand_chunk(chunk_hash: str, vault: str = "") -> dict:
     return await asyncio.to_thread(_expand_chunk_sync, chunk_hash, vault)
 
 
+def _filter_notes_sync(
+    where: dict,
+    folder: str = "",
+    limit: int = 20,
+    vault: str = "",
+) -> dict:
+    try:
+        v = _vault(vault)
+        base = _safe_resolve(v, folder) if folder else v.root
+    except (VaultError, ValueError) as e:
+        return _err(error="bad_path", message=str(e))
+    if not base.exists():
+        return _err(error="not_found", message=f"folder not found: {folder}")
+    if not isinstance(where, dict) or not where:
+        return _err(error="bad_query", message="`where` must be a non-empty object of field conditions")
+
+    total, matches = apo_core.filter_notes(where, folder, limit)
+    notes = [
+        {
+            "path": path,
+            "modified": datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
+            "frontmatter": fm,
+        }
+        for mt, path, fm in matches
+    ]
+    return {"ok": True, "total": total, "notes": notes}
+
+
 @mcp.tool(annotations=_RO)
 async def filter_notes(
     where: dict,
@@ -880,26 +897,32 @@ async def filter_notes(
 
     Returns matches sorted by modification time (newest first) with full frontmatter.
     """
+    return await asyncio.to_thread(_filter_notes_sync, where, folder, limit, vault)
+
+
+def _backlinks_sync(path: str, limit: int = 100, vault: str = "") -> dict:
     try:
         v = _vault(vault)
-        base = _safe_resolve(v, folder) if folder else v.root
+        full = _safe_resolve(v, path)
     except (VaultError, ValueError) as e:
-        return _err(error="bad_path", message=str(e))
-    if not base.exists():
-        return _err(error="not_found", message=f"folder not found: {folder}")
-    if not isinstance(where, dict) or not where:
-        return _err(error="bad_query", message="`where` must be a non-empty object of field conditions")
+        return _err(path=path, error="bad_path", message=str(e))
 
-    total, matches = await asyncio.to_thread(apo_core.filter_notes, where, folder, limit)
-    notes = [
-        {
-            "path": path,
-            "modified": datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
-            "frontmatter": _jsonable(fm),
-        }
-        for mt, path, fm in matches
-    ]
-    return {"ok": True, "total": total, "notes": notes}
+    rel = str(Path(path.replace("\\", "/"))).removesuffix(".md")
+    targets = {Path(rel).name.lower(), rel.lower()}
+    # Title from cached frontmatter — no vault file read.
+    title = apo_core.frontmatter_field(path, "title")
+    if isinstance(title, str) and title.strip():
+        targets.add(title.strip().lower())
+
+    exclude_source = ""
+    try:
+        if full.exists():
+            exclude_source = str(full.relative_to(v.root))
+    except ValueError:
+        pass
+    rows = apo_core.list_backlinks(targets, exclude_source, limit)
+    hits = [{"path": src, "line": line, "text": text} for src, line, text in rows]
+    return {"ok": True, "target": path, "total": len(hits), "backlinks": hits}
 
 
 @mcp.tool(annotations=_RO)
@@ -909,23 +932,7 @@ async def backlinks(path: str, limit: int = 100, vault: str = "") -> dict:
     Matches links against the note's file stem, its vault-relative path (with or
     without .md), and its frontmatter title. The target itself need not exist yet.
     """
-    try:
-        v = _vault(vault)
-        full = _safe_resolve(v, path)
-    except (VaultError, ValueError) as e:
-        return _err(path=path, error="bad_path", message=str(e))
-
-    rel = str(Path(path.replace("\\", "/"))).removesuffix(".md")
-    targets = {Path(rel).name.lower(), rel.lower()}
-    if full.exists():
-        title = _parse_frontmatter(full.read_text(encoding="utf-8")).get("title")
-        if isinstance(title, str) and title.strip():
-            targets.add(title.strip().lower())
-
-    exclude_source = str(full.relative_to(v.root)) if full.exists() else ""
-    rows = await asyncio.to_thread(apo_core.list_backlinks, targets, exclude_source, limit)
-    hits = [{"path": src, "line": line, "text": text} for src, line, text in rows]
-    return {"ok": True, "target": path, "total": len(hits), "backlinks": hits}
+    return await asyncio.to_thread(_backlinks_sync, path, limit, vault)
 
 
 ###############################################################################
@@ -942,15 +949,23 @@ def _list_directory_sync(directory: str = "", vault: str = "") -> dict:
     if not target.exists():
         return _err(error="not_found", message=f"directory not found: {directory}")
     entries = []
-    for p in sorted(target.iterdir()):
-        if p.name.startswith("."):
-            continue
-        entries.append({
-            "name": p.name,
-            "type": "directory" if p.is_dir() else "note",
-            "path": str(p.relative_to(v.root)),
-            "size": p.stat().st_size if p.is_file() else None,
-        })
+    with os.scandir(target) as it:
+        for ent in sorted(it, key=lambda e: e.name):
+            if ent.name.startswith("."):
+                continue
+            is_dir = ent.is_dir(follow_symlinks=False)
+            size = None
+            if not is_dir and ent.is_file(follow_symlinks=False):
+                try:
+                    size = ent.stat(follow_symlinks=False).st_size
+                except OSError:
+                    size = None
+            entries.append({
+                "name": ent.name,
+                "type": "directory" if is_dir else "note",
+                "path": str(Path(ent.path).relative_to(v.root)),
+                "size": size,
+            })
     return {"ok": True, "path": directory, "entries": entries}
 
 
@@ -965,9 +980,7 @@ async def list_directory(directory: str = "", vault: str = "") -> dict:
     return await asyncio.to_thread(_list_directory_sync, directory, vault)
 
 
-@mcp.tool(annotations=_RO)
-async def recent_activity(limit: int = 10, folder: str = "", vault: str = "") -> dict:
-    """Return the most recently modified markdown notes (optionally scoped to a folder)."""
+def _recent_activity_sync(limit: int = 10, folder: str = "", vault: str = "") -> dict:
     try:
         v = _vault(vault)
         base = _safe_resolve(v, folder) if folder else v.root
@@ -975,20 +988,22 @@ async def recent_activity(limit: int = 10, folder: str = "", vault: str = "") ->
         return _err(error="bad_path", message=str(e))
     if not base.exists():
         return _err(error="not_found", message=f"folder not found: {folder}")
-    rows = await asyncio.to_thread(apo_core.recent_notes, limit, folder)
-    notes = []
-    for path, mtime in rows:
-        first_line = ""
-        try:
-            first_line = (v.root / path).read_text(encoding="utf-8").splitlines()[0][:120]
-        except (OSError, IndexError):
-            pass
-        notes.append({
+    rows = apo_core.recent_notes_preview(limit, folder)
+    notes = [
+        {
             "path": path,
             "modified": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
-            "first_line": first_line,
-        })
+            "first_line": first_line.replace("\n", " ").strip(),
+        }
+        for path, mtime, first_line in rows
+    ]
     return {"ok": True, "notes": notes}
+
+
+@mcp.tool(annotations=_RO)
+async def recent_activity(limit: int = 10, folder: str = "", vault: str = "") -> dict:
+    """Return the most recently modified markdown notes (optionally scoped to a folder)."""
+    return await asyncio.to_thread(_recent_activity_sync, limit, folder, vault)
 
 
 ###############################################################################
@@ -996,15 +1011,7 @@ async def recent_activity(limit: int = 10, folder: str = "", vault: str = "") ->
 ###############################################################################
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
-async def reindex_deferred(vault: str = "") -> dict:
-    """Signal the watcher to flush the deferred index queue.
-
-    MCP does not write index.db — the watcher consumes ~/.apo/deferred-*.json. If no
-    watcher is running, this still returns ok (the signal itself succeeded) but nothing
-    will actually get indexed — check the response's `watcher_running` field.
-    Call at the end of batch sweeps for faster pickup (otherwise watcher poll/events).
-    """
+def _reindex_deferred_sync(vault: str = "") -> dict:
     try:
         targets = list(VAULTS.values()) if not vault.strip() else [_vault(vault)]
     except VaultError as e:
@@ -1027,17 +1034,18 @@ async def reindex_deferred(vault: str = "") -> dict:
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
-async def reindex(force: bool = False, vault: str = "") -> dict:
-    """Signal the watcher to rebuild the index (also prunes chunks of deleted files).
+async def reindex_deferred(vault: str = "") -> dict:
+    """Signal the watcher to flush the deferred index queue.
 
-    MCP does not run index_vault directly — the watcher is the sole SQLite writer. If no
-    watcher is running, this still returns ok (the signal itself succeeded) but the rebuild
-    will never happen — check the response's `watcher_running` field.
-
-    Args:
-        force: Re-embed all content even if unchanged (slow).
-        vault: Vault name; empty = default vault.
+    MCP does not write index.db — the watcher consumes ~/.apo/deferred-*.json. If no
+    watcher is running, this still returns ok (the signal itself succeeded) but nothing
+    will actually get indexed — check the response's `watcher_running` field.
+    Call at the end of batch sweeps for faster pickup (otherwise watcher poll/events).
     """
+    return await asyncio.to_thread(_reindex_deferred_sync, vault)
+
+
+def _reindex_sync(force: bool = False, vault: str = "") -> dict:
     try:
         v = _vault(vault)
         index_deferred.signal_rebuild(v.collection, force=force)
@@ -1061,6 +1069,21 @@ async def reindex(force: bool = False, vault: str = "") -> dict:
         return _err(error="bad_vault", message=str(e))
     except Exception as e:
         return _err(error="reindex_failed", message=str(e))
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
+async def reindex(force: bool = False, vault: str = "") -> dict:
+    """Signal the watcher to rebuild the index (also prunes chunks of deleted files).
+
+    MCP does not run index_vault directly — the watcher is the sole SQLite writer. If no
+    watcher is running, this still returns ok (the signal itself succeeded) but the rebuild
+    will never happen — check the response's `watcher_running` field.
+
+    Args:
+        force: Re-embed all content even if unchanged (slow).
+        vault: Vault name; empty = default vault.
+    """
+    return await asyncio.to_thread(_reindex_sync, force, vault)
 
 
 ###############################################################################
