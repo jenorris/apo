@@ -761,6 +761,7 @@ def index_file(full_path: Path, verbose: bool = False) -> int:
 def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
     """Index many notes with partial chunk reuse and one batched Ollama embed."""
     root = config.NOTES_ROOT
+    db = writer_connect()
     plans: list[_FilePlan] = []
     purge_rels: list[str] = []
 
@@ -773,14 +774,19 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         if not full_path.is_file():
             purge_rels.append(rel)
             continue
+        st_mtime = full_path.stat().st_mtime
+        # mtime match ⇒ skip read+hash entirely (mirrors index_vault's fast path). The
+        # watcher calls this per fsevent — an editor/sync tool touching mtime without
+        # touching content is common, and this was previously reading (and hashing) the
+        # full file on every such touch before ever checking whether it could be skipped.
+        prev_mtime_hash = db.execute("SELECT mtime, hash FROM files WHERE path=?", (rel,)).fetchone()
+        if prev_mtime_hash is not None and abs(float(prev_mtime_hash[0]) - st_mtime) < 1e-6:
+            continue
         text = full_path.read_text(encoding="utf-8", errors="replace")
         file_hash = _file_hash(text)
-        mtime = full_path.stat().st_mtime
         plans.append(
-            _FilePlan(rel=rel, full_path=full_path, mtime=mtime, file_hash=file_hash, text=text)
+            _FilePlan(rel=rel, full_path=full_path, mtime=st_mtime, file_hash=file_hash, text=text)
         )
-
-    db = writer_connect()
 
     # Hash-skip unchanged; keep only plans that need work.
     active: list[_FilePlan] = []
