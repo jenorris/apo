@@ -95,6 +95,15 @@ def find_section(
     if not heading or heading.lower() in ("eof", "preamble"):
         raise PatchError("anchor_not_found", f"heading anchor required (got {heading!r})")
 
+    if level is None:
+        # A caller writing "### Notes" is specifying depth 3 explicitly — that's the whole
+        # point of the #-count. _normalize_heading strips it for text comparison, so without
+        # this it's silently discarded: "### Notes" and "## Notes" become the same target and
+        # match whichever occurs first in the document, regardless of which level was asked for.
+        m = _HEADING_RE.match(heading.strip())
+        if m:
+            level = len(m.group(1))
+
     target = _normalize_heading(heading)
     sections = parse_sections(lines)
     matches = [s for s in sections if _normalize_heading(s.title) == target and (level is None or s.level == level)]
