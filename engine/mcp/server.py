@@ -524,17 +524,7 @@ async def append_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Add content to a note (under a heading, at an indexed chunk, or at the file tail).
-
-    Examples:
-        append_note("logs/2026-07-09.md", "**15:30** — …\\n\\n",
-                    heading="## Session log", position="start")
-        append_note("threads/foo.md", "- update\\n", heading="## History")
-        append_note("threads/foo.md", "- follow-up\\n", chunk_hash="<from search_notes>")
-
-    Anchor resolution: chunk_hash → heading → file tail (EOF).
-    On anchor_not_found the error includes fuzzy heading suggestions.
-    """
+    """Add text under heading, at search chunk_hash, or EOF (chunk_hash → heading → EOF)."""
     return await asyncio.to_thread(
         _append_note_sync,
         path,
