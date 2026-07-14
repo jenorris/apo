@@ -1042,18 +1042,27 @@ def filter_notes(where: dict, folder: str = "", limit: int = 20) -> tuple[int, l
     Returns (total_matches, top-`limit` matches), each match (mtime, path, frontmatter),
     sorted by mtime desc. No filesystem walk — reads the index only.
     """
+    folder_prefix = folder.replace("\\", "/").strip("/")
     db = connect()
     try:
-        rows = db.execute(
-            "SELECT path, mtime, frontmatter FROM files WHERE frontmatter IS NOT NULL"
-        ).fetchall()
+        # Push the folder scope into SQL like recent_notes/list_backlinks already do — a
+        # narrow folder= previously still fetched and JSON-decoded every frontmatter blob
+        # in the vault before filtering in Python (measured: 1894 rows read/decoded for a
+        # query scoped to a 70-file folder).
+        if folder_prefix:
+            rows = db.execute(
+                "SELECT path, mtime, frontmatter FROM files "
+                "WHERE frontmatter IS NOT NULL AND path LIKE ? ESCAPE '\\'",
+                (_escape_like(folder_prefix) + "/%",),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT path, mtime, frontmatter FROM files WHERE frontmatter IS NOT NULL"
+            ).fetchall()
     finally:
         db.close()
-    folder_prefix = folder.replace("\\", "/").strip("/")
     matches: list[tuple[float, str, dict]] = []
     for path, mtime, fm_json in rows:
-        if folder_prefix and not path.startswith(folder_prefix + "/"):
-            continue
         try:
             fm = json.loads(fm_json) if fm_json else {}
         except json.JSONDecodeError:
