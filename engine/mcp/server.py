@@ -227,6 +227,37 @@ def _parse_frontmatter(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _watcher_status() -> dict[str, Any]:
+    """Best-effort liveness check for the watcher PID file.
+
+    PID existence alone (os.kill(pid, 0)) isn't process *identity* — if the watcher died
+    and the PID was later recycled by an unrelated process, that check false-positives.
+    Cross-check /proc/<pid>/cmdline where available (Linux); degrade to existence-only
+    elsewhere rather than fail the check outright.
+    """
+    status: dict[str, Any] = {"pid_file": str(WATCH_PID_FILE), "running": False}
+    try:
+        pid = int(WATCH_PID_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return status
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return status
+    status["pid"] = pid
+    cmdline_path = Path(f"/proc/{pid}/cmdline")
+    if cmdline_path.exists():
+        try:
+            cmdline = cmdline_path.read_bytes().decode("utf-8", "replace")
+        except OSError:
+            cmdline = ""
+        if cmdline and not ("apo-engine" in cmdline and "watch" in cmdline):
+            status["warning"] = f"pid {pid} is alive but doesn't look like apo-engine watch (stale/recycled pid?)"
+            return status
+    status["running"] = True
+    return status
+
+
 def _top_level_dirs(v: Vault) -> list[str]:
     if not v.root.exists():
         return []
@@ -309,13 +340,7 @@ async def memory_status() -> dict:
             info["index"] = f"error: {e}"
         vaults[name] = info
 
-    watcher = {"pid_file": str(WATCH_PID_FILE), "running": False}
-    try:
-        pid = int(WATCH_PID_FILE.read_text().strip())
-        os.kill(pid, 0)
-        watcher.update(pid=pid, running=True)
-    except (OSError, ValueError):
-        pass
+    watcher = _watcher_status()
 
     return {
         "ok": True,
@@ -892,7 +917,9 @@ async def recent_activity(limit: int = 10, folder: str = "", vault: str = "") ->
 async def reindex_deferred(vault: str = "") -> dict:
     """Signal the watcher to flush the deferred index queue.
 
-    MCP does not write index.db — the watcher consumes ~/.apo/deferred-*.json.
+    MCP does not write index.db — the watcher consumes ~/.apo/deferred-*.json. If no
+    watcher is running, this still returns ok (the signal itself succeeded) but nothing
+    will actually get indexed — check the response's `watcher_running` field.
     Call at the end of batch sweeps for faster pickup (otherwise watcher poll/events).
     """
     try:
@@ -905,14 +932,24 @@ async def reindex_deferred(vault: str = "") -> dict:
         index_deferred.touch_wake(v.collection)
         v.deferred = index_deferred.load_index_queue(v.collection)
         queued += len(v.deferred)
-    return {"ok": True, "queued": queued, "signaled": True}
+
+    watcher = _watcher_status()
+    out: dict[str, Any] = {"ok": True, "queued": queued, "signaled": True, "watcher_running": watcher["running"]}
+    if not watcher["running"]:
+        out["warning"] = (
+            "no watcher detected — the deferred queue is signaled but nothing will consume it "
+            "until apo-engine watch is running (just watch-status)"
+        )
+    return out
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
 async def reindex(force: bool = False, vault: str = "") -> dict:
     """Signal the watcher to rebuild the index (also prunes chunks of deleted files).
 
-    MCP does not run index_vault directly — the watcher is the sole SQLite writer.
+    MCP does not run index_vault directly — the watcher is the sole SQLite writer. If no
+    watcher is running, this still returns ok (the signal itself succeeded) but the rebuild
+    will never happen — check the response's `watcher_running` field.
 
     Args:
         force: Re-embed all content even if unchanged (slow).
@@ -923,7 +960,20 @@ async def reindex(force: bool = False, vault: str = "") -> dict:
         index_deferred.signal_rebuild(v.collection, force=force)
         v.deferred.clear()
         index_deferred.save_index_queue(v.collection, set())
-        return {"ok": True, "vault": v.name, "rebuild_signaled": True, "force": force}
+        watcher = _watcher_status()
+        out: dict[str, Any] = {
+            "ok": True,
+            "vault": v.name,
+            "rebuild_signaled": True,
+            "force": force,
+            "watcher_running": watcher["running"],
+        }
+        if not watcher["running"]:
+            out["warning"] = (
+                "no watcher detected — the rebuild is signaled but will never run "
+                "until apo-engine watch is running (just watch-status)"
+            )
+        return out
     except VaultError as e:
         return _err(error="bad_vault", message=str(e))
     except Exception as e:
