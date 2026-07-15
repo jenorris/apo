@@ -81,6 +81,15 @@ class TestPatch(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIn('timestamp: "2026-07-09T19:30:00Z"', result.content)
 
+    def test_set_field_quotes_invalid_date(self):
+        # Invalid YYYY-MM-DD raises ValueError inside PyYAML; must still quote safely.
+        result = apply_patch(
+            THREAD,
+            [{"op": "set_field", "field": "effective_date", "value": "2017-00-00"}],
+        )
+        self.assertTrue(result.ok)
+        self.assertIn('effective_date: "2017-00-00"', result.content)
+
     def test_replace_text_scoped(self):
         result = apply_patch(
             THREAD,

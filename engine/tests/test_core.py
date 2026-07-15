@@ -32,6 +32,22 @@ def _fake_embed(texts: list[str], **kwargs) -> list[list[float]]:
     return out
 
 
+class TestParseFrontmatter(unittest.TestCase):
+    def test_invalid_yaml_timestamp_kept_as_string(self):
+        # Real vault failure: CU Boulder agreement had effective_date: 2017-00-00.
+        # PyYAML matches it as a timestamp then raises ValueError (not YAMLError).
+        fm = core._parse_frontmatter(
+            "---\ntitle: CU Boulder\neffective_date: 2017-00-00\nstatus: active\n---\n\n# Body\n"
+        )
+        self.assertEqual(fm.get("title"), "CU Boulder")
+        self.assertEqual(fm.get("effective_date"), "2017-00-00")
+        self.assertEqual(fm.get("status"), "active")
+
+    def test_valid_yaml_date_still_parses(self):
+        fm = core._parse_frontmatter("---\neffective_date: 2017-06-15\n---\n\n# Body\n")
+        self.assertEqual(str(fm.get("effective_date")), "2017-06-15")
+
+
 class TestChunkMarkdown(unittest.TestCase):
     def test_real_heading_levels(self):
         text = "# Alpha\n\nalpha body\n\n### Gamma\n\ngamma body\n"
@@ -153,6 +169,18 @@ class TestIndexAndSearch(VaultTestCase):
 
 
 class TestIndexLifecycle(VaultTestCase):
+    def test_index_vault_survives_invalid_date_frontmatter(self):
+        self.write(
+            "bad-date.md",
+            "---\ntitle: Bad Date\neffective_date: 2017-00-00\n---\n\n# Bad Date\n\nbody zebra\n",
+        )
+        self.write("ok.md", "---\ntitle: Ok\n---\n\n# Ok\n\nother content\n")
+        stats = core.index_vault(verbose=False)
+        self.assertGreaterEqual(stats.added, 2)
+        self.assertIn("bad-date.md", self.chunk_paths())
+        self.assertEqual(core.frontmatter_field("bad-date.md", "effective_date"), "2017-00-00")
+        self.assertEqual(core.frontmatter_field("bad-date.md", "title"), "Bad Date")
+
     def test_incremental_skips_unchanged_and_prunes_deleted(self):
         note = self.write("a.md", "# A\n\nalpha content\n")
         self.write("b.md", "# B\n\nbeta content\n")

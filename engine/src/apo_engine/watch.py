@@ -213,51 +213,56 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
             now = time.monotonic()
             due_poll = observer is None or (now - last_scan) >= reconcile
 
-            if woke or due_poll:
-                for raw in deferred.consume_index_queue(collection):
-                    p = _note_path(root, raw)
-                    if p is None:
-                        try:
-                            cand = Path(raw).resolve()
-                            cand.relative_to(root)
-                            p = cand if cand.suffix == ".md" else None
-                        except (OSError, ValueError):
-                            p = None
-                    if p is not None:
-                        debouncer.touch(p, now=now)
+            try:
+                if woke or due_poll:
+                    for raw in deferred.consume_index_queue(collection):
+                        p = _note_path(root, raw)
+                        if p is None:
+                            try:
+                                cand = Path(raw).resolve()
+                                cand.relative_to(root)
+                                p = cand if cand.suffix == ".md" else None
+                            except (OSError, ValueError):
+                                p = None
+                        if p is not None:
+                            debouncer.touch(p, now=now)
 
-                stats = core.process_queues(
-                    collection,
-                    scan_vault=due_poll,
-                    consume_index=False,
-                    verbose=verbose,
-                )
-            else:
-                stats = core.QueueStats()
+                    stats = core.process_queues(
+                        collection,
+                        scan_vault=due_poll,
+                        consume_index=False,
+                        verbose=verbose,
+                    )
+                else:
+                    stats = core.QueueStats()
 
-            now = time.monotonic()
-            ready = debouncer.ready(now=now)
-            if ready:
-                stats.indexed += _index_paths(ready, verbose=verbose)
+                now = time.monotonic()
+                ready = debouncer.ready(now=now)
+                if ready:
+                    stats.indexed += _index_paths(ready, verbose=verbose)
 
-            if verbose and (stats.indexed or stats.purged or (
-                stats.vault_stats
-                and (stats.vault_stats.added or stats.vault_stats.changed or stats.vault_stats.removed)
-            )):
-                parts = []
-                if stats.indexed:
-                    parts.append(f"{stats.indexed} file(s)")
-                if stats.purged:
-                    parts.append(f"{stats.purged} purged")
-                if stats.vault_stats and (
-                    stats.vault_stats.added or stats.vault_stats.changed or stats.vault_stats.removed
-                ):
-                    vs = stats.vault_stats
-                    parts.append(f"scan +{vs.added} ~{vs.changed} -{vs.removed}")
-                print(f"  indexed: {', '.join(parts)}", flush=True)
+                if verbose and (stats.indexed or stats.purged or (
+                    stats.vault_stats
+                    and (stats.vault_stats.added or stats.vault_stats.changed or stats.vault_stats.removed)
+                )):
+                    parts = []
+                    if stats.indexed:
+                        parts.append(f"{stats.indexed} file(s)")
+                    if stats.purged:
+                        parts.append(f"{stats.purged} purged")
+                    if stats.vault_stats and (
+                        stats.vault_stats.added or stats.vault_stats.changed or stats.vault_stats.removed
+                    ):
+                        vs = stats.vault_stats
+                        parts.append(f"scan +{vs.added} ~{vs.changed} -{vs.removed}")
+                    print(f"  indexed: {', '.join(parts)}", flush=True)
 
-            if due_poll:
-                last_scan = now
+                if due_poll:
+                    last_scan = now
+            except Exception as e:
+                # Never let one bad note / transient indexer fault kill the daemon.
+                if verbose:
+                    print(f"  watch cycle error (continuing): {e}", flush=True)
 
             due_in = debouncer.next_due_in()
             if due_in is not None:

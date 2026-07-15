@@ -196,7 +196,9 @@ def _quote_yaml_value(value: str) -> str:
         # keep correct than a punctuation blocklist that will always miss cases like this.
         try:
             needs_quote = yaml.safe_load(value) != value
-        except yaml.YAMLError:
+        except (yaml.YAMLError, ValueError, OverflowError):
+            # Invalid timestamps (e.g. 2017-00-00) raise ValueError inside PyYAML's
+            # datetime constructor — not YAMLError. Quote them so writes survive.
             needs_quote = True
     if needs_quote:
         escaped = value.replace("\\", "\\\\").replace('"', '\\"')

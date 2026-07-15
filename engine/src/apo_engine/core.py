@@ -305,13 +305,37 @@ def _content_hash(text: str) -> str:
     return hashlib.blake2b(text.encode("utf-8", "replace"), digest_size=8).hexdigest()
 
 
+def _construct_yaml_timestamp(loader: yaml.SafeLoader, node: yaml.Node):
+    """Parse YAML timestamps; keep invalid date-like scalars as strings.
+
+    PyYAML matches ``YYYY-MM-DD`` (and friends) as timestamps before validating
+    month/day. Bad vault values like ``2017-00-00`` then raise ``ValueError``
+    from ``datetime.date`` — which is *not* a ``YAMLError``, so a bare
+    ``safe_load`` can crash the watcher. Fall back to the original scalar.
+    """
+    try:
+        return yaml.constructor.SafeConstructor.construct_yaml_timestamp(loader, node)
+    except (ValueError, OverflowError):
+        return loader.construct_scalar(node)
+
+
+class _FrontmatterLoader(yaml.SafeLoader):
+    """SafeLoader that tolerates invalid YAML 1.1 timestamp scalars."""
+
+
+_FrontmatterLoader.add_constructor(
+    "tag:yaml.org,2002:timestamp",
+    _construct_yaml_timestamp,
+)
+
+
 def _parse_frontmatter(text: str) -> dict:
     m = _FRONTMATTER_YAML.match(text)
     if not m:
         return {}
     try:
-        data = yaml.safe_load(m.group(1))
-    except yaml.YAMLError:
+        data = yaml.load(m.group(1), Loader=_FrontmatterLoader)
+    except (yaml.YAMLError, ValueError, OverflowError):
         return {}
     return data if isinstance(data, dict) else {}
 
