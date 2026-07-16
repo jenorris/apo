@@ -197,10 +197,14 @@ def _maybe_index(v: Vault, full: Path, index: bool | None) -> None:
     Sync on purpose: write/read tools run via ``asyncio.to_thread``, so flock/queue I/O
     must not sit in an ``async def`` body (that would still block the event loop).
     ``index`` is API-compat only; the watcher owns all SQLite writes.
+    Best-effort: enqueue failure must not fail an already-successful note write.
     """
     del index
-    # enqueue_index returns the updated set — avoid a second flock/re-read.
-    v.deferred = index_deferred.enqueue_index(v.collection, str(full.resolve()))
+    try:
+        # enqueue_index returns the updated set — avoid a second flock/re-read.
+        v.deferred = index_deferred.enqueue_index(v.collection, str(full.resolve()))
+    except Exception:
+        pass
 
 
 def _purge_index(v: Vault, full: Path) -> bool:
@@ -544,17 +548,21 @@ def _patch_note_sync(
     result = apply_patch(content, ops_to_dicts(ops), strict=strict)
 
     if dry_run:
+        failed = sum(1 for r in result.results if r.get("status") == "error")
         return {
             "ok": result.ok,
             "path": path,
             "dry_run": True,
             "applied": result.applied,
+            "failed": failed,
+            "partial": bool(failed and result.applied),
             "results": result.results,
             "error": result.error,
             "suggestions": result.suggestions,
         }
 
-    if not result.ok:
+    # Non-strict: persist partial applies; surface failures via ok=false + results.
+    if not result.ok and (strict or result.applied == 0):
         return _err(
             path=path,
             applied=result.applied,
@@ -566,15 +574,18 @@ def _patch_note_sync(
     full.write_text(result.content, encoding="utf-8")
     _maybe_index(v, full, index)
 
+    failed = sum(1 for r in result.results if r.get("status") == "error")
     out: dict[str, Any] = {
-        "ok": True,
+        "ok": result.ok,
         "path": path,
         "applied": result.applied,
+        "failed": failed,
+        "partial": bool(failed and result.applied),
         "bytes": full.stat().st_size,
         "mtime": _mtime(full),
+        "results": result.results,
     }
     if verbose:
-        out["results"] = result.results
         out["lines_added"] = result.lines_added
     return out
 

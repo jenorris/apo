@@ -418,13 +418,26 @@ def apply_patch(content: str, ops: list[dict[str, Any]], *, strict: bool = False
         )
 
     new_content = join_lines(lines, had_nl)
+    failed = sum(1 for r in results if r.get("status") == "error")
     return PatchResult(
-        ok=True,
-        content=new_content,
+        ok=failed == 0,
+        content=new_content if (applied > 0 or failed == 0) else original,
         applied=applied,
         results=results,
         suggestions=all_suggestions,
         lines_added=lines_added,
+        error=(
+            next(
+                (
+                    {"op_index": r["op"], "code": r["code"], "message": r["message"]}
+                    for r in results
+                    if r["status"] == "error"
+                ),
+                None,
+            )
+            if failed
+            else None
+        ),
     )
 
 

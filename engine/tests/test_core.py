@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from apo_engine import config, core
@@ -181,6 +182,70 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertEqual(core.frontmatter_field("bad-date.md", "effective_date"), "2017-00-00")
         self.assertEqual(core.frontmatter_field("bad-date.md", "title"), "Bad Date")
 
+    def test_embed_drop_does_not_mtime_skip(self):
+        """Failed embeds must not stamp files — otherwise the next pass never retries."""
+        self.write("good.md", "# Good\n\nstable zebra body\n")
+        self.write("bad.md", "# Bad\n\npoisoned wombat body\n")
+
+        real_embed = core.embed
+
+        def flaky(texts, **kwargs):
+            out = []
+            for t in texts:
+                if "poisoned" in t:
+                    out.append(None)
+                else:
+                    out.extend(real_embed([t], **kwargs))
+            return out
+
+        core.embed = flaky
+        try:
+            core.index_vault(verbose=False)
+        finally:
+            core.embed = real_embed
+
+        paths = set(self.chunk_paths())
+        self.assertIn("good.md", paths)
+        self.assertNotIn("bad.md", paths)
+        db = sqlite3.connect(config.INDEX_PATH)
+        try:
+            stamped = {
+                r[0] for r in db.execute("SELECT path FROM files").fetchall()
+            }
+        finally:
+            db.close()
+        self.assertIn("good.md", stamped)
+        self.assertNotIn("bad.md", stamped)
+
+        # Healthy reindex picks up the previously dropped note (no mtime-skip trap).
+        core.index_vault(verbose=False)
+        self.assertIn("bad.md", self.chunk_paths())
+
+    def test_index_files_skips_unreadable_without_aborting_batch(self):
+        good = self.write("good.md", "# Good\n\nbatch zebra\n")
+        bad = self.write("bad.md", "# Bad\n\nbatch wombat\n")
+        core.index_vault(verbose=False)
+
+        real_read = Path.read_text
+
+        def flaky_read(self, *args, **kwargs):
+            if self.name == "bad.md":
+                raise OSError("simulated lock")
+            return real_read(self, *args, **kwargs)
+
+        # Bump mtimes so index_files doesn't mtime-skip.
+        import time as _time
+        _time.sleep(0.01)
+        good.write_text("# Good\n\nbatch zebra updated\n", encoding="utf-8")
+        bad.write_text("# Bad\n\nbatch wombat updated\n", encoding="utf-8")
+
+        with unittest.mock.patch.object(Path, "read_text", flaky_read):
+            core.index_files([good, bad], verbose=False)
+
+        hits = core.search("zebra updated", k=3, hybrid=False)
+        self.assertTrue(hits)
+        self.assertEqual(hits[0].path, "good.md")
+
     def test_incremental_skips_unchanged_and_prunes_deleted(self):
         note = self.write("a.md", "# A\n\nalpha content\n")
         self.write("b.md", "# B\n\nbeta content\n")
@@ -247,6 +312,37 @@ class TestIndexLifecycle(VaultTestCase):
         total, rows = core.filter_notes({"tags": {"$contains": "y"}})
         self.assertEqual(total, 1)
         self.assertEqual(rows[0][1], "b.md")
+
+    def test_filter_notes_bare_eq_matches_list_tags(self):
+        # Bare/eq used to SQL-pushdown and miss array FM; must match like $contains.
+        self.write("a.md", "---\nstatus: active\ntags: [apo, vault]\n---\n\n# A\n\nbody a\n")
+        self.write("b.md", "---\nstatus: active\ntags: [other]\n---\n\n# B\n\nbody b\n")
+        core.index_vault(verbose=False)
+        total, rows = core.filter_notes({"tags": "apo"})
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "a.md")
+        total, rows = core.filter_notes({"tags": {"$eq": "apo"}})
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "a.md")
+
+    def test_filter_notes_loose_eq_numeric_string(self):
+        self.write("a.md", "---\ncount: 5\n---\n\n# A\n\nbody a\n")
+        self.write("b.md", "---\ncount: 7\n---\n\n# B\n\nbody b\n")
+        core.index_vault(verbose=False)
+        total, rows = core.filter_notes({"count": "5"})
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "a.md")
+
+    def test_filter_notes_exists_still_sql_pages(self):
+        for i in range(5):
+            self.write(
+                f"n{i}.md",
+                f"---\nstatus: active\nseq: {i}\n---\n\n# N{i}\n\nbody {i}\n",
+            )
+        core.index_vault(verbose=False)
+        total, rows = core.filter_notes({"status": {"$exists": True}}, limit=2)
+        self.assertEqual(total, 5)
+        self.assertEqual(len(rows), 2)
 
     def test_filter_notes_in_operator(self):
         self.write("a.md", "---\nstatus: active\ntags: [x, z]\n---\n\n# A\n\nbody a\n")

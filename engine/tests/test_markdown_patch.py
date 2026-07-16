@@ -137,8 +137,11 @@ class TestPatch(unittest.TestCase):
             ],
             strict=False,
         )
-        self.assertTrue(result.ok)
+        # Partial success: applied ops persist in content, but ok is false so callers notice.
+        self.assertFalse(result.ok)
+        self.assertEqual(result.applied, 1)
         self.assertIn("status: resolved", result.content)
+        self.assertTrue(any(r.get("status") == "error" for r in result.results))
 
     def test_replace_section(self):
         result = apply_patch(

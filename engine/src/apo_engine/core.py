@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
+import heapq
 
 import sqlite_vec
 import yaml
@@ -32,7 +33,8 @@ from . import config
 _query_embed_cache: OrderedDict[str, tuple[float, list[float]]] = OrderedDict()
 _query_embed_lock = threading.Lock()
 # Reused across search() calls — avoid ThreadPoolExecutor create/teardown per query.
-_search_pool = ThreadPoolExecutor(max_workers=1)
+# >1 so concurrent MCP searches (each already on a worker thread) can embed in parallel.
+_search_pool = ThreadPoolExecutor(max_workers=4)
 
 # Schema bootstrap once per index path per process.
 _schema_ready: set[str] = set()
@@ -689,28 +691,57 @@ def _embed_and_store_pending(
     pending: list[PendingChunk] | list[tuple],
     *,
     verbose: bool = False,
-) -> int:
-    """Embed pending chunks in batches, committing after each batch for crash durability."""
+) -> tuple[int, set[str]]:
+    """Embed pending chunks in batches, committing after each batch for crash durability.
+
+    Returns ``(stored_count, dropped_paths)`` — paths with any ``None`` vector must not
+    receive a files mtime/hash stamp, or the next pass will mtime-skip and never retry.
+    """
     if not pending:
-        return 0
+        return 0, set()
     total = len(pending)
     if verbose:
         print(
             f"  embedding {total} chunks via {config.EMBED_BACKEND}:{config.MODEL_NAME} ...",
             flush=True,
         )
-    stored = 0
+    # Embed everything first so we know which paths failed before writing any chunks.
+    all_vectors: list[list[float] | None] = []
     batch = _EMBED_COMMIT_BATCH
     for i in range(0, total, batch):
         part = pending[i : i + batch]
-        vectors = embed([t[3] for t in part], verbose=False)
-        n = _insert_pending_chunks(db, part, vectors)
-        stored += n
-        db.commit()
+        all_vectors.extend(embed([t[3] for t in part], verbose=False))
         if verbose:
-            done = min(i + batch, total)
-            print(f"  … {done}/{total} embedded ({stored} stored)", flush=True)
-    return stored
+            print(f"  … embedded {min(i + batch, total)}/{total}", flush=True)
+
+    dropped = {row[0] for row, vec in zip(pending, all_vectors) if vec is None}
+    stored = 0
+    for i in range(0, total, batch):
+        part = pending[i : i + batch]
+        part_v = all_vectors[i : i + batch]
+        # Skip every chunk for a dropped path so we never leave a partial note indexed.
+        filtered_p: list = []
+        filtered_v: list = []
+        for row, vec in zip(part, part_v):
+            if row[0] in dropped or vec is None:
+                continue
+            filtered_p.append(row)
+            filtered_v.append(vec)
+        if filtered_p:
+            stored += _insert_pending_chunks(db, filtered_p, filtered_v)
+            db.commit()
+            if verbose:
+                print(
+                    f"  … stored {min(i + batch, total)}/{total} ({stored} kept)",
+                    flush=True,
+                )
+    if dropped and verbose:
+        print(
+            f"  WARNING: {len(dropped)} file(s) left unstamped after embed drop — "
+            "will retry on next index (not a permanent mtime-skip)",
+            flush=True,
+        )
+    return stored, dropped
 
 
 def _ensure_vec_table(db: sqlite3.Connection, dim: int) -> None:
@@ -909,6 +940,9 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
     on_disk: set[str] = set()
 
     pending: list[PendingChunk] = []
+    # Defer files stamps until after embed — a premature mtime/hash stamp makes the next
+    # pass skip the note forever when some chunks fail to embed.
+    file_stamps: list[tuple[str, float, str, str | None]] = []
     stats = IndexStats()
     mtime_refreshed = False
 
@@ -939,6 +973,8 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
             continue
         if prev:
             _delete_path(db, rel)
+            # Drop the catalog row so a failed embed cannot mtime-skip on the old stamp.
+            db.execute("DELETE FROM files WHERE path=?", (rel,))
             stats.changed += 1
         else:
             stats.added += 1
@@ -961,9 +997,8 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                 "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
                 [(rel, tk, ts, ln, tx) for ln, tk, ts, tx in wikilinks],
             )
-        db.execute(
-            "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter) VALUES (?,?,?,?)",
-            (rel, st.st_mtime, h, json.dumps(fm, default=str) if fm else None),
+        file_stamps.append(
+            (rel, st.st_mtime, h, json.dumps(fm, default=str) if fm else None)
         )
 
     if limit is None:
@@ -977,10 +1012,24 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
     if work_done or mtime_refreshed:
         db.commit()
 
+    dropped: set[str] = set()
     if pending:
-        stats.chunks = _embed_and_store_pending(db, pending, verbose=verbose)
-        _finalize_index_writes(db)
-    elif work_done:
+        stats.chunks, dropped = _embed_and_store_pending(db, pending, verbose=verbose)
+    stamped = 0
+    for rel, mtime, h, fm_json in file_stamps:
+        if rel in dropped:
+            # Undo added/changed counts for notes we could not finish indexing.
+            if rel in known:
+                stats.changed = max(0, stats.changed - 1)
+            else:
+                stats.added = max(0, stats.added - 1)
+            continue
+        db.execute(
+            "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter) VALUES (?,?,?,?)",
+            (rel, mtime, h, fm_json),
+        )
+        stamped += 1
+    if stamped or dropped or work_done or mtime_refreshed:
         _finalize_index_writes(db)
 
     stats.seconds = time.time() - t0
@@ -1067,15 +1116,77 @@ def _deserialize_vec(blob: bytes) -> list[float]:
 def _l2_sq_blob(qvec: list[float], blob: bytes) -> float:
     """Squared L2 between a query vector and a float32 embedding blob (no intermediate list)."""
     n = len(blob) // 4
-    vals = struct.unpack_from(f"{n}f", blob)
+    vals = memoryview(blob).cast("f")
     dist = 0.0
-    # zip stops at shorter; dims must match — missized blobs get a huge distance.
-    for a, b in zip(qvec, vals):
-        d = a - b
+    qn = len(qvec)
+    lim = n if n < qn else qn
+    for i in range(lim):
+        d = qvec[i] - vals[i]
         dist += d * d
-    if len(vals) != len(qvec):
+    if n != qn:
         return dist + 1e9
     return dist
+
+
+def _scoped_vector_hits(
+    db: sqlite3.Connection,
+    qvec: list[float],
+    folder_prefix: str,
+    n: int,
+    *,
+    prefer_ids: list[int] | None = None,
+) -> list[tuple[int, float]]:
+    """Exact L2 ranks over folder-scoped ``chunks.embedding``.
+
+    When ``prefer_ids`` is set (hybrid + FTS hits), score those first. If the folder is
+    large (``> SCOPED_VECTOR_FULL_SCAN_MAX``) and we have prefer_ids, skip the full
+    folder scan — FTS already constrained candidates. Otherwise scan the folder with a
+    bounded heap (no full-list sort).
+    """
+    scored: list[tuple[float, int]] = []
+
+    if prefer_ids:
+        ph = ",".join("?" * len(prefer_ids))
+        for rid, blob in db.execute(
+            f"SELECT id, embedding FROM chunks WHERE id IN ({ph}) AND embedding IS NOT NULL",
+            prefer_ids,
+        ):
+            scored.append((_l2_sq_blob(qvec, blob), rid))
+
+    max_full = int(getattr(config, "SCOPED_VECTOR_FULL_SCAN_MAX", 500))
+    skip_full = bool(prefer_ids) and len(prefer_ids) >= n
+    if not skip_full:
+        # Cheap count: if folder is huge and we already have FTS prefs, stay prefiltered.
+        folder_like = _escape_like(folder_prefix) + "/%"
+        if prefer_ids:
+            cnt = db.execute(
+                "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL AND path LIKE ? ESCAPE '\\'",
+                (folder_like,),
+            ).fetchone()[0]
+            if cnt > max_full:
+                skip_full = True
+
+    if not skip_full:
+        seen = {rid for _, rid in scored}
+        rows = db.execute(
+            """SELECT id, embedding FROM chunks
+               WHERE embedding IS NOT NULL AND path LIKE ? ESCAPE '\\'""",
+            (_escape_like(folder_prefix) + "/%",),
+        )
+        heap: list[tuple[float, int]] = []
+        for rid, blob in rows:
+            if rid in seen:
+                continue
+            dist = _l2_sq_blob(qvec, blob)
+            if len(heap) < n:
+                heapq.heappush(heap, (-dist, rid))  # max-heap via negation
+            elif dist < -heap[0][0]:
+                heapq.heapreplace(heap, (-dist, rid))
+        for neg_dist, rid in heap:
+            scored.append((-neg_dist, rid))
+
+    scored.sort()
+    return [(rid, dist) for dist, rid in scored[:n]]
 
 
 def _vectors_by_content_hash(db: sqlite3.Connection, rel: str) -> dict[str, list[float]]:
@@ -1133,7 +1244,11 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         if not full_path.is_file():
             purge_rels.append(rel)
             continue
-        candidates.append((rel, full_path, full_path.stat().st_mtime))
+        try:
+            candidates.append((rel, full_path, full_path.stat().st_mtime))
+        except OSError:
+            # Vanished/locked between is_file and stat — skip; don't abort the batch.
+            continue
 
     # One catalog lookup for the whole batch instead of N+1 SELECTs.
     known: dict[str, tuple[float, str]] = {}
@@ -1150,7 +1265,10 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         prev = known.get(rel)
         if prev is not None and abs(prev[0] - st_mtime) < 1e-6:
             continue
-        text = full_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            text = full_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
         file_hash = _file_hash(text)
         if prev is not None and prev[1] == file_hash:
             db.execute("UPDATE files SET mtime=? WHERE path=?", (st_mtime, rel))
@@ -1184,6 +1302,8 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         _delete_path_by_rel(db, rel)
     for plan in active:
         _delete_path(db, plan.rel)
+        # Drop catalog row until embed succeeds — avoids permanent mtime-skip on drop.
+        db.execute("DELETE FROM files WHERE path=?", (plan.rel,))
         if plan.wikilinks:
             db.executemany(
                 "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
@@ -1196,6 +1316,7 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
     all_vectors: list[list[float] | None] = []
     texts_to_embed: list[str] = []
     embed_slots: list[int] = []
+    pending_owner: list[str] = []  # path per all_pending slot
 
     for plan in active:
         by_hash = reuse.get(plan.rel, {})
@@ -1203,6 +1324,7 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
             body_hash = row[8]
             slot = len(all_pending)
             all_pending.append(row)
+            pending_owner.append(plan.rel)
             if body_hash in by_hash:
                 all_vectors.append(by_hash[body_hash])
             else:
@@ -1224,28 +1346,47 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
     elif verbose and active:
         print(f"  reused all chunks for {len(active)} file(s) (no embed)", flush=True)
 
+    dropped = {
+        pending_owner[i]
+        for i, vec in enumerate(all_vectors)
+        if vec is None and i < len(pending_owner)
+    }
+    # Notes with no chunks never appear in all_vectors — they are not dropped.
     if all_pending:
         for i in range(0, len(all_pending), _EMBED_COMMIT_BATCH):
             part_p = all_pending[i : i + _EMBED_COMMIT_BATCH]
             part_v = all_vectors[i : i + _EMBED_COMMIT_BATCH]
-            _insert_pending_chunks(db, part_p, part_v)
-            db.commit()
+            part_o = pending_owner[i : i + _EMBED_COMMIT_BATCH]
+            keep_p: list = []
+            keep_v: list = []
+            for row, vec, owner in zip(part_p, part_v, part_o):
+                if owner in dropped or vec is None:
+                    continue
+                keep_p.append(row)
+                keep_v.append(vec)
+            if keep_p:
+                _insert_pending_chunks(db, keep_p, keep_v)
+                db.commit()
             if verbose and texts_to_embed:
                 print(
                     f"  … stored {min(i + _EMBED_COMMIT_BATCH, len(all_pending))}/{len(all_pending)} chunks",
                     flush=True,
                 )
+    stamped = 0
     for plan in active:
+        if plan.rel in dropped:
+            continue
         db.execute(
             "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter) VALUES (?,?,?,?)",
             (plan.rel, plan.mtime, plan.file_hash, plan.frontmatter_json),
         )
-    if purge_rels or active:
+        stamped += 1
+    if purge_rels or stamped or dropped:
         _finalize_index_writes(db)
     else:
         db.commit()  # mtime-only updates
 
-    return len(active) + len(purge_rels)
+    return stamped + len(purge_rels)
 
 
 def _delete_path_by_rel(db: sqlite3.Connection, rel: str) -> None:
@@ -1351,7 +1492,8 @@ def search(
         return []
 
     if folder_prefix:
-        vrows = _scoped_vector_hits(db, qvec, folder_prefix, n)
+        prefer = [r[0] for r in frows] if frows else None
+        vrows = _scoped_vector_hits(db, qvec, folder_prefix, n, prefer_ids=prefer)
     else:
         vrows = db.execute(
             "SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance",
@@ -1418,25 +1560,6 @@ def search(
     return hits
 
 
-def _scoped_vector_hits(
-    db: sqlite3.Connection,
-    qvec: list[float],
-    folder_prefix: str,
-    n: int,
-) -> list[tuple[int, float]]:
-    """Exact L2 ranks over folder-scoped ``chunks.embedding`` — no global vec0 KNN."""
-    rows = db.execute(
-        """SELECT id, embedding FROM chunks
-           WHERE embedding IS NOT NULL AND path LIKE ? ESCAPE '\\'""",
-        (_escape_like(folder_prefix) + "/%",),
-    ).fetchall()
-    scored: list[tuple[float, int]] = []
-    for rid, blob in rows:
-        scored.append((_l2_sq_blob(qvec, blob), rid))
-    scored.sort()
-    return [(rid, dist) for dist, rid in scored[:n]]
-
-
 def stats() -> dict:
     db = reader_connect()
     out = {
@@ -1463,11 +1586,11 @@ def stats() -> dict:
 def _sql_pushdown_predicates(where: dict) -> tuple[str, list[Any]] | None:
     """AND of simple frontmatter predicates as SQL, or None if any clause needs Python.
 
-    Supported: bare equality, ``{$eq: v}``, ``{$exists: bool}`` on safe identifier keys.
-    ``{$in: [...]}`` and richer operators fall back to Python (correct for scalar *and*
-    array frontmatter fields).
-    ``json_extract`` returns SQL TEXT/INT/REAL for JSON scalars, so we compare to the
-    native Python value (bools as 0/1), not wrapped ``json()`` literals.
+    Supported for SQL: ``{$exists: bool}`` on safe identifier keys.
+    Bare equality / ``{$eq: v}`` fall back to Python — ``json_extract = ?`` misses
+    list-valued fields (tags/aliases) that ``_match_condition`` treats as membership,
+    and SQL lacks ``_loose_eq`` type coercion.
+    ``{$in: [...]}`` and richer operators also fall back to Python.
     """
     clauses: list[str] = []
     params: list[Any] = []
@@ -1476,23 +1599,12 @@ def _sql_pushdown_predicates(where: dict) -> tuple[str, list[Any]] | None:
             return None
         jpath = f"$.{key}"
         if not isinstance(cond, dict):
-            if cond is None:
-                clauses.append("json_extract(frontmatter, ?) IS NULL")
-                params.append(jpath)
-            else:
-                clauses.append("json_extract(frontmatter, ?) = ?")
-                params.extend([jpath, _sql_json_scalar(cond)])
-            continue
+            # Bare equality — may be list-valued FM; use Python matcher.
+            return None
         ops = set(cond)
         if ops == {"$eq"}:
-            rhs = cond["$eq"]
-            if rhs is None:
-                clauses.append("json_extract(frontmatter, ?) IS NULL")
-                params.append(jpath)
-            else:
-                clauses.append("json_extract(frontmatter, ?) = ?")
-                params.extend([jpath, _sql_json_scalar(rhs)])
-        elif ops == {"$exists"}:
+            return None
+        if ops == {"$exists"}:
             if bool(cond["$exists"]):
                 clauses.append("json_extract(frontmatter, ?) IS NOT NULL")
             else:
@@ -1517,9 +1629,9 @@ def filter_notes(where: dict, folder: str = "", limit: int = 20) -> tuple[int, l
     """Deterministic frontmatter query over the cached `files.frontmatter` column.
 
     Returns (total_matches, top-`limit` matches), each match (mtime, path, frontmatter),
-    sorted by mtime desc. No filesystem walk — reads the index only. Simple equality /
-    exists filters push into SQL via ``json_extract``; richer operators fall back to
-    Python over the (already folder-scoped) row set.
+    sorted by mtime desc. No filesystem walk — reads the index only. ``$exists`` (and
+    empty ``where``) push into SQL via ``json_extract``; equality and richer operators
+    use the Python matcher (correct for list-valued fields and loose type coercion).
 
     SQL-pushdown path uses ``COUNT(*)`` plus ``ORDER BY mtime DESC LIMIT`` — never
     materializes every matching frontmatter blob just to page ``limit`` rows.

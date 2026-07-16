@@ -67,6 +67,10 @@ READER_PING_INTERVAL: float = float(os.environ.get("APO_READER_PING", "5"))
 # Hybrid search candidate pool floor (per retriever). Overridden via APO_SEARCH_CANDIDATES.
 SEARCH_CANDIDATES: int = int(os.environ.get("APO_SEARCH_CANDIDATES", "24"))
 
+# Folder-scoped vector scan: above this chunk count, hybrid search scores FTS hits only
+# (avoids O(folder) Python L2 on huge folders). Override via APO_SCOPED_VECTOR_FULL_SCAN_MAX.
+SCOPED_VECTOR_FULL_SCAN_MAX: int = int(os.environ.get("APO_SCOPED_VECTOR_FULL_SCAN_MAX", "500"))
+
 # Cache identical query embeddings (seconds TTL; 0 disables).
 QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "120"))
 QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "64"))
