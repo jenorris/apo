@@ -10,6 +10,8 @@
     <a href="docs/onboard-prompt.md"><strong>Onboard</strong></a>
     ·
     <a href="docs/contracts/"><strong>Contracts</strong></a>
+    ·
+    <a href="docs/multi-vault.md"><strong>Multi-vault</strong></a>
   </p>
   <p>
     <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white" />
@@ -61,6 +63,8 @@ filter_notes({"okf_type": "Project"}, limit=50)
 No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall.
 
 **Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/config/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard on `write_note` / `patch_note`. Templates to copy: [docs/contracts/](docs/contracts/) (especially [okf-bundle.md](docs/contracts/okf-bundle.md)). Override: `APO_OKF_ENFORCEMENT=off|soft|hard`. Legacy: `okf-profile.schema.yaml` / `APO_OKF_PROFILE` still accepted.
+
+**Multi-vault:** set `APO_VAULTS` to a JSON registry (per-root `index` + `collection`). Tools take `vault=`; watch runs one thread per vault. See [docs/multi-vault.md](docs/multi-vault.md).
 
 
 ## Features
@@ -205,6 +209,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/quickstart.md](docs/quickstart.md) | Install, MCP registration, verify, troubleshoot |
 | [docs/onboard-prompt.md](docs/onboard-prompt.md) | Infer vault rules → propose persistent agent instructions |
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
+| [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_VAULTS`) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |
 

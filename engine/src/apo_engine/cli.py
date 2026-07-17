@@ -5,38 +5,54 @@ import argparse
 import json
 import sys
 
-from . import config, core
+from . import config, core, vaults
 from .watch import run_watch
 
 
+def _bind_cli_vault(name: str | None = None):
+    default, bindings = vaults.load_bindings()
+    key = (name or "").strip() or default
+    if key not in bindings:
+        raise SystemExit(f"unknown vault {key!r}; available: {sorted(bindings)}")
+    return vaults.bind(bindings[key]), bindings[key]
+
+
 def _cmd_index(args) -> int:
-    print(f"Indexing {config.NOTES_ROOT}  →  {config.INDEX_PATH}")
-    s = core.index_vault(rebuild=args.rebuild, limit=args.limit)
-    print(
-        f"done in {s.seconds:.1f}s — "
-        f"+{s.added} new, ~{s.changed} changed, -{s.removed} removed, {s.chunks} chunks embedded"
-    )
+    cm, b = _bind_cli_vault(getattr(args, "vault", None))
+    with cm:
+        print(f"[{b.name}] Indexing {vaults.notes_root()}  →  {vaults.index_path()}")
+        s = core.index_vault(rebuild=args.rebuild, limit=args.limit)
+        print(
+            f"done in {s.seconds:.1f}s — "
+            f"+{s.added} new, ~{s.changed} changed, -{s.removed} removed, {s.chunks} chunks embedded"
+        )
     return 0
 
 
 def _cmd_search(args) -> int:
-    hits = core.search(args.query, k=args.k, exclude=args.exclude or None, hybrid=not args.no_hybrid)
-    if args.json:
-        print(json.dumps([h.__dict__ for h in hits]))
-        return 0
-    if not hits:
-        print("(no results)")
-        return 0
-    for i, h in enumerate(hits, 1):
-        crumb = f"  ⟩ {h.heading}" if h.heading else ""
-        print(f"\n{i}. [{h.score:.3f}] {h.path}{crumb}")
-        snippet = " ".join(h.text.split())
-        print(f"   {snippet[:280]}{'…' if len(snippet) > 280 else ''}")
+    cm, b = _bind_cli_vault(getattr(args, "vault", None))
+    with cm:
+        hits = core.search(args.query, k=args.k, exclude=args.exclude or None, hybrid=not args.no_hybrid)
+        if args.json:
+            print(json.dumps([h.__dict__ for h in hits]))
+            return 0
+        if not hits:
+            print("(no results)")
+            return 0
+        for i, h in enumerate(hits, 1):
+            crumb = f"  ⟩ {h.heading}" if h.heading else ""
+            print(f"\n{i}. [{h.score:.3f}] {h.path}{crumb}")
+            snippet = " ".join(h.text.split())
+            print(f"   {snippet[:280]}{'…' if len(snippet) > 280 else ''}")
     return 0
 
 
 def _cmd_stats(args) -> int:
-    print(json.dumps(core.stats(), indent=2))
+    cm, b = _bind_cli_vault(getattr(args, "vault", None))
+    with cm:
+        data = core.stats()
+        data["vault"] = b.name
+        print(json.dumps(data, indent=2))
     return 0
 
 
@@ -52,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     pi = sub.add_parser("index", help="build / update the index")
     pi.add_argument("--rebuild", action="store_true", help="drop and rebuild from scratch")
     pi.add_argument("--limit", type=int, default=None, help="index only the first N notes (smoke test)")
+    pi.add_argument("--vault", default="", help="vault name from APO_VAULTS (default vault if empty)")
     pi.set_defaults(func=_cmd_index)
 
     ps = sub.add_parser("search", help="query the index")
@@ -60,9 +77,11 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--exclude", nargs="*", default=[], help="glob(s) of paths to drop (e.g. 'private/*')")
     ps.add_argument("--json", action="store_true")
     ps.add_argument("--no-hybrid", action="store_true", help="vector-only (skip FTS5 BM25 fusion)")
+    ps.add_argument("--vault", default="", help="vault name from APO_VAULTS")
     ps.set_defaults(func=_cmd_search)
 
     pt = sub.add_parser("stats", help="index stats")
+    pt.add_argument("--vault", default="", help="vault name from APO_VAULTS")
     pt.set_defaults(func=_cmd_stats)
 
     pw = sub.add_parser("watch", help="watch vault + consume deferred queues (sole index writer)")

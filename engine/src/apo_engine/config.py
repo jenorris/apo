@@ -40,6 +40,10 @@ IGNORE_FILE: Path = _path("APO_IGNORE", str(_ENGINE_ROOT / ".indexignore"))
 # Deferred-queue namespace (MCP + watcher).
 COLLECTION: str = os.environ.get("APO_COLLECTION", "notes_global")
 
+# Multi-vault registry (optional). Path to JSON file or inline JSON object.
+# See apo_engine.vaults / config.env.example. When unset, single vault from NOTES_ROOT.
+VAULTS_CONFIG: str = os.environ.get("APO_VAULTS", "").strip()
+
 # Default wiki path convention for agents (defuddle → write_note); not an MCP tool knob.
 INGEST_DIR: str = os.environ.get("APO_INGEST_DIR", "resources/wiki")
 

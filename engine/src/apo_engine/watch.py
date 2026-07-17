@@ -120,16 +120,73 @@ def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
 
 
 def run_watch(interval: float | None = None, *, use_events: bool | None = None, verbose: bool = True) -> None:
-    """Watch vault for changes; consume deferred/purge queues; index incrementally."""
+    """Watch one or more vaults; consume deferred/purge queues; index incrementally.
+
+    Multi-vault (``APO_VAULTS``): one watcher thread per vault, each bound to its
+    own root + index + deferred collection.
+    """
+    from . import vaults
+
+    _default, bindings = vaults.load_bindings()
+    if len(bindings) == 1:
+        b = next(iter(bindings.values()))
+        with vaults.bind(b):
+            _watch_one(b, interval=interval, use_events=use_events, verbose=verbose)
+        return
+
+    if verbose:
+        names = ", ".join(sorted(bindings))
+        print(f"Multi-vault watch: {names}", flush=True)
+
+    stop = threading.Event()
+    threads: list[threading.Thread] = []
+
+    def worker(b: vaults.VaultBinding) -> None:
+        with vaults.bind(b):
+            try:
+                _watch_one(b, interval=interval, use_events=use_events, verbose=verbose, stop=stop)
+            except Exception as e:
+                if verbose:
+                    print(f"  vault {b.name} watch fatal: {e}", flush=True)
+
+    for b in bindings.values():
+        t = threading.Thread(target=worker, args=(b,), name=f"apo-watch-{b.name}", daemon=True)
+        t.start()
+        threads.append(t)
+    try:
+        while any(t.is_alive() for t in threads):
+            for t in threads:
+                t.join(timeout=1.0)
+    except KeyboardInterrupt:
+        stop.set()
+        if verbose:
+            print("\nstopped", flush=True)
+        for t in threads:
+            t.join(timeout=5)
+
+
+def _watch_one(
+    binding,
+    interval: float | None = None,
+    *,
+    use_events: bool | None = None,
+    verbose: bool = True,
+    stop: threading.Event | None = None,
+) -> None:
+    """Watch a single bound vault (caller must ``vaults.bind`` first)."""
     poll = interval if interval is not None else config.WATCH_POLL_INTERVAL
     events_on = config.WATCH_USE_EVENTS if use_events is None else use_events
     debounce_s = config.WATCH_DEBOUNCE
-    root = config.NOTES_ROOT.resolve()
-    collection = config.COLLECTION
+    root = binding.root
+    collection = binding.collection
+    index_path = binding.index
+    label = binding.name
+
+    if stop is None:
+        stop = threading.Event()
 
     debouncer = PathDebouncer(debounce_s)
     event_queue: queue.Queue[str] = queue.Queue()
-    stop = threading.Event()
 
     ignore_res = core._compile_ignore(core._load_ignore())
 
@@ -138,7 +195,6 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
             return
         p = _note_path(root, raw)
         if p is not None:
-            # Second pass: resolved relative path may still match ignore globs
             try:
                 rel = p.relative_to(root).as_posix()
             except ValueError:
@@ -177,18 +233,18 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
             observer.start()
             if verbose:
                 print(
-                    f"Watching {root} (fsevents + {poll}s poll, debounce {debounce_s}s) → {config.INDEX_PATH}",
+                    f"[{label}] Watching {root} (fsevents + {poll}s poll, debounce {debounce_s}s) → {index_path}",
                     flush=True,
                 )
         except ImportError:
             observer = None
             if verbose:
-                print("watchdog not installed — poll-only mode", flush=True)
+                print(f"[{label}] watchdog not installed — poll-only mode", flush=True)
 
     if observer is None:
         if verbose:
             print(
-                f"Watching {root} every {poll}s (debounce {debounce_s}s) → {config.INDEX_PATH}",
+                f"[{label}] Watching {root} every {poll}s (debounce {debounce_s}s) → {index_path}",
                 flush=True,
             )
 
@@ -199,7 +255,7 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
         else max(poll, float(getattr(config, "WATCH_RECONCILE_INTERVAL", 300.0)))
     )
     if verbose and observer is not None:
-        print(f"  reconcile walk every {reconcile:.0f}s (events drive day-to-day index)", flush=True)
+        print(f"  [{label}] reconcile walk every {reconcile:.0f}s", flush=True)
     try:
         while not stop.is_set():
             woke = deferred.wake_pending(collection)
@@ -255,14 +311,13 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
                     ):
                         vs = stats.vault_stats
                         parts.append(f"scan +{vs.added} ~{vs.changed} -{vs.removed}")
-                    print(f"  indexed: {', '.join(parts)}", flush=True)
+                    print(f"  [{label}] indexed: {', '.join(parts)}", flush=True)
 
                 if due_poll:
                     last_scan = now
             except Exception as e:
-                # Never let one bad note / transient indexer fault kill the daemon.
                 if verbose:
-                    print(f"  watch cycle error (continuing): {e}", flush=True)
+                    print(f"  [{label}] watch cycle error (continuing): {e}", flush=True)
 
             due_in = debouncer.next_due_in()
             if due_in is not None:
@@ -275,7 +330,7 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
                 pass
     except KeyboardInterrupt:
         if verbose:
-            print("\nstopped", flush=True)
+            print(f"\n[{label}] stopped", flush=True)
     finally:
         stop.set()
         core.writer_close()

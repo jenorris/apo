@@ -28,6 +28,7 @@ import sqlite_vec
 import yaml
 
 from . import config
+from . import vaults
 
 # Query-embedding LRU (identical agent searches within TTL skip Ollama).
 _query_embed_cache: OrderedDict[str, tuple[float, list[float]]] = OrderedDict()
@@ -455,7 +456,7 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
-    index = Path(path or config.INDEX_PATH).resolve()
+    index = Path(path or vaults.index_path()).resolve()
     key = str(index)
     db = sqlite3.connect(str(index), timeout=config.DB_TIMEOUT)
     db.enable_load_extension(True)
@@ -504,51 +505,72 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     return db
 
 
+def _tls_map(local: threading.local, attr: str) -> dict:
+    m = getattr(local, attr, None)
+    if m is None:
+        m = {}
+        setattr(local, attr, m)
+    return m
+
+
 def writer_connect(
     *, migrate_verbose: bool = False, ensure_hash: bool = True
 ) -> sqlite3.Connection:
-    """Process-local connection for the sole index writer (watch / CLI index)."""
-    db = getattr(_writer_local, "conn", None)
+    """Process-local connection for the sole index writer (watch / CLI index).
+
+    Keyed by active index path so multi-vault watchers/writers do not share one sqlite.
+    """
+    key = _index_key()
+    conns = _tls_map(_writer_local, "conns")
+    pings = _tls_map(_writer_local, "ping_at")
+    db = conns.get(key)
     now = time.monotonic()
     ping_iv = float(getattr(config, "READER_PING_INTERVAL", 5.0))
     if db is not None:
-        last = float(getattr(_writer_local, "ping_at", 0.0))
+        last = float(pings.get(key, 0.0))
         if ping_iv <= 0 or (now - last) >= ping_iv:
             try:
                 db.execute("SELECT 1")
-                _writer_local.ping_at = now
+                pings[key] = now
                 if ensure_hash:
                     _ensure_hash_algo(db, verbose=migrate_verbose)
                 return db
             except sqlite3.Error:
-                writer_close()
+                writer_close(index_key=key)
         else:
             if ensure_hash:
                 _ensure_hash_algo(db, verbose=migrate_verbose)
             return db
     db = connect()
-    _writer_local.conn = db
-    _writer_local.ping_at = now
+    conns[key] = db
+    pings[key] = now
     if ensure_hash:
         _ensure_hash_algo(db, verbose=migrate_verbose)
     return db
 
 
-def writer_close() -> None:
-    db = getattr(_writer_local, "conn", None)
-    if db is None:
-        return
-    try:
-        db.close()
-    except sqlite3.Error:
-        pass
-    _writer_local.conn = None
-    # Allow re-check if the process opens a different/replaced index.db later.
-    _hash_algo_ready.discard(_index_key())
+def writer_close(*, index_key: str | None = None) -> None:
+    """Close writer connection(s). Default: active index only; pass '' to close all."""
+    conns = _tls_map(_writer_local, "conns")
+    pings = _tls_map(_writer_local, "ping_at")
+    if index_key == "":
+        keys = list(conns)
+    else:
+        keys = [index_key if index_key is not None else _index_key()]
+    for key in keys:
+        db = conns.pop(key, None)
+        pings.pop(key, None)
+        if db is None:
+            continue
+        try:
+            db.close()
+        except sqlite3.Error:
+            pass
+        _hash_algo_ready.discard(key)
 
 
 def reader_connect() -> sqlite3.Connection:
-    """Thread-local cached read-only connection.
+    """Thread-local cached read-only connection, keyed by active index path.
 
     Every read function (search, filter_notes, recent_notes, list_backlinks,
     count_chunks, lookup_chunk, stats) previously opened a fresh connect() per call and
@@ -559,39 +581,50 @@ def reader_connect() -> sqlite3.Connection:
     schema changes underneath it (verified: a cached reader survives an external full
     rebuild — DROP+CREATE from another connection — with no error and no stale results).
     """
-    db = getattr(_reader_local, "conn", None)
+    key = _index_key()
+    conns = _tls_map(_reader_local, "conns")
+    pings = _tls_map(_reader_local, "ping_at")
+    db = conns.get(key)
     now = time.monotonic()
     ping_iv = float(getattr(config, "READER_PING_INTERVAL", 5.0))
     if db is not None:
-        last = float(getattr(_reader_local, "ping_at", 0.0))
+        last = float(pings.get(key, 0.0))
         if ping_iv <= 0 or (now - last) >= ping_iv:
             try:
                 db.execute("SELECT 1")
-                _reader_local.ping_at = now
+                pings[key] = now
                 return db
             except sqlite3.Error:
                 pass
         else:
             return db
     db = connect()
-    _reader_local.conn = db
-    _reader_local.ping_at = now
+    conns[key] = db
+    pings[key] = now
     return db
 
 
-def reader_close() -> None:
-    db = getattr(_reader_local, "conn", None)
-    if db is None:
-        return
-    try:
-        db.close()
-    except sqlite3.Error:
-        pass
-    _reader_local.conn = None
+def reader_close(*, index_key: str | None = None) -> None:
+    """Close reader connection(s). Default: active index only; pass '' to close all."""
+    conns = _tls_map(_reader_local, "conns")
+    pings = _tls_map(_reader_local, "ping_at")
+    if index_key == "":
+        keys = list(conns)
+    else:
+        keys = [index_key if index_key is not None else _index_key()]
+    for key in keys:
+        db = conns.pop(key, None)
+        pings.pop(key, None)
+        if db is None:
+            continue
+        try:
+            db.close()
+        except sqlite3.Error:
+            pass
 
 
 def _index_key() -> str:
-    return str(Path(config.INDEX_PATH).resolve())
+    return str(Path(vaults.index_path()).resolve())
 
 
 RRF_K = 60  # reciprocal-rank-fusion damping
@@ -760,7 +793,7 @@ def _ensure_vec_table(db: sqlite3.Connection, dim: int) -> None:
 def _load_ignore() -> list[str]:
     patterns = [".git/*", ".obsidian/*", "*.excalidraw.md"]
     # Engine-level ignore file (APO_IGNORE) plus a vault-root .indexignore, if present.
-    for ignore_file in (config.IGNORE_FILE, config.NOTES_ROOT / ".indexignore"):
+    for ignore_file in (config.IGNORE_FILE, vaults.notes_root() / ".indexignore"):
         if ignore_file.exists():
             for line in ignore_file.read_text().splitlines():
                 line = line.strip()
@@ -824,7 +857,7 @@ def _migrate_hash_algo(db: sqlite3.Connection, *, verbose: bool = False) -> None
     chunk text. Leaves ``chunk_hash`` alone so search anchors stay valid until a file
     is naturally reindexed.
     """
-    root = config.NOTES_ROOT
+    root = vaults.notes_root()
     file_updates: list[tuple[str, str]] = []
     if root.exists():
         for (rel,) in db.execute("SELECT path FROM files"):
@@ -909,7 +942,7 @@ class IndexStats:
 
 def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool = True) -> IndexStats:
     t0 = time.time()
-    root = config.NOTES_ROOT
+    root = vaults.notes_root()
     if not root.exists():
         raise SystemExit(f"NOTES_ROOT does not exist: {root}")
 
@@ -1093,7 +1126,7 @@ def lookup_chunk(chunk_hash: str, *, include_text: bool = True) -> dict | None:
     else:
         rel, heading, start_line, end_line, hlevel, chash = row
         text = None
-    root = config.NOTES_ROOT
+    root = vaults.notes_root()
     out = {
         "source": str(root / rel),
         "path": rel,
@@ -1230,7 +1263,7 @@ def index_file(full_path: Path, verbose: bool = False) -> int:
 
 def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
     """Index many notes with partial chunk reuse and one batched Ollama embed."""
-    root = config.NOTES_ROOT
+    root = vaults.notes_root()
     db = writer_connect()
     candidates: list[tuple[str, Path, float]] = []  # rel, path, mtime
     purge_rels: list[str] = []
@@ -1396,7 +1429,7 @@ def _delete_path_by_rel(db: sqlite3.Connection, rel: str) -> None:
 
 def purge_source(full_path: Path) -> bool:
     try:
-        rel = full_path.resolve().relative_to(config.NOTES_ROOT).as_posix()
+        rel = full_path.resolve().relative_to(vaults.notes_root()).as_posix()
     except ValueError:
         return False
     db = writer_connect()
@@ -1551,7 +1584,7 @@ def search(
                 heading_level=int(hlevel or 0),
                 start_line=int(start_line or 1),
                 end_line=int(end_line or 1),
-                source=str(config.NOTES_ROOT / path),
+                source=str(vaults.notes_root() / path),
                 mtime=float(mtime or 0.0),
             )
         )
@@ -1568,7 +1601,7 @@ def stats() -> dict:
         "model": None,
         "backend": None,
         "dim": None,
-        "index": str(config.INDEX_PATH),
+        "index": str(vaults.index_path()),
     }
     try:
         out["chunks"] = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
@@ -1790,7 +1823,7 @@ def process_queues(
     """
     from . import deferred
 
-    coll = collection or config.COLLECTION
+    coll = collection or vaults.collection()
     out = QueueStats()
 
     rebuild = deferred.consume_rebuild(coll)

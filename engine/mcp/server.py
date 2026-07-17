@@ -19,6 +19,7 @@ from apo_engine import config as apo_config
 from apo_engine import core as apo_core
 from apo_engine import deferred as index_deferred
 from apo_engine import okf as apo_okf
+from apo_engine import vaults as apo_vaults
 from apo_engine.mcp_backend import ApoMem
 from apo_engine.markdown_patch import (
     PatchError,
@@ -49,9 +50,18 @@ class Vault:
     name: str
     root: Path
     collection: str
+    index_path: Path
     ingest_dir: str = "wiki"
     mem: ApoMem | None = None
     deferred: set[str] = dc_field(default_factory=set)
+
+    def binding(self) -> apo_vaults.VaultBinding:
+        return apo_vaults.VaultBinding(
+            name=self.name,
+            root=self.root,
+            index=self.index_path,
+            collection=self.collection,
+        )
 
 
 VAULTS: dict[str, Vault] = {}
@@ -100,31 +110,39 @@ def _save_deferred(v: Vault) -> None:
 
 
 def _load_vaults() -> None:
-    """(Re)build the single default vault from env + runtime JSON.
+    """(Re)build the vault registry from APO_VAULTS or legacy single-root env.
 
-    The engine binds NOTES_ROOT/INDEX once at import, so the registry holds exactly
-    one vault rooted there. Runtime JSON may still override the collection
-    (deferred-queue namespace) and ingest_dir; changing the vault root requires
-    restarting the server with new APO_NOTES_ROOT / APO_INDEX env.
+    Each vault has its own NOTES_ROOT, INDEX_PATH, and deferred COLLECTION.
+    Tool calls pass ``vault=`` (name); empty uses DEFAULT_VAULT.
     """
     global VAULTS, DEFAULT_VAULT
     overrides = _read_runtime_overrides()
-    coll = (
-        _pick(overrides, "APO_COLLECTION", apo_config.COLLECTION) or apo_config.COLLECTION
-    )
     ingest = (
         _pick(overrides, "APO_INGEST_DIR", apo_config.INGEST_DIR) or apo_config.INGEST_DIR
     )
-    VAULTS = {
-        "default": Vault(
-            name="default",
-            root=apo_config.NOTES_ROOT,
+    try:
+        default_name, bindings = apo_vaults.load_bindings()
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        raise VaultError(f"vault registry error: {e}") from e
+
+    # Runtime JSON may still override collection for the *default* vault only
+    # (legacy single-vault desk). Multi-vault collections come from APO_VAULTS.
+    VAULTS = {}
+    for name, b in bindings.items():
+        coll = b.collection
+        if name == default_name:
+            coll = (
+                _pick(overrides, "APO_COLLECTION", coll) or coll
+            )
+        VAULTS[name] = Vault(
+            name=name,
+            root=b.root,
             collection=coll,
+            index_path=b.index,
             ingest_dir=ingest,
             deferred=_load_deferred(coll),
         )
-    }
-    DEFAULT_VAULT = "default"
+    DEFAULT_VAULT = default_name
 
 
 def _vault(name: str = "") -> Vault:
@@ -140,6 +158,11 @@ def _ensure_mem(v: Vault) -> ApoMem:
     if v.mem is None:
         v.mem = ApoMem()
     return v.mem
+
+
+def _bound(v: Vault):
+    """Context manager: activate this vault's root+index for core.* calls."""
+    return apo_vaults.bind(v.binding())
 
 
 def _safe_resolve(v: Vault, relative_path: str) -> Path:
@@ -221,7 +244,8 @@ def _lookup_chunk(
     v: Vault, chunk_hash: str, *, include_text: bool = True
 ) -> dict[str, Any] | None:
     try:
-        return _ensure_mem(v).store.lookup_chunk(chunk_hash, include_text=include_text)
+        with _bound(v):
+            return _ensure_mem(v).store.lookup_chunk(chunk_hash, include_text=include_text)
     except Exception:
         return None
 
@@ -276,7 +300,8 @@ _MCP_INSTRUCTIONS = (
     "search_notes hits expose chunk_hash/heading for append/expand (skip read when possible). "
     "filter_notes = frontmatter catalog; backlinks = [[wiki-links]]. "
     "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole index.db "
-    "writer and wakes on enqueue."
+    "writer and wakes on enqueue. Multi-vault: pass vault= (APO_VAULTS registry); each vault "
+    "has its own index + deferred collection."
 ) + (
     ""
     if _LEAN_BOOT
@@ -308,7 +333,12 @@ def _reload_config_sync() -> dict:
         "ok": True,
         "default_vault": DEFAULT_VAULT,
         "vaults": {
-            name: {"root": str(v.root), "collection": v.collection, "ingest_dir": v.ingest_dir}
+            name: {
+                "root": str(v.root),
+                "index": str(v.index_path),
+                "collection": v.collection,
+                "ingest_dir": v.ingest_dir,
+            }
             for name, v in VAULTS.items()
         },
         "runtime_file": str(_runtime_config_path()),
@@ -327,13 +357,15 @@ def _memory_status_sync() -> dict:
         info: dict[str, Any] = {
             "root": str(v.root),
             "root_exists": v.root.exists(),
+            "index_path": str(v.index_path),
             "collection": v.collection,
             "ingest_dir": v.ingest_dir,
             "default": name == DEFAULT_VAULT,
             "deferred_queue": len(v.deferred),
         }
         try:
-            info["indexed_chunks"] = _ensure_mem(v).store.count()
+            with _bound(v):
+                info["indexed_chunks"] = _ensure_mem(v).store.count()
             info["index"] = "ok"
         except Exception as e:
             info["index"] = f"error: {e}"
@@ -759,23 +791,38 @@ async def search_notes(
     vault: str = "",
     snippet_chars: int = _DEFAULT_SEARCH_SNIPPET,
 ) -> dict:
-    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). folder= scopes. Hits include chunk_hash/heading for append/expand. content is a snippet (snippet_chars; 0=full)."""
+    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). folder= scopes. Hits include chunk_hash/heading for append/expand. content is a snippet (snippet_chars; 0=full). Pass vault= for multi-index."""
+    return await asyncio.to_thread(
+        _search_notes_sync, query, top_k, folder, vault, snippet_chars
+    )
+
+
+def _search_notes_sync(
+    query: str,
+    top_k: int = 5,
+    folder: str = "",
+    vault: str = "",
+    snippet_chars: int = _DEFAULT_SEARCH_SNIPPET,
+) -> dict:
     try:
         v = _vault(vault)
     except VaultError as e:
         return _err(error="bad_vault", message=str(e))
     folder_clean = folder.replace("\\", "/").strip("/")
     try:
-        # Shape (incl. relative ``source``) runs in the worker — no Path.resolve on the loop.
-        results = await _ensure_mem(v).search(
-            query,
-            top_k=top_k,
-            folder=folder_clean,
-            snippet_chars=snippet_chars,
-        )
+        with _bound(v):
+            from apo_engine.mcp_backend import shape_search_hits
+
+            hits = apo_core.search(
+                query,
+                k=top_k,
+                folder=folder_clean,
+                snippet_chars=snippet_chars,
+            )
+            results = shape_search_hits(hits)
     except Exception as e:
         return _err(error="search_failed", message=str(e))
-    return {"ok": True, "results": results}
+    return {"ok": True, "results": results, "vault": v.name}
 
 
 def _expand_chunk_sync(
@@ -866,7 +913,8 @@ def _filter_notes_sync(
         except ValueError as e:
             return _err(error="bad_path", message=str(e))
 
-    total, matches = apo_core.filter_notes(where, folder_clean, limit)
+    with _bound(v):
+        total, matches = apo_core.filter_notes(where, folder_clean, limit)
     notes = [
         {
             "path": path,
@@ -875,7 +923,7 @@ def _filter_notes_sync(
         }
         for mt, path, fm in matches
     ]
-    return {"ok": True, "total": total, "notes": notes}
+    return {"ok": True, "total": total, "notes": notes, "vault": v.name}
 
 
 @mcp.tool(annotations=_RO)
@@ -899,19 +947,20 @@ def _backlinks_sync(path: str, limit: int = 100, vault: str = "") -> dict:
     rel = str(Path(path.replace("\\", "/"))).removesuffix(".md")
     targets = {Path(rel).name.lower(), rel.lower()}
     # Title from cached frontmatter — no vault file read.
-    title = apo_core.frontmatter_field(path, "title")
-    if isinstance(title, str) and title.strip():
-        targets.add(title.strip().lower())
+    with _bound(v):
+        title = apo_core.frontmatter_field(path, "title")
+        if isinstance(title, str) and title.strip():
+            targets.add(title.strip().lower())
 
-    exclude_source = ""
-    try:
-        if full.exists():
-            exclude_source = str(full.relative_to(v.root))
-    except ValueError:
-        pass
-    rows = apo_core.list_backlinks(targets, exclude_source, limit)
+        exclude_source = ""
+        try:
+            if full.exists():
+                exclude_source = str(full.relative_to(v.root))
+        except ValueError:
+            pass
+        rows = apo_core.list_backlinks(targets, exclude_source, limit)
     hits = [{"path": src, "line": line, "text": text} for src, line, text in rows]
-    return {"ok": True, "target": path, "total": len(hits), "backlinks": hits}
+    return {"ok": True, "target": path, "total": len(hits), "backlinks": hits, "vault": v.name}
 
 
 @mcp.tool(annotations=_RO)
@@ -928,7 +977,8 @@ def _recent_activity_sync(limit: int = 10, folder: str = "", vault: str = "") ->
         return _err(error="bad_path", message=str(e))
     if not base.exists():
         return _err(error="not_found", message=f"folder not found: {folder}")
-    rows = apo_core.recent_notes_preview(limit, folder)
+    with _bound(v):
+        rows = apo_core.recent_notes_preview(limit, folder)
     notes = [
         {
             "path": path,
@@ -937,7 +987,7 @@ def _recent_activity_sync(limit: int = 10, folder: str = "", vault: str = "") ->
         }
         for path, mtime, first_line in rows
     ]
-    return {"ok": True, "notes": notes}
+    return {"ok": True, "notes": notes, "vault": v.name}
 
 
 @mcp.tool(annotations=_RO)
