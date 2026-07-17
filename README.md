@@ -60,7 +60,8 @@ filter_notes({"okf_type": "Project"}, limit=50)
 
 No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall.
 
-**Profiles:** the engine stays convention-agnostic by default. Vaults that opt into an OKF Knowledge Bundle use [docs/profiles/okf-bundle.md](docs/profiles/okf-bundle.md) (`okf_type` primary; stamp/soft/hard write contract — Meta reference: `system/config/apo-okf-write-contract.md`). Engine-side enforcement is Phase 2; agents follow the profile until then.
+**Profiles:** the engine stays convention-agnostic by default (no profile → no stamp). Vaults that opt into an OKF Knowledge Bundle place `system/config/okf-profile.schema.yaml` (or set `APO_OKF_PROFILE`) and follow [docs/profiles/okf-bundle.md](docs/profiles/okf-bundle.md). `write_note` / `patch_note` then stamp/validate `okf_type` and related fields (`APO_OKF_ENFORCEMENT=off|soft|hard`).
+
 
 ## Features
 

@@ -18,6 +18,7 @@ from pydantic import Field
 from apo_engine import config as apo_config
 from apo_engine import core as apo_core
 from apo_engine import deferred as index_deferred
+from apo_engine import okf as apo_okf
 from apo_engine.mcp_backend import ApoMem
 from apo_engine.markdown_patch import (
     PatchError,
@@ -380,12 +381,28 @@ def _write_note_sync(
     parts = Path(path.replace("\\", "/")).parts
     new_top = len(parts) > 1 and not (v.root / parts[0]).exists()
 
+    okf_meta: dict[str, Any] = {}
+    to_write = content
+    # append=True is raw tail — skip OKF stamp (same spirit as append_note).
+    if not (append and existed):
+        okf = apo_okf.process_concept(vault_root=v.root, rel_path=path, content=content)
+        okf_meta = okf.as_response_fields()
+        if not okf.ok:
+            return _err(
+                path=path,
+                error=okf.error or "okf_validation",
+                message=okf.message or "OKF validation failed",
+                **{k: v for k, v in okf_meta.items() if k != "enforcement"},
+                enforcement=okf.enforcement,
+            )
+        to_write = okf.content
+
     full.parent.mkdir(parents=True, exist_ok=True)
     if append and existed:
         with full.open("a", encoding="utf-8") as f:
             f.write("\n" + content)
     else:
-        full.write_text(content, encoding="utf-8")
+        full.write_text(to_write, encoding="utf-8")
     _maybe_index(v, full, index)
 
     out: dict[str, Any] = {
@@ -395,6 +412,7 @@ def _write_note_sync(
         "bytes": full.stat().st_size,
         "mtime": _mtime(full),
     }
+    out.update(okf_meta)
     if new_top:
         out["warning"] = (
             f"created new top-level directory {parts[0]!r} — "
@@ -571,7 +589,27 @@ def _patch_note_sync(
             suggestions=result.suggestions,
         )
 
-    full.write_text(result.content, encoding="utf-8")
+    to_write = result.content
+    okf = apo_okf.process_concept(
+        vault_root=v.root,
+        rel_path=path,
+        content=result.content,
+        bump_timestamp=True,
+    )
+    okf_meta = okf.as_response_fields()
+    if not okf.ok:
+        return _err(
+            path=path,
+            error=okf.error or "okf_validation",
+            message=okf.message or "OKF validation failed",
+            applied=result.applied,
+            results=result.results,
+            **{k: val for k, val in okf_meta.items() if k != "enforcement"},
+            enforcement=okf.enforcement,
+        )
+    to_write = okf.content
+
+    full.write_text(to_write, encoding="utf-8")
     _maybe_index(v, full, index)
 
     failed = sum(1 for r in result.results if r.get("status") == "error")
@@ -585,6 +623,7 @@ def _patch_note_sync(
         "mtime": _mtime(full),
         "results": result.results,
     }
+    out.update(okf_meta)
     if verbose:
         out["lines_added"] = result.lines_added
     return out

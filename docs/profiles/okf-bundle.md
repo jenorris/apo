@@ -66,4 +66,8 @@ OKF Bundle + [PARA](./para.md) is the Meta shape. OKF + [agentic-memory](./agent
 ## Out of scope here
 
 - Renaming MCP tools or sqlite entity names
-- Engine stamp implementation (track separately under Apo; Meta contract is SoT until then)
+- Forcing OKF on vaults without a profile file (engine no-ops → `enforcement: off`)
+
+## Engine (Phase 2)
+
+When `<vault>/system/config/okf-profile.schema.yaml` exists (or `APO_OKF_PROFILE` points at one), `write_note` / `patch_note` run stamp + validate via `apo_engine.okf`. Responses may include `stamped`, `warnings`, `okf_type`, `enforcement`. Hard failures: `ok: false`, `error: okf_validation`. Override: `APO_OKF_ENFORCEMENT=soft|hard|off`.

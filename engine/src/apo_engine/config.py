@@ -43,6 +43,11 @@ COLLECTION: str = os.environ.get("APO_COLLECTION", "notes_global")
 # Default wiki path convention for agents (defuddle → write_note); not an MCP tool knob.
 INGEST_DIR: str = os.environ.get("APO_INGEST_DIR", "resources/wiki")
 
+# OKF write-path profile (optional). Empty → look for <vault>/system/config/okf-profile.schema.yaml.
+# APO_OKF_ENFORCEMENT=off|soft|hard overrides profile default / per-rule soft|hard.
+OKF_PROFILE: str = os.environ.get("APO_OKF_PROFILE", "").strip()
+OKF_ENFORCEMENT: str = os.environ.get("APO_OKF_ENFORCEMENT", "").strip().lower()
+
 # SQLite busy-handler timeout (seconds) — cross-process writer contention.
 DB_TIMEOUT: float = float(os.environ.get("APO_DB_TIMEOUT", "30"))
 
