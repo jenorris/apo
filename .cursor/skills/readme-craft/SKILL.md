@@ -119,6 +119,7 @@ Verify install commands against the real task runner. Run safe commands that do 
 
 - One modest, centered application icon in the hero (≈128 px display width; asset legible at ~64 px)
 - Store under `docs/assets/` with a regeneration brief
+- Use true alpha transparency outside the mark; verify the PNG does not contain a baked checkerboard
 - No text in the glyph; no trademarked OS chrome
 
 **Mermaid**

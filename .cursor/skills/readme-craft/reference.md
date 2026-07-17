@@ -95,6 +95,7 @@ One job per section. If a section restates the previous section, delete it.
 
 - Zero badges is fine; if used, ≤4 factual shields
 - One brand icon beats a collage or banner farm
+- For freestanding icons, require real alpha transparency; a checkerboard is a viewer cue, never image content
 - No Apple / Windows trademarks in generated icons; “macOS-like rounded square” means shape language only
 - Screenshots / GIFs: real UI or real CLI output only
 
