@@ -18,7 +18,7 @@ Profiles ship **both**:
 1. **Layout** — directories, naming, frontmatter floors
 2. **Behaviors** — when and how the agent must write so the vault stays true
 
-Engine-universal habits (check `ok`, prefer `append_note`/`patch_note`, `folder=` on search, `reindex_deferred` after batches) live in every profile’s Apo section. **Do not** put vault-specific private paths in these docs.
+Engine-universal habits (check `ok`, prefer `append_note`/`patch_note`, `folder=` on search, `reindex_deferred` after batches) live in every profile’s Apo section. **Do not** put vault-specific private paths (personal OKF taxonomies, internal project threads, home-lab hosts) in these docs.
 
 ## Candidates (not shipped yet)
 
@@ -35,4 +35,4 @@ Promote a candidate when a real onboard asks for it — then write a thin profil
 
 ## Mixing
 
-PARA **life OS** + llm-wiki **topic silo** is a valid combo (Meta keeps compiled wikis under a separate collection/root). If mixed: document two roots or two folder prefixes and tell Apo which `APO_NOTES_ROOT` / `folder=` applies.
+PARA **life OS** + llm-wiki **topic silo** is a valid combo (keep compiled wikis under a separate collection/root). If mixed: document two roots or two folder prefixes and tell Apo which `APO_NOTES_ROOT` / `folder=` applies.

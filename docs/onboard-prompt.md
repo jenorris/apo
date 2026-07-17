@@ -2,9 +2,9 @@
 
 **Audience:** paste into Cursor or Claude Code after the engine is installed and MCP host key `apo` points at **this** vault (`APO_NOTES_ROOT`).
 
-**Goal:** infer the vault’s existing structural and procedural rules, then propose persistent agent instructions so Apo becomes the markdown-as-source-of-truth memory backend — without forcing Jeremy’s Meta conventions onto someone else’s PKB.
+**Goal:** infer the vault’s existing structural and procedural rules, then propose persistent agent instructions so Apo becomes the markdown-as-source-of-truth memory backend — without forcing one person’s conventions onto someone else’s PKB.
 
-Do **not** invent employer/gateway/multi-vault architecture. Stay on local engine + one vault root.
+Do **not** invent gateway/multi-vault architecture. Stay on local engine + one vault root.
 
 ---
 
@@ -70,7 +70,7 @@ Produce **draft markdown** for me to approve, tailored to the inferred vault:
 - Apo as sole markdown memory backend for this vault (retire conflicting backends if any)
 - Tool routing table adapted to *our* folders (not a generic PARA lecture)
 - Write discipline: prefer append/patch; use heading/chunk_hash when available; `expected_mtime` when editing hot notes; `reindex_deferred` after batches
-- Consequential-turn writes *only if* this vault already has a logging/decision habit — map onto existing paths (do not invent Meta’s session-log format unless we already use something like it)
+- Consequential-turn writes *only if* this vault already has a logging/decision habit — map onto existing paths (do not invent a session-log format unless the vault already uses something like it)
 - Explicit non-goals: code search, email, ticket systems stay outside Apo
 
 **Draft B — Optional vault root pointer**
@@ -95,6 +95,6 @@ Begin Phase 1. If the vault root is unclear, ask one clarifying question: absolu
 
 ## Maintainer notes
 
-- Keep this prompt **convention-agnostic**. Meta’s OKF/threads/session-log policy belongs in Jeremy’s vault rules, not here.
+- Keep this prompt **convention-agnostic**. Vault-specific policy (OKF, thread rotations, session-log formats) belongs in *your* vault rules, not here.
 - Pair with [`quickstart.md`](./quickstart.md) for install + MCP registration.
-- When sharing with teammates: repo access + these two docs is enough; do not send personal vault paths or internal deploy docs.
+- When sharing: repo access + these two docs is enough; do not send personal vault paths.

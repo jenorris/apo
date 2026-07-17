@@ -62,9 +62,9 @@ MCP writes: `enqueue_index` / `enqueue_many` return the updated queue set (no se
 
 ## Search latency notes
 
-Cold hybrid search is dominated by **Ollama `bge-m3` query embed** (~120–150ms on M4 Air
-with the model loaded). SQLite vec/FTS is typically &lt;15ms warm. Identical-query TTL
-cache ~15ms. To go lower:
+Cold hybrid search is dominated by **Ollama `bge-m3` query embed** (~120–150ms on Apple
+Silicon with the model loaded). SQLite vec/FTS is typically &lt;15ms warm. Identical-query
+TTL cache ~15ms. To go lower:
 
 - Repeat identical queries hit the embed TTL cache (near-instant)
 - FTS runs overlapped with the embed call

@@ -10,9 +10,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/.env"
+[[ -f "$ENV_FILE" ]] || ENV_FILE="${SCRIPT_DIR}/config.env"
 set -a
-# shellcheck source=config.env
-source "${SCRIPT_DIR}/config.env"
+# shellcheck source=config.env.example
+[[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
 set +a
 
 APO_ENGINE_BIN="${APO_ENGINE_BIN:-${SCRIPT_DIR}/engine/.venv/bin/apo-engine}"

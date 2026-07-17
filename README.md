@@ -205,8 +205,6 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |
 
-Maintainer migration notes (`docs/mcp-migration.md`) are intentionally off the teammate share path.
-
 ## Boundaries
 
 - **Scope:** one machine, one vault root, local engine — no cloud gateway in this repo.

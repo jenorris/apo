@@ -1,13 +1,12 @@
 # Glob patterns (relative to NOTES_ROOT) excluded from indexing.
-# Whole-vault indexing is the current default (your choice), so employer paths
-# stay indexed and are filtered at QUERY time instead (--exclude / search-personal).
-# Uncomment below to exclude them from the index entirely (north-star vault split).
+# By default the whole vault is indexed; you can either exclude sensitive
+# folders here (removed from the index entirely) or leave them indexed and
+# filter at QUERY time with `search --exclude '<glob>'`.
 
 .obsidian/*
 .trash/*
 templates/*
 
+# Example: exclude sensitive or noisy areas from the index entirely.
 # private/*
-# private/work-*
-# **/threads/*
-# **/*confluence*
+# **/secrets/*

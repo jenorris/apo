@@ -29,9 +29,6 @@ reindex:
 search *ARGS:
     {{eng}} search {{ARGS}}
 
-search-personal QUERY:
-    {{eng}} search {{QUERY}} --exclude 'private/*' 'private/work-*' '**/threads/*'
-
 stats:
     {{eng}} stats
 
@@ -50,7 +47,8 @@ watch-status:
 watch-install:
     chmod +x launchd-watch.sh watch.sh
     mkdir -p ~/Library/LaunchAgents
-    cp com.apo.watch.plist ~/Library/LaunchAgents/
+    sed -e "s|__APO_DIR__|$(pwd)|g" -e "s|__HOME__|$HOME|g" \
+        com.apo.watch.plist.template > ~/Library/LaunchAgents/com.apo.watch.plist
     launchctl bootout "gui/$(id -u)/com.apo.watch" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.apo.watch.plist
     @echo "installed — log: ~/.apo/watch-launchd.log"

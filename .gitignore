@@ -1,12 +1,13 @@
-# Root safety net — nested engine/.gitignore and gateway/.gitignore also apply.
+# Root safety net — nested engine/.gitignore also applies.
 
 # secrets / env
 .env
 .env.*
 !.env.example
+config.env
 *.key
 
-# data / indexes — NEVER commit (embeddings of the whole vault incl. employer-mixed content)
+# data / indexes — NEVER commit (embeddings of your entire vault)
 index.db
 index.db-*
 *.sqlite

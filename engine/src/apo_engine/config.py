@@ -1,10 +1,10 @@
-"""Configuration — all via environment, with personal-friendly defaults."""
+"""Configuration — all via environment, with sensible local defaults."""
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-_ENGINE_ROOT = Path(__file__).resolve().parents[2]  # ~/Code/apo/engine
+_ENGINE_ROOT = Path(__file__).resolve().parents[2]  # <repo>/engine
 
 
 def _path(env: str, default: str) -> Path:
@@ -17,7 +17,7 @@ NOTES_ROOT: Path = _path("APO_NOTES_ROOT", "~/Notes")
 # Single-file sqlite-vec index (rebuildable, git-ignored).
 INDEX_PATH: Path = _path("APO_INDEX", str(_ENGINE_ROOT / "index.db"))
 
-# Embedding backend: "ollama" (Metal/GPU, desk default) or "fastembed" (ONNX).
+# Embedding backend: "ollama" (Metal/GPU, default) or "fastembed" (ONNX).
 EMBED_BACKEND: str = os.environ.get("APO_EMBED_BACKEND", "ollama").lower()
 
 # Model. Defaults differ per backend — vectors are NOT interchangeable across models.
