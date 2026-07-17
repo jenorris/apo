@@ -214,6 +214,3 @@ Maintainer migration notes (`docs/mcp-migration.md`) are intentionally off the t
 - **Maturity:** daily-driver quality; not claiming polished public-OSS packaging yet.
 - **Layouts:** PARA / OKF / thread workflows are optional vault policy (or a [profile](docs/profiles/)), not engine requirements — frontmatter filtering works either way.
 
-```bash
-just readme-check   # lint share-path markdown
-```
