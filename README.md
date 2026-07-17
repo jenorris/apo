@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/assets/apo-icon.png" alt="Apo" width="128" />
+  <img src="docs/assets/apo-mark.png" alt="Apo" width="128" />
   <h1>Apo</h1>
   <p><strong>Local markdown memory for AI agents</strong></p>
   <p>Hybrid search + MCP writes over <em>your</em> notes.<br />
@@ -203,7 +203,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/onboard-prompt.md](docs/onboard-prompt.md) | Infer vault rules → propose persistent agent instructions |
 | [docs/profiles/](docs/profiles/) | Optional presets (PARA, llm-wiki) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
-| [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App icon brief |
+| [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |
 
 Maintainer migration notes (`docs/mcp-migration.md`) are intentionally off the teammate share path.
 
