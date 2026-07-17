@@ -2,9 +2,9 @@
 
 Get a local Apo engine indexing **your** Markdown vault and talking to Cursor or Claude Code over MCP.
 
-**You need:** macOS or Linux, Homebrew (or equivalent), a folder of `.md` notes, ~3 GB free while the embedding model is loaded.
+**You need:** macOS or Linux, Homebrew (or equivalent), [Ollama](https://ollama.com), a folder of `.md` notes, ~3 GB free while `bge-m3` is loaded.
 
-This guide is **local engine only** — one machine, one vault root.
+This guide is **local engine only** — one machine, one vault root. Default embeddings require a running Ollama daemon.
 
 ## 1. Install
 

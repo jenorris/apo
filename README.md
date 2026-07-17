@@ -14,8 +14,8 @@
   <p>
     <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white" />
     <img alt="MCP" src="https://img.shields.io/badge/MCP-Cursor%20%7C%20Claude-111827" />
+    <img alt="Ollama" src="https://img.shields.io/badge/embeddings-Ollama%20bge--m3-000000?logo=ollama&logoColor=white" />
     <img alt="Local-first" src="https://img.shields.io/badge/local--first-no%20cloud-0B3D2E" />
-    <img alt="sqlite-vec" src="https://img.shields.io/badge/search-sqlite--vec%20%2B%20BM25-1B4F72" />
   </p>
 </div>
 
@@ -23,6 +23,7 @@
 <summary><strong>Table of contents</strong></summary>
 
 - [Why Apo](#why-apo)
+- [Structured notes (OKF and friends)](#structured-notes-okf-and-friends)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
@@ -46,16 +47,30 @@ Most “AI memory” stacks ask you to trust a second database. Apo indexes a fo
 
 You keep Obsidian / git / plain-text workflows. Agents search and surgically update notes through MCP. Delete `index.db` anytime — rebuild with `just reindex`.
 
+## Structured notes (OKF and friends)
+
+Apo indexes **arbitrary YAML frontmatter** into sqlite. `filter_notes` queries those fields without a vault walk — so typed note systems (OKF-style `okf_type`, `status`, `resource`, …) and lightweight project management fall out of the same files you already edit:
+
+```bash
+# examples — any key you put in frontmatter is fair game
+filter_notes({"okf_type": "EvidenceRequest", "status": "open"}, folder="projects/…")
+filter_notes({"status": {"$in": ["blocked", "in-progress"]}}, folder="projects/")
+filter_notes({"type": "project"}, limit=50)
+```
+
+No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall. Engine stays schema-agnostic — OKF is one useful convention, not a hard dependency.
+
 ## Features
 
 | | |
 |--|--|
 | **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown |
+| **Frontmatter catalogs** | `filter_notes` on any YAML property (`okf_type`, `status`, tags, …) |
 | **MCP surface** | 15 tools (11 with `APO_MCP_LEAN=1`) for Cursor and Claude Code |
 | **Surgical writes** | `append_note` / `patch_note` with heading / `chunk_hash` anchors and `expected_mtime` |
-| **Index-backed catalogs** | `filter_notes`, `backlinks`, `recent_activity` hit sqlite — not a vault walk |
+| **Index-backed graphs** | `backlinks` + `recent_activity` hit sqlite — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
-| **Convention-agnostic** | Paths + YAML frontmatter only; PARA / wiki presets are optional |
+| **Convention-agnostic** | Paths + YAML frontmatter only; PARA / wiki / OKF presets are optional |
 
 ## Architecture
 
@@ -67,7 +82,7 @@ flowchart LR
   Watch["apo-engine watch"]
   Index["index.db"]
   Vault["Markdown vault"]
-  Embed["Ollama / ONNX"]
+  Embed["Ollama bge-m3"]
 
   Agent -->|"search · read · write"| MCP
   MCP -->|"read / write files"| Vault
@@ -78,6 +93,8 @@ flowchart LR
   Watch -->|"sole writer"| Index
   MCP -->|"hybrid query"| Index
 ```
+
+> **Embeddings:** the default path depends on a local [Ollama](https://ollama.com) daemon and the `bge-m3` model (`just ollama && ollama pull bge-m3`). Optional ONNX via `fastembed` is supported, but Ollama is the desk/share default.
 
 Write path (why the watcher matters):
 
@@ -109,15 +126,15 @@ sequenceDiagram
 
 ## Quick start
 
-**Need:** macOS or Linux, Homebrew (or equivalent), a folder of `.md` notes, ~3 GB free while the embed model loads.
+**Need:** macOS or Linux, Homebrew (or equivalent), [Ollama](https://ollama.com), a folder of `.md` notes, ~3 GB free while `bge-m3` is loaded.
 
 ```bash
 git clone <apo-repo-url> ~/Code/apo   # or your preferred path
 cd ~/Code/apo
-brew install ollama just
+brew install ollama just              # Ollama is required for default embeddings
 cp config.env.example .env            # set APO_NOTES_ROOT
 just setup
-just ollama && ollama pull bge-m3
+just ollama && ollama pull bge-m3     # local embed daemon + model
 just index
 just search "a phrase you know is in your vault"
 ```
@@ -129,9 +146,10 @@ Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habit
 ## How agents use it
 
 ```text
-1. search_notes "quarterly planning"   → hits with path, heading, chunk_hash
-2. append_note / patch_note            → edit at heading or chunk_hash
-3. watcher re-embeds                   → next search sees the change
+1. search_notes "quarterly planning"        → semantic/keyword hits + chunk_hash
+2. filter_notes {status: open, …}           → exact frontmatter catalog (OKF / PM)
+3. append_note / patch_note                 → edit at heading or chunk_hash
+4. watcher re-embeds                        → next search/filter sees the change
 ```
 
 CLI equivalent while you are wiring things up:
@@ -192,8 +210,9 @@ Maintainer migration notes (`docs/mcp-migration.md`) are intentionally off the t
 ## Boundaries
 
 - **Scope:** one machine, one vault root, local engine — no cloud gateway in this repo.
+- **Embeddings:** default stack needs Ollama + `bge-m3` running locally; ONNX is opt-in, not a drop-in without reindex.
 - **Maturity:** daily-driver quality; not claiming polished public-OSS packaging yet.
-- **Layouts:** PARA / OKF / thread workflows are optional vault policy (or a [profile](docs/profiles/)), not engine requirements.
+- **Layouts:** PARA / OKF / thread workflows are optional vault policy (or a [profile](docs/profiles/)), not engine requirements — frontmatter filtering works either way.
 
 ```bash
 just readme-check   # lint share-path markdown

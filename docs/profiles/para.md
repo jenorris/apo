@@ -59,9 +59,9 @@ Profile behaviors: see apo `docs/profiles/para.md` (or paste Behaviors section i
 
 ### 1. Consequential-turn writes (recommended default)
 
-On every turn where something **consequential** happened, update the vault **before** the final user-facing reply. Do not batch across turns or wait for “session end.”
+On every turn where something **consequential** happened, update the vault **before** the final user-facing reply. Do not batch across turns or wait for “session end.” **Content** and **process** share one gate.
 
-**Consequential** — write required:
+**Content consequential** — write required:
 
 - Decision, preference, or commitment
 - Status change (done, blocked, deferred, in progress)
@@ -69,12 +69,18 @@ On every turn where something **consequential** happened, update the vault **bef
 - Durable fact (people, dates, links, blockers, outcomes)
 - Correction of prior understanding
 
+**Process consequential** — write required even with no domain outcome (high tool churn):
+
+- Rough tiers: **Light** = 3–7 tool calls, no friction (optional mention); **Heavy** = ≥8 calls or ≥2 retries/dead ends or wrong tool then corrected; **Burn** = ≥15 calls or same failure twice — apply a durable routing/doc fix before reply
+- Prefer **tool-call + retry counts** over token estimates
+
 **Not consequential** — skip write:
 
 - Read-only recall
 - Clarifying questions
 - Trivial acknowledgments
 - Drafts awaiting explicit approval
+- Light tool tier with no content outcome
 
 **Where to write (PARA map):**
 
@@ -84,8 +90,11 @@ On every turn where something **consequential** happened, update the vault **bef
 | Ongoing responsibility | `areas/<domain>/` |
 | Unclear / new idea | `inbox/` (zettels or bare capture), then triage |
 | External reference | `resources/` (or `resources/wiki/` if ingesting) |
+| Process / routing gotcha | Agent config, skills, or playbooks (apply under Burn) |
 
-Optional but high-leverage: a daily note under `inbox/daily/YYYY-MM-DD.md` with a short **Session log** bullet (`YYYY-MM-DD HH:MM` + one line). Only enable if the human wants an audit trail.
+Optional but high-leverage: a daily note under `inbox/daily/YYYY-MM-DD.md` with a short **Session log** bullet (`YYYY-MM-DD HH:MM` + one line; process turns: note the tooling fix path). Only enable if the human wants an audit trail.
+
+**End-of-turn gate:** content consequential? process Heavy/Burn? If either → do not reply until required writes land.
 
 ### 2. Search before create
 
