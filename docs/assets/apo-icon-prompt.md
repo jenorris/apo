@@ -12,6 +12,7 @@ Fountain pen nib — writing / notes — on a macOS-like rounded-square applicat
 - Palette: deep ink-blue enamel face; warm parchment / cream accents; restrained metal on the nib
 - Motif: centered nib; subtle layered paper; optional faint search/focus ring
 - Background: true alpha transparency outside the tile; never bake a checkerboard into the pixels
+- Drop shadow (if any): pure black RGB with soft alpha only — never gray/white checker cells in the fringe
 - No text, letters, watermarks, emoji, neon glow, or purple-on-white AI defaults
 - Must remain legible when displayed at ~64–128 px in a GitHub README
 
