@@ -6,6 +6,7 @@
 |---------|--------|----------|
 | [para.md](./para.md) | **Ship** | Life OS / work PKB — projects, areas, inbox |
 | [llm-wiki.md](./llm-wiki.md) | **Ship** | Research corpora — compile raw sources into a maintained wiki |
+| [okf-bundle.md](./okf-bundle.md) | **Ship** | OKF Knowledge Bundle — `okf_type` primary, stamp/soft/hard write contract (pairs with PARA) |
 
 **Default path for existing vaults:** [../onboard-prompt.md](../onboard-prompt.md) (infer first; do not force a profile).
 
@@ -35,4 +36,4 @@ Promote a candidate when a real onboard asks for it — then write a thin profil
 
 ## Mixing
 
-PARA **life OS** + llm-wiki **topic silo** is a valid combo (keep compiled wikis under a separate collection/root). If mixed: document two roots or two folder prefixes and tell Apo which `APO_NOTES_ROOT` / `folder=` applies.
+PARA **life OS** + llm-wiki **topic silo** is a valid combo (keep compiled wikis under a separate collection/root). PARA + **OKF Bundle** is the Meta vault shape — see [okf-bundle.md](./okf-bundle.md). If mixed: document two roots or two folder prefixes and tell Apo which `APO_NOTES_ROOT` / `folder=` applies.

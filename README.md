@@ -49,16 +49,18 @@ You keep Obsidian / git / plain-text workflows. Agents search and surgically upd
 
 ## Structured notes (OKF and friends)
 
-Apo indexes **arbitrary YAML frontmatter** into sqlite. `filter_notes` queries those fields without a vault walk — so typed note systems (OKF-style `okf_type`, `status`, `resource`, …) and lightweight project management fall out of the same files you already edit:
+Apo indexes **arbitrary YAML frontmatter** into sqlite. `filter_notes` queries those fields without a vault walk — so typed concept systems (OKF-style `okf_type`, `status`, `resource`, …) and lightweight project management fall out of the same files you already edit:
 
 ```bash
 # examples — any key you put in frontmatter is fair game
 filter_notes({"okf_type": "EvidenceRequest", "status": "open"}, folder="projects/…")
 filter_notes({"status": {"$in": ["blocked", "in-progress"]}}, folder="projects/")
-filter_notes({"type": "project"}, limit=50)
+filter_notes({"okf_type": "Project"}, limit=50)
 ```
 
-No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall. Engine stays schema-agnostic — OKF is one useful convention, not a hard dependency.
+No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall.
+
+**Profiles:** the engine stays convention-agnostic by default. Vaults that opt into an OKF Knowledge Bundle use [docs/profiles/okf-bundle.md](docs/profiles/okf-bundle.md) (`okf_type` primary; stamp/soft/hard write contract — Meta reference: `system/config/apo-okf-write-contract.md`). Engine-side enforcement is Phase 2; agents follow the profile until then.
 
 ## Features
 
