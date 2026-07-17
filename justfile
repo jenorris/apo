@@ -1,5 +1,4 @@
 # Apo — personal KB engine. Task surface for engine (python) only.
-# Enterprise gateway: github.com/jenorris/apo-enterprise (separate repo).
 # `just --list` is the self-documenting manifest.
 
 set dotenv-load := true
@@ -7,9 +6,15 @@ set dotenv-load := true
 eng := "engine/.venv/bin/apo-engine"
 mcp_py := "engine/.venv/bin/python"
 mcp_srv := "engine/mcp/server.py"
+readme_lint := "python3 .cursor/skills/readme-craft/scripts/lint_readme.py"
 
 default:
     @just --list
+
+# Lint share-path markdown (README + quickstart). Errors fail; warnings are advisory.
+readme-check:
+    {{readme_lint}} README.md docs/quickstart.md
+    python3 .cursor/skills/readme-craft/scripts/test_lint_readme.py
 
 # One-time setup: engine venv (editable + MCP).
 setup:

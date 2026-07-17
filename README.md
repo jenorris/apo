@@ -1,119 +1,200 @@
-# Apo
+<div align="center">
+  <img src="docs/assets/apo-icon.png" alt="Apo" width="128" />
+  <h1>Apo</h1>
+  <p><strong>Local markdown memory for AI agents</strong></p>
+  <p>Hybrid search + MCP writes over <em>your</em> notes.<br />
+  Files on disk are the source of truth; the index is rebuildable.</p>
+  <p>
+    <a href="docs/quickstart.md"><strong>Quickstart</strong></a>
+    ·
+    <a href="docs/onboard-prompt.md"><strong>Onboard</strong></a>
+    ·
+    <a href="docs/profiles/"><strong>Profiles</strong></a>
+  </p>
+  <p>
+    <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white" />
+    <img alt="MCP" src="https://img.shields.io/badge/MCP-Cursor%20%7C%20Claude-111827" />
+    <img alt="Local-first" src="https://img.shields.io/badge/local--first-no%20cloud-0B3D2E" />
+    <img alt="sqlite-vec" src="https://img.shields.io/badge/search-sqlite--vec%20%2B%20BM25-1B4F72" />
+  </p>
+</div>
 
-Local **markdown knowledge-base engine**: hybrid search (sqlite-vec + Ollama embeddings) and an MCP tool surface for Cursor / Claude Code. Files on disk are source of truth; the index is rebuildable.
+<details>
+<summary><strong>Table of contents</strong></summary>
+
+- [Why Apo](#why-apo)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Quick start](#quick-start)
+- [How agents use it](#how-agents-use-it)
+- [MCP tools](#mcp-tools)
+- [Configuration](#configuration)
+- [Docs](#docs)
+- [Boundaries](#boundaries)
+
+</details>
+
+## Why Apo
+
+Most “AI memory” stacks ask you to trust a second database. Apo indexes a folder of Markdown you already own:
+
+| Approach | Source of truth | What agents edit | Ops |
+|----------|-----------------|------------------|-----|
+| Cloud memory APIs | Vendor store | Opaque records | Account, network, retention policy |
+| Vector DB + sync job | Vectors (+ maybe files) | Often the DB, not the note | Schema, embeddings pipeline |
+| **Apo** | **Your `.md` files** | **The same files you open in an editor** | One machine, one vault, optional watcher |
+
+You keep Obsidian / git / plain-text workflows. Agents search and surgically update notes through MCP. Delete `index.db` anytime — rebuild with `just reindex`.
+
+## Features
+
+| | |
+|--|--|
+| **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown |
+| **MCP surface** | 15 tools (11 with `APO_MCP_LEAN=1`) for Cursor and Claude Code |
+| **Surgical writes** | `append_note` / `patch_note` with heading / `chunk_hash` anchors and `expected_mtime` |
+| **Index-backed catalogs** | `filter_notes`, `backlinks`, `recent_activity` hit sqlite — not a vault walk |
+| **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
+| **Convention-agnostic** | Paths + YAML frontmatter only; PARA / wiki presets are optional |
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  Agent["Cursor / Claude"]
+  MCP["MCP server"]
+  Queue["Deferred queue"]
+  Watch["apo-engine watch"]
+  Index["index.db"]
+  Vault["Markdown vault"]
+  Embed["Ollama / ONNX"]
+
+  Agent -->|"search · read · write"| MCP
+  MCP -->|"read / write files"| Vault
+  MCP -->|"enqueue paths"| Queue
+  Queue --> Watch
+  Watch -->|"chunk · embed"| Embed
+  Embed --> Index
+  Watch -->|"sole writer"| Index
+  MCP -->|"hybrid query"| Index
 ```
-agent (Cursor / Claude Code)
-      │  MCP — search / read / surgical write (enqueue index)
-      ▼
-engine/mcp/server.py
-      │  ~/.apo/deferred-*.json
-      ▼
-apo-engine watch (optional launchd/systemd)  — sole index.db writer
-      ▼
-Ollama bge-m3 (optional ONNX via fastembed)  index: engine/index.db
+
+Write path (why the watcher matters):
+
+```mermaid
+sequenceDiagram
+  participant Agent
+  participant MCP
+  participant Vault as Markdown files
+  participant Queue as Deferred queue
+  participant Watch as apo-engine watch
+  participant Index as index.db
+
+  Agent->>MCP: append_note / patch_note
+  MCP->>Vault: write bytes
+  MCP->>Queue: enqueue path
+  Queue->>Watch: wake
+  Watch->>Vault: read changed note
+  Watch->>Index: re-embed chunks
+  Agent->>MCP: search_notes
+  MCP->>Index: BM25 + vector
+  Index-->>Agent: hits with chunk_hash
 ```
 
 | Layer | Role |
 |-------|------|
-| **Engine** (`engine/`) | Chunk, embed, hybrid BM25 + vector search; caches frontmatter + a wikilink backlink graph alongside chunks |
-| **MCP** | 15 tools (11 with `APO_MCP_LEAN=1`) — agents never talk to sqlite directly for writes |
-| **Watcher** | FS events + deferred queue → reindex |
+| **Engine** (`engine/`) | Chunk, embed, hybrid search; cache frontmatter + wikilink backlinks |
+| **MCP** (`engine/mcp/`) | Tool schema for hosts; never lets the agent write sqlite directly |
+| **Watcher** | FS events + deferred queue → sole `index.db` writer |
 
-`filter_notes`, `backlinks`, and `recent_activity` are index-backed (query `files.frontmatter` / the `backlinks` table), not vault filesystem walks — they stay fast regardless of vault size.
+## Quick start
 
-## Quickstart
-
-See **[docs/quickstart.md](docs/quickstart.md)** (install, MCP registration, verify).
-
-Then run the **[vault onboard prompt](docs/onboard-prompt.md)** against *your* notes so agent instructions match your layout — not a canned template.
+**Need:** macOS or Linux, Homebrew (or equivalent), a folder of `.md` notes, ~3 GB free while the embed model loads.
 
 ```bash
+git clone <apo-repo-url> ~/Code/apo   # or your preferred path
+cd ~/Code/apo
 brew install ollama just
-cp config.env.example .env   # set APO_NOTES_ROOT
+cp config.env.example .env            # set APO_NOTES_ROOT
 just setup
 just ollama && ollama pull bge-m3
 just index
-just search "something you know is in the vault"
+just search "a phrase you know is in your vault"
 ```
 
-Optional ONNX (faster queries, weaker ticket-ID recall on Meta): `APO_EMBED_BACKEND=fastembed`, `APO_MODEL=BAAI/bge-large-en-v1.5`, then `just reindex`. Vectors are not interchangeable across models.
+Register MCP for Cursor or Claude Code, install the watcher, and verify tool counts in **[docs/quickstart.md](docs/quickstart.md)**.
 
-**Cursor:** add the `apo` block from the quickstart doc to `~/.cursor/mcp.json`, then **fully quit and reopen** Cursor.
+Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habits match *your* vault — not a canned layout.
 
-**Claude Code:**
+## How agents use it
+
+```text
+1. search_notes "quarterly planning"   → hits with path, heading, chunk_hash
+2. append_note / patch_note            → edit at heading or chunk_hash
+3. watcher re-embeds                   → next search sees the change
+```
+
+CLI equivalent while you are wiring things up:
 
 ```bash
-claude mcp add -s user apo -- \
-  /ABSOLUTE/PATH/TO/apo/engine/.venv/bin/python \
-  /ABSOLUTE/PATH/TO/apo/engine/mcp/server.py
+just search "quarterly planning"
+just stats
 ```
+
+Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day edits.
+
+## MCP tools
+
+| Mode | Count | Includes |
+|------|------:|----------|
+| Lean (`APO_MCP_LEAN=1`) | **11** | search/read/write/catalog tools for daily agent use |
+| Full | **15** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config` |
+
+Core write/read tools: `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note`, `move_note`, `delete_note`, `filter_notes`, `backlinks`, `recent_activity`.
 
 ## Configuration
 
+Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
+
+<details>
+<summary><strong>Environment reference</strong></summary>
+
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `APO_NOTES_ROOT` | (set me) | Vault root to index |
-| `APO_INDEX` | `engine/index.db` | sqlite-vec database |
+| `APO_NOTES_ROOT` | (required) | Absolute path to the vault root |
+| `APO_INDEX` | `engine/index.db` | sqlite-vec database path |
 | `APO_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace |
-| `APO_INGEST_DIR` | `resources/wiki` | Convention: wiki path for defuddle→`write_note` (advisory) |
-| `APO_EMBED_BACKEND` | `ollama` | `ollama` (Metal/GPU) or `fastembed` (ONNX) |
+| `APO_INGEST_DIR` | `resources/wiki` | Advisory convention for wiki ingest paths |
+| `APO_EMBED_BACKEND` | `ollama` | `ollama` or `fastembed` (ONNX) |
 | `APO_MODEL` | `bge-m3` | Ollama model, or a FastEmbed id when backend is `fastembed` |
 | `OLLAMA_KEEP_ALIVE` | `5m` | Keep embed model warm; `0` = unload when idle |
 | `WATCH_INTERVAL` | `30` | Periodic mtime scan (seconds) |
 | `APO_WATCH_DEBOUNCE` | `2` | Quiet seconds before re-embedding a path |
 
+Optional ONNX: `APO_EMBED_BACKEND=fastembed`, `APO_MODEL=BAAI/bge-large-en-v1.5`, then `just reindex`. Vectors are not interchangeable across models.
+
 Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 
-**Troubleshooting embed failures (Ollama backend):** if `apo-engine index` throws `HTTP Error 500` from Ollama's `/api/embed`, check `ollama --version` before assuming it's vault content — older Ollama builds (seen: 0.21.1) can emit NaN for realistic-length embedding inputs while trivial strings still work fine. Upgrading (`curl -fsSL https://ollama.com/install.sh | sh`) has resolved this in practice. The indexer bisects failing batches to skip only genuinely poisoned chunks rather than aborting the whole reindex, but that's a safety net, not a fix — a systemically unhealthy backend will silently skip most of the vault.
+</details>
 
-**Desk default:** Ollama `bge-m3` — warm unique query embeds ~120–150 ms on M4 Air; better exact-ID / multilingual recall than the ONNX large-EN experiment (rolled back). Full vault rebuild required when switching models.
-
-## Background watcher
-
-```bash
-just watch-install
-just watch-status
-```
-
-After pulling engine changes that touch watch/index code: `just setup && just watch-install`.
-
-Full rebuilds (`just reindex`) commit embeddings in batches with progress lines and clear
-the backlinks table — safe to interrupt and restart without duplicating the graph.
-
-With fsevents on, the watcher reconciles the full vault every `WATCH_RECONCILE_INTERVAL`
-(default 300s); day-to-day indexing is event + deferred-queue driven.
-
-## Docs map
+## Docs
 
 | Doc | For |
 |-----|-----|
-| [docs/quickstart.md](docs/quickstart.md) | New install + MCP |
-| [docs/onboard-prompt.md](docs/onboard-prompt.md) | Infer vault rules → propose agent persistent instructions |
-| [docs/profiles/](docs/profiles/) | Optional presets (PARA, llm-wiki) — layout **and** behaviors |
+| [docs/quickstart.md](docs/quickstart.md) | Install, MCP registration, verify, troubleshoot |
+| [docs/onboard-prompt.md](docs/onboard-prompt.md) | Infer vault rules → propose persistent agent instructions |
+| [docs/profiles/](docs/profiles/) | Optional presets (PARA, llm-wiki) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
-| [docs/mcp-migration.md](docs/mcp-migration.md) | Legacy memsearch → Apo (maintainers) |
+| [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App icon brief |
 
-## Design notes
+Maintainer migration notes (`docs/mcp-migration.md`) are intentionally off the teammate share path.
 
-- Engine is **convention-agnostic**: vault-relative paths + YAML frontmatter only.
-- Opinionated PARA/OKF/thread workflows are **optional vault policy**, not engine requirements.
-- Prefer `append_note` / `patch_note` over full-file `write_note` for edits.
-- Frontmatter and wikilinks are parsed once per index write and cached (`files.frontmatter`, the `backlinks` table) — catalog tools query sqlite, never the filesystem.
+## Boundaries
 
-### `patch_note` typed ops (v2)
+- **Scope:** one machine, one vault root, local engine — no cloud gateway in this repo.
+- **Maturity:** daily-driver quality; not claiming polished public-OSS packaging yet.
+- **Layouts:** PARA / OKF / thread workflows are optional vault policy (or a [profile](docs/profiles/)), not engine requirements.
 
-`ops[]` is a **Pydantic discriminated union** on `op` (`apo_engine.patch_ops`). MCP emits JSON Schema `oneOf` with `additionalProperties: false` so hosts that support it reject invented keys (`key`/`old`/`new`). Models that only read the Field description still get the same contract text.
-
-| `op` | Required | Optional |
-|------|----------|----------|
-| `set_field` | `field` | `value` |
-| `delete_field` | `field` | — |
-| `replace_text` | `find` | `replace`, `count`, `scope.heading` |
-| `replace_section` | `heading` | `text` |
-| `append` / `prepend` | `text` | `heading`, `position` |
-| `append_eof` | `text` | — |
-
-Hot-path adds still prefer standalone `append_note` (heading / `chunk_hash` / `create`).
+```bash
+just readme-check   # lint share-path markdown
+```
