@@ -32,7 +32,7 @@ lean/full contract covered by `engine/tests/test_mcp_lean.py` — keep it green.
 - **Single writer.** Only the watcher writes `index.db`. The MCP server reads
   and enqueues — see [docs/index-concurrency.md](docs/index-concurrency.md).
 - **Convention-agnostic engine.** Vault layout, frontmatter schemas, and PARA/
-  OKF/wiki habits are user policy (or an optional profile), not engine
+  OKF/wiki habits are user policy (vault **contracts**, or a template under docs/contracts/), not engine
   requirements. Don't hardcode a layout into the engine.
 - **No personal or employer paths** in tracked files, examples, or defaults.
 

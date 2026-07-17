@@ -94,7 +94,7 @@ Install gets the engine running. **Persistent write habits** should match *your*
 
 1. Open your vault as the agent workspace.
 2. **Existing structure:** paste [`onboard-prompt.md`](./onboard-prompt.md) (infer → propose → approve).
-3. **Empty vault / want a preset:** pick an optional profile under [`profiles/`](./profiles/), scaffold, *then* run the onboard prompt.
+3. **Empty vault / want a preset:** pick an optional contract template under [`contracts/`](./contracts/), scaffold (and any machine-readable YAML under `system/config/`), *then* run the onboard prompt.
 4. Review drafts; approve before anything is written.
 
 ## Troubleshooting

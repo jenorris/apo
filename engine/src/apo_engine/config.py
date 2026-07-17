@@ -43,9 +43,15 @@ COLLECTION: str = os.environ.get("APO_COLLECTION", "notes_global")
 # Default wiki path convention for agents (defuddle → write_note); not an MCP tool knob.
 INGEST_DIR: str = os.environ.get("APO_INGEST_DIR", "resources/wiki")
 
-# OKF write-path profile (optional). Empty → look for <vault>/system/config/okf-profile.schema.yaml.
-# APO_OKF_ENFORCEMENT=off|soft|hard overrides profile default / per-rule soft|hard.
-OKF_PROFILE: str = os.environ.get("APO_OKF_PROFILE", "").strip()
+# OKF write-path vault contract (optional). Empty → look for
+# <vault>/system/config/okf-contract.schema.yaml (then legacy okf-profile.schema.yaml).
+# APO_OKF_ENFORCEMENT=off|soft|hard overrides contract default / per-rule soft|hard.
+# APO_OKF_CONTRACT preferred; APO_OKF_PROFILE is a legacy alias.
+OKF_CONTRACT: str = (
+    os.environ.get("APO_OKF_CONTRACT", "").strip()
+    or os.environ.get("APO_OKF_PROFILE", "").strip()
+)
+OKF_PROFILE: str = OKF_CONTRACT  # legacy alias
 OKF_ENFORCEMENT: str = os.environ.get("APO_OKF_ENFORCEMENT", "").strip().lower()
 
 # SQLite busy-handler timeout (seconds) — cross-process writer contention.

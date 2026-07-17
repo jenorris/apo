@@ -1,8 +1,11 @@
-# Profile: PARA
+# Contract template: PARA
 
-**Status:** optional preset · **Layout + behaviors**
+**Status:** optional template · **Layout + behaviors**
 
 Tiago Forte–style PARA for a markdown PKB with Apo as the agent memory backend. Use when the vault is empty or the user explicitly wants this shape. Prefer [../onboard-prompt.md](../onboard-prompt.md) when a vault already has its own rules.
+
+Encode lasting rules in the vault (`AGENT.md`, optional machine contracts under `system/config/`). This file is a **template** to copy from — not live Apo config.
+
 
 ## Layout
 
@@ -21,7 +24,7 @@ Tiago Forte–style PARA for a markdown PKB with Apo as the agent memory backend
 └── system/                  # templates, agent config (optional)
 ```
 
-Create empty dirs with `.gitkeep` or first notes as you like. Do **not** require OKF, citations, or thread systems unless you add another profile later.
+Create empty dirs with `.gitkeep` or first notes as you like. Do **not** require OKF, citations, or thread systems unless you add another contract later.
 
 ### Frontmatter floor (suggested)
 
@@ -52,7 +55,7 @@ Markdown files here are source of truth. Use Apo MCP for search and surgical wri
 | `system/` | Templates and agent config |
 
 Search before creating notes. Prefer `append_note` / `patch_note` over full-file rewrites.
-Profile behaviors: see apo `docs/profiles/para.md` (or paste Behaviors section into your Cursor/Claude rules).
+Contract behaviors: see apo `docs/contracts/para.md` (or paste Behaviors section into your Cursor/Claude rules).
 ```
 
 ## Behaviors (ship these)
@@ -129,7 +132,7 @@ Completed projects and dead areas → `archives/` via `move_note`, preserving hi
 
 Set `APO_NOTES_ROOT` to this vault root; index; register MCP per [../quickstart.md](../quickstart.md). Then paste [../onboard-prompt.md](../onboard-prompt.md) so host rules (Cursor / Claude) match the folders you actually created.
 
-## Non-goals for this profile
+## Non-goals for this contract template
 
 - Multi-vault / ACL / gateway
 - Academic citation processors (unless you adopt footnotes yourself)

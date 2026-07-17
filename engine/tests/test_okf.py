@@ -9,7 +9,7 @@ from pathlib import Path
 
 from apo_engine import okf
 
-_MINI_PROFILE = """
+_MINI_CONTRACT = """
 okf_version: "0.1"
 type_field: okf_type
 legacy_type_field: type
@@ -54,18 +54,18 @@ legacy_type_map:
 
 class OkfStampTests(unittest.TestCase):
     def setUp(self):
-        okf.clear_profile_cache()
+        okf.clear_contract_cache()
         self._env = {}
-        for key in ("APO_OKF_PROFILE", "APO_OKF_ENFORCEMENT"):
+        for key in ("APO_OKF_CONTRACT", "APO_OKF_ENFORCEMENT"):
             self._env[key] = os.environ.pop(key, None)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        profile = self.root / "system" / "config" / "okf-profile.schema.yaml"
+        profile = self.root / "system" / "config" / "okf-contract.schema.yaml"
         profile.parent.mkdir(parents=True)
-        profile.write_text(_MINI_PROFILE, encoding="utf-8")
+        profile.write_text(_MINI_CONTRACT, encoding="utf-8")
 
     def tearDown(self):
-        okf.clear_profile_cache()
+        okf.clear_contract_cache()
         self.tmp.cleanup()
         for key, val in self._env.items():
             if val is None:
@@ -73,7 +73,20 @@ class OkfStampTests(unittest.TestCase):
             else:
                 os.environ[key] = val
 
-    def test_no_profile_is_off(self):
+    def test_legacy_profile_filename_still_loads(self):
+        legacy = self.root / "system" / "config" / "okf-profile.schema.yaml"
+        modern = self.root / "system" / "config" / "okf-contract.schema.yaml"
+        modern.rename(legacy)
+        okf.clear_contract_cache()
+        r = okf.process_concept(
+            vault_root=self.root,
+            rel_path="areas/threads/foo.md",
+            content="# Foo\n\nbody\n",
+        )
+        self.assertTrue(r.ok)
+        self.assertEqual(r.okf_type, "Thread")
+
+    def test_no_contract_is_off(self):
         empty = Path(tempfile.mkdtemp())
         try:
             r = okf.process_concept(
@@ -181,7 +194,7 @@ class OkfStampTests(unittest.TestCase):
 
     def test_enforcement_off_env(self):
         os.environ["APO_OKF_ENFORCEMENT"] = "off"
-        okf.clear_profile_cache()
+        okf.clear_contract_cache()
         r = okf.process_concept(
             vault_root=self.root,
             rel_path="areas/threads/foo.md",
@@ -221,18 +234,18 @@ class OkfStampTests(unittest.TestCase):
 
 
 class OkfWriteNoteIntegration(unittest.TestCase):
-    """Exercise MCP write_note sync path with a temp vault + profile."""
+    """Exercise MCP write_note sync path with a temp vault + contract."""
 
     def setUp(self):
-        okf.clear_profile_cache()
+        okf.clear_contract_cache()
         self._env = {}
-        for key in ("APO_OKF_PROFILE", "APO_OKF_ENFORCEMENT", "APO_NOTES_ROOT", "APO_COLLECTION", "APO_INDEX"):
+        for key in ("APO_OKF_CONTRACT", "APO_OKF_ENFORCEMENT", "APO_NOTES_ROOT", "APO_COLLECTION", "APO_INDEX"):
             self._env[key] = os.environ.pop(key, None)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        profile = self.root / "system" / "config" / "okf-profile.schema.yaml"
+        profile = self.root / "system" / "config" / "okf-contract.schema.yaml"
         profile.parent.mkdir(parents=True)
-        profile.write_text(_MINI_PROFILE, encoding="utf-8")
+        profile.write_text(_MINI_CONTRACT, encoding="utf-8")
         os.environ["APO_NOTES_ROOT"] = str(self.root)
         os.environ["APO_COLLECTION"] = "okf_test"
         os.environ["APO_INDEX"] = str(self.root / "index.db")
@@ -262,7 +275,7 @@ class OkfWriteNoteIntegration(unittest.TestCase):
         self.server = mod
 
     def tearDown(self):
-        okf.clear_profile_cache()
+        okf.clear_contract_cache()
         self.tmp.cleanup()
         for key, val in self._env.items():
             if val is None:

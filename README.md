@@ -9,7 +9,7 @@
     ·
     <a href="docs/onboard-prompt.md"><strong>Onboard</strong></a>
     ·
-    <a href="docs/profiles/"><strong>Profiles</strong></a>
+    <a href="docs/contracts/"><strong>Contracts</strong></a>
   </p>
   <p>
     <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white" />
@@ -60,7 +60,7 @@ filter_notes({"okf_type": "Project"}, limit=50)
 
 No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall.
 
-**Profiles:** the engine stays convention-agnostic by default (no profile → no stamp). Vaults that opt into an OKF Knowledge Bundle place `system/config/okf-profile.schema.yaml` (or set `APO_OKF_PROFILE`) and follow [docs/profiles/okf-bundle.md](docs/profiles/okf-bundle.md). `write_note` / `patch_note` then stamp/validate `okf_type` and related fields (`APO_OKF_ENFORCEMENT=off|soft|hard`).
+**Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/config/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard on `write_note` / `patch_note`. Templates to copy: [docs/contracts/](docs/contracts/) (especially [okf-bundle.md](docs/contracts/okf-bundle.md)). Override: `APO_OKF_ENFORCEMENT=off|soft|hard`. Legacy: `okf-profile.schema.yaml` / `APO_OKF_PROFILE` still accepted.
 
 
 ## Features
@@ -204,7 +204,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 |-----|-----|
 | [docs/quickstart.md](docs/quickstart.md) | Install, MCP registration, verify, troubleshoot |
 | [docs/onboard-prompt.md](docs/onboard-prompt.md) | Infer vault rules → propose persistent agent instructions |
-| [docs/profiles/](docs/profiles/) | Optional presets (PARA, llm-wiki) |
+| [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |
 
@@ -213,5 +213,5 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 - **Scope:** one machine, one vault root, local engine — no cloud gateway in this repo.
 - **Embeddings:** default stack needs Ollama + `bge-m3` running locally; ONNX is opt-in, not a drop-in without reindex.
 - **Maturity:** daily-driver quality; not claiming polished public-OSS packaging yet.
-- **Layouts:** PARA / OKF / thread workflows are optional vault policy (or a [profile](docs/profiles/)), not engine requirements — frontmatter filtering works either way.
+- **Layouts:** PARA / OKF / thread workflows are optional vault **contracts** (or a [template](docs/contracts/)), not engine requirements — frontmatter filtering works either way.
 

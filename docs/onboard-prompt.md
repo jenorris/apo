@@ -19,10 +19,10 @@ Apo is a local MCP memory engine: files on disk are source of truth; sqlite-vec 
 
 1. **Discover before prescribe.** Do not write persistent rules, AGENT/AGENTS/CLAUDE files, or Cursor rules until I approve a draft.
 2. **Preserve existing conventions.** Infer from this vault. Only propose Apo-shaped habits (search→anchor writes, check `ok`, folder=, deferred reindex) that fit what is already here.
-3. **Do not import PARA/OKF/thread rotations or a canned profile** unless this vault already uses them, or I explicitly ask for a preset from `docs/profiles/` (e.g. PARA, llm-wiki).
+3. **Do not import PARA/OKF/thread rotations or a canned contract** unless this vault already uses them, or I explicitly ask for a template from `docs/contracts/` (e.g. PARA, llm-wiki, OKF bundle).
 4. **One vault.** Ignore multi-tenant / gateway product framing.
 5. If Apo MCP is available, call `memory_status` first and confirm `APO_NOTES_ROOT` matches this workspace.
-6. If I asked for a profile: read that profile’s **Behaviors** section and fold them into Draft A (especially consequential-turn writes, adapted to *that* layout).
+6. If I asked for a contract template: read that template’s **Behaviors** section and fold them into Draft A (especially consequential-turn writes, adapted to *that* layout). Encode lasting machine rules in the vault (`system/config/…`), not only in chat.
 
 ### Phase 1 — Discover (read-only)
 

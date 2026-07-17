@@ -1,9 +1,10 @@
-"""OKF write-path stamp / validate — profile-driven, optional.
+"""OKF write-path stamp / validate — vault-contract-driven, optional.
 
-When no profile is configured or found, writes pass through unchanged (engine
-stays convention-agnostic). Meta vault ships ``system/config/okf-profile.schema.yaml``.
+When no contract is configured or found, writes pass through unchanged (engine
+stays convention-agnostic). Meta vault ships ``system/config/okf-contract.schema.yaml``
+(legacy ``okf-profile.schema.yaml`` still accepted).
 
-See Meta ``system/config/apo-okf-write-contract.md`` and Apo ``docs/profiles/okf-bundle.md``.
+See Meta ``system/config/apo-okf-write-contract.md`` and Apo ``docs/contracts/okf-bundle.md``.
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ _H1_RE = re.compile(r"(?m)^#\s+(.+)$")
 _FM_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 _SCALAR_RE = re.compile(r"^([A-Za-z0-9_]+):\s*(.*)$")
 
-_PROFILE_LOCK = threading.Lock()
-_PROFILE_CACHE: dict[str, tuple[float | None, "OkfProfile | None"]] = {}
+_CONTRACT_LOCK = threading.Lock()
+_CONTRACT_CACHE: dict[str, tuple[float | None, "OkfContract | None"]] = {}
 
 
 @dataclass
@@ -43,7 +44,7 @@ class PathRule:
 
 
 @dataclass
-class OkfProfile:
+class OkfContract:
     path: Path
     okf_version: str = "0.1"
     type_field: str = "okf_type"
@@ -86,14 +87,21 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def resolve_profile_path(vault_root: Path, explicit: str | None = None) -> Path | None:
+def resolve_contract_path(vault_root: Path, explicit: str | None = None) -> Path | None:
     if explicit is None:
-        explicit = os.environ.get("APO_OKF_PROFILE", "").strip()
+        explicit = (
+            os.environ.get("APO_OKF_CONTRACT", "").strip()
+            or os.environ.get("APO_OKF_PROFILE", "").strip()  # legacy alias
+        )
     if explicit:
         p = Path(explicit).expanduser()
         return p if p.is_file() else None
-    candidate = vault_root / "system" / "config" / "okf-profile.schema.yaml"
-    return candidate if candidate.is_file() else None
+    cfg = vault_root / "system" / "config"
+    for name in ("okf-contract.schema.yaml", "okf-profile.schema.yaml"):
+        candidate = cfg / name
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def enforcement_override() -> str | None:
@@ -131,10 +139,10 @@ def _has_frontmatter(text: str) -> bool:
     return bool(_FM_RE.match(text))
 
 
-def load_profile(path: Path) -> OkfProfile:
+def load_contract(path: Path) -> OkfContract:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
-        raise ValueError(f"OKF profile must be a mapping: {path}")
+        raise ValueError(f"OKF contract must be a mapping: {path}")
 
     rules: list[PathRule] = []
     for raw in data.get("path_rules") or []:
@@ -157,7 +165,7 @@ def load_profile(path: Path) -> OkfProfile:
     if not isinstance(legacy, dict):
         legacy = {}
 
-    return OkfProfile(
+    return OkfContract(
         path=path,
         okf_version=str(data.get("okf_version") or "0.1"),
         type_field=str(data.get("type_field") or "okf_type"),
@@ -172,38 +180,38 @@ def load_profile(path: Path) -> OkfProfile:
     )
 
 
-def get_profile(vault_root: Path) -> OkfProfile | None:
-    """Load and cache profile for vault_root. None = OKF off for this vault."""
-    profile_path = resolve_profile_path(vault_root)
-    if profile_path is None:
+def get_contract(vault_root: Path) -> OkfContract | None:
+    """Load and cache contract for vault_root. None = OKF off for this vault."""
+    contract_path = resolve_contract_path(vault_root)
+    if contract_path is None:
         return None
     key = str(vault_root.resolve())
     try:
-        mtime = profile_path.stat().st_mtime
+        mtime = contract_path.stat().st_mtime
     except OSError:
         return None
-    with _PROFILE_LOCK:
-        cached = _PROFILE_CACHE.get(key)
+    with _CONTRACT_LOCK:
+        cached = _CONTRACT_CACHE.get(key)
         if cached and cached[0] == mtime:
             return cached[1]
         try:
-            profile = load_profile(profile_path)
+            contract = load_contract(contract_path)
         except (OSError, ValueError, yaml.YAMLError):
-            _PROFILE_CACHE[key] = (mtime, None)
+            _CONTRACT_CACHE[key] = (mtime, None)
             return None
-        _PROFILE_CACHE[key] = (mtime, profile)
-        return profile
+        _CONTRACT_CACHE[key] = (mtime, contract)
+        return contract
 
 
-def clear_profile_cache() -> None:
-    with _PROFILE_LOCK:
-        _PROFILE_CACHE.clear()
+def clear_contract_cache() -> None:
+    with _CONTRACT_LOCK:
+        _CONTRACT_CACHE.clear()
 
 
-def match_rule(profile: OkfProfile, rel_path: str) -> PathRule | None:
+def match_rule(contract: OkfContract, rel_path: str) -> PathRule | None:
     rel = rel_path.replace("\\", "/").lstrip("/")
     path = PurePosixPath(rel)
-    for rule in profile.path_rules:
+    for rule in contract.path_rules:
         pat = rule.match.replace("\\", "/")
         # Prefer full_match (Py 3.13+) so "index.md" does not match nested paths.
         matched = False
@@ -221,18 +229,18 @@ def match_rule(profile: OkfProfile, rel_path: str) -> PathRule | None:
         if matched:
             return rule
     name = path.name
-    if name in profile.reserved_filenames and rel != "index.md":
+    if name in contract.reserved_filenames and rel != "index.md":
         return PathRule(match=name, enforcement="reserved")
     if rel == "index.md":
         return PathRule(match="index.md", enforcement="exempt")
     return None
 
 
-def _effective_enforcement(rule_enforcement: str, profile_default: str) -> str:
+def _effective_enforcement(rule_enforcement: str, contract_default: str) -> str:
     override = enforcement_override()
     if override == "off":
         return "off"
-    base = rule_enforcement or profile_default or "soft"
+    base = rule_enforcement or contract_default or "soft"
     if base in {"exempt", "reserved"}:
         return base
     if override in {"soft", "hard"}:
@@ -240,17 +248,17 @@ def _effective_enforcement(rule_enforcement: str, profile_default: str) -> str:
     return base if base in {"soft", "hard"} else "soft"
 
 
-def _infer_okf_type(profile: OkfProfile, rel_path: str, scalars: dict[str, str], rule: PathRule | None) -> str:
-    type_field = profile.type_field
+def _infer_okf_type(contract: OkfContract, rel_path: str, scalars: dict[str, str], rule: PathRule | None) -> str:
+    type_field = contract.type_field
     existing = (scalars.get(type_field) or "").strip()
     if existing:
         return existing
     if rule and rule.okf_type:
         return rule.okf_type
-    legacy = (scalars.get(profile.legacy_type_field) or "").strip()
-    if legacy and legacy in profile.legacy_type_map:
-        return profile.legacy_type_map[legacy]
-    return profile.default_okf_type
+    legacy = (scalars.get(contract.legacy_type_field) or "").strip()
+    if legacy and legacy in contract.legacy_type_map:
+        return contract.legacy_type_map[legacy]
+    return contract.default_okf_type
 
 
 def _set_fields(content: str, updates: dict[str, str]) -> str:
@@ -270,19 +278,19 @@ def process_concept(
     content: str,
     bump_timestamp: bool = False,
 ) -> OkfResult:
-    """Stamp / validate concept content. No-op when profile missing or enforcement off."""
+    """Stamp / validate concept content. No-op when contract missing or enforcement off."""
     override = enforcement_override()
     if override == "off":
         return OkfResult(content=content, enforcement="off")
 
-    profile = get_profile(vault_root)
-    if profile is None:
+    contract = get_contract(vault_root)
+    if contract is None:
         return OkfResult(content=content, enforcement="off")
 
     rel = rel_path.replace("\\", "/").lstrip("/")
-    rule = match_rule(profile, rel)
-    rule_enf = rule.enforcement if rule else profile.default_enforcement
-    enf = _effective_enforcement(rule_enf, profile.default_enforcement)
+    rule = match_rule(contract, rel)
+    rule_enf = rule.enforcement if rule else contract.default_enforcement
+    enf = _effective_enforcement(rule_enf, contract.default_enforcement)
 
     if enf == "off":
         return OkfResult(content=content, enforcement="off")
@@ -316,7 +324,7 @@ def process_concept(
         elif bump_timestamp:
             new_content = _set_fields(new_content, {"timestamp": utc_now()})
             stamped.append("timestamp")
-        okf = _infer_okf_type(profile, rel, _parse_scalars(new_content), rule)
+        okf = _infer_okf_type(contract, rel, _parse_scalars(new_content), rule)
         return OkfResult(
             content=new_content,
             stamped=stamped,
@@ -329,9 +337,9 @@ def process_concept(
     updates: dict[str, str] = {}
     stamped = []
     warnings = []
-    type_field = profile.type_field
+    type_field = contract.type_field
 
-    inferred = _infer_okf_type(profile, rel, scalars, rule)
+    inferred = _infer_okf_type(contract, rel, scalars, rule)
     if not (scalars.get(type_field) or "").strip():
         updates[type_field] = inferred
         stamped.append(type_field)
@@ -373,7 +381,7 @@ def process_concept(
     final_scalars = _parse_scalars(new_content)
     okf_type = (final_scalars.get(type_field) or inferred).strip() or None
 
-    required = list(profile.core_required)
+    required = list(contract.core_required)
     if rule and rule.required_fields:
         for f in rule.required_fields:
             if f not in required:
@@ -384,7 +392,7 @@ def process_concept(
         if f == type_field:
             val = (final_scalars.get(type_field) or "").strip()
             if not val:
-                violations.append({"field": type_field, "expected": rule.okf_type or profile.default_okf_type})
+                violations.append({"field": type_field, "expected": rule.okf_type or contract.default_okf_type})
             elif rule and rule.okf_type and val != rule.okf_type and enf == "hard":
                 violations.append({"field": type_field, "expected": rule.okf_type})
             continue
@@ -424,3 +432,11 @@ def process_concept(
         enforcement=enf,
         ok=True,
     )
+
+
+# Back-compat aliases (pre-contracts rename)
+resolve_profile_path = resolve_contract_path
+load_profile = load_contract
+get_profile = get_contract
+clear_profile_cache = clear_contract_cache
+OkfProfile = OkfContract

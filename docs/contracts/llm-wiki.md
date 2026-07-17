@@ -1,11 +1,13 @@
-# Profile: LLM wiki (Karpathy-style)
+# Contract template: LLM wiki (Karpathy-style)
 
-**Status:** optional preset · **Layout + behaviors**
+**Status:** optional template · **Layout + behaviors**
 
 Compile raw sources into a persistent, LLM-maintained markdown wiki instead of re-RAGing snippets every query. Pattern from [Karpathy’s llm-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f); concrete agent skill often follows [llm-wiki skill](https://github.com/lewislulu/llm-wiki-skill) layouts (`raw/` + `wiki/` + schema file).
 
 **Use when:** topic/research knowledge bases, literature synthesis, “compile once, query the wiki.”
 **Don’t use when:** life OS, daily ops, project tracking — use [para.md](./para.md) (or keep llm-wiki as a **silo** beside PARA).
+
+Encode lasting rules in the vault; this file is a **template** to copy from — not live Apo config.
 
 ## Layout
 
