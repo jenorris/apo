@@ -83,8 +83,10 @@ No separate issue tracker required for “show me open X in folder Y.” Prefer 
 
 ```mermaid
 flowchart LR
-  Agent["Cursor / Claude"]
-  MCP["MCP server"]
+  Agent["Cursor / Claude Code"]
+  Gateway["Laravel gateway"]
+  MCP["stdio MCP"]
+  RPC["apo-engine serve RPC"]
   Queue["Deferred queue"]
   Watch["apo-engine watch"]
   Index["index.db"]
@@ -92,8 +94,11 @@ flowchart LR
   Embed["Ollama bge-m3"]
 
   Agent -->|"search · read · write"| MCP
-  MCP -->|"read / write files"| Vault
-  MCP -->|"enqueue paths"| Queue
+  Gateway -->|"search · read · filter"| RPC
+  MCP --> Vault
+  MCP --> Queue
+  RPC -->|"hybrid query / read"| Index
+  RPC --> Vault
   Queue --> Watch
   Watch -->|"chunk · embed"| Embed
   Embed --> Index
@@ -206,6 +211,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 
 | Doc | For |
 |-----|-----|
+| [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC for Laravel / gateways |
 | [docs/quickstart.md](docs/quickstart.md) | Install, MCP registration, verify, troubleshoot |
 | [docs/onboard-prompt.md](docs/onboard-prompt.md) | Infer vault rules → propose persistent agent instructions |
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |

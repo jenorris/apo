@@ -89,3 +89,9 @@ SCOPED_VECTOR_FULL_SCAN_MAX: int = int(os.environ.get("APO_SCOPED_VECTOR_FULL_SC
 # Cache identical query embeddings (seconds TTL; 0 disables).
 QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "120"))
 QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "64"))
+
+# Local RPC (apo-engine serve) — loopback HTTP for Laravel / other gateways.
+RPC_HOST: str = os.environ.get("APO_RPC_HOST", "127.0.0.1")
+RPC_PORT: int = int(os.environ.get("APO_RPC_PORT", "8765"))
+RPC_SOCKET: str = os.environ.get("APO_RPC_SOCKET", "").strip()
+RPC_TOKEN: str = os.environ.get("APO_RPC_TOKEN", "").strip()

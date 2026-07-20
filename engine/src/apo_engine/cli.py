@@ -1,11 +1,13 @@
-"""Command-line interface: index | search | stats | watch."""
+"""Command-line interface: index | search | stats | watch | serve."""
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
-from . import config, core, vaults
+from . import core, vaults
+from .rpc import run_rpc
 from .watch import run_watch
 
 
@@ -61,6 +63,18 @@ def _cmd_watch(args) -> int:
     return 0
 
 
+def _cmd_serve(args) -> int:
+    host = args.host or os.environ.get("APO_RPC_HOST", "127.0.0.1")
+    port = args.port if args.port else int(os.environ.get("APO_RPC_PORT", "8765"))
+    sock = (args.socket or os.environ.get("APO_RPC_SOCKET", "")).strip() or None
+    if args.token is not None:
+        token = args.token
+    else:
+        token = os.environ.get("APO_RPC_TOKEN", "")
+    run_rpc(host=host, port=port, socket_path=sock, token=token or None)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="apo-engine", description="Local semantic search over a markdown vault.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -88,6 +102,24 @@ def main(argv: list[str] | None = None) -> int:
     pw.add_argument("--interval", type=float, default=None, help="poll interval seconds (default from WATCH_INTERVAL)")
     pw.add_argument("--poll-only", action="store_true", help="disable fsevents; poll on interval only")
     pw.set_defaults(func=_cmd_watch)
+
+    pr = sub.add_parser(
+        "serve",
+        help="local JSON HTTP RPC for gateways (loopback; optional Unix socket)",
+    )
+    pr.add_argument("--host", default="", help="bind host (default APO_RPC_HOST or 127.0.0.1)")
+    pr.add_argument("--port", type=int, default=0, help="bind port (default APO_RPC_PORT or 8765)")
+    pr.add_argument(
+        "--socket",
+        default="",
+        help="Unix domain socket path (APO_RPC_SOCKET); overrides host/port when set",
+    )
+    pr.add_argument(
+        "--token",
+        default=None,
+        help="optional bearer token (default APO_RPC_TOKEN; empty = no auth on loopback)",
+    )
+    pr.set_defaults(func=_cmd_serve)
 
     args = p.parse_args(argv)
     return args.func(args)

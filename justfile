@@ -32,6 +32,10 @@ search *ARGS:
 stats:
     {{eng}} stats
 
+# Local JSON HTTP RPC for gateways (default http://127.0.0.1:8765).
+rpc *ARGS:
+    {{eng}} serve {{ARGS}}
+
 watch-fg:
     {{eng}} watch
 
