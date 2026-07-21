@@ -83,6 +83,7 @@ class PatchNoteSchemaTest(unittest.TestCase):
             "append",
             "prepend",
             "append_eof",
+            "check_item",
         }
         self.assertTrue(
             expected <= op_names,
@@ -100,6 +101,56 @@ class PatchNoteSchemaTest(unittest.TestCase):
         dumped = ops_to_dicts([SetFieldOp(op="set_field", field="status", value="active")])
         self.assertEqual(dumped[0]["field"], "status")
         self.assertNotIn("key", dumped[0])
+
+    def test_replace_text_heading_alias_normalizes_to_scope(self):
+        from apo_engine.patch_ops import ReplaceTextOp, ops_to_dicts
+        from pydantic import ValidationError
+
+        dumped = ops_to_dicts([
+            ReplaceTextOp.model_validate({
+                "op": "replace_text",
+                "find": "- [ ] x",
+                "replace": "- [x] x",
+                "heading": "## Next action",
+            })
+        ])
+        self.assertEqual(dumped[0]["scope"], {"heading": "## Next action"})
+        self.assertNotIn("heading", dumped[0])
+
+        with self.assertRaises(ValidationError):
+            ReplaceTextOp.model_validate({
+                "op": "replace_text",
+                "find": "a",
+                "heading": "## A",
+                "scope": {"heading": "## B"},
+            })
+
+    def test_replace_section_target_alias(self):
+        from apo_engine.patch_ops import ReplaceSectionOp, ops_to_dicts
+
+        dumped = ops_to_dicts([
+            ReplaceSectionOp.model_validate({
+                "op": "replace_section",
+                "target": "## Summary",
+                "text": "New",
+            })
+        ])
+        self.assertEqual(dumped[0]["heading"], "## Summary")
+        self.assertNotIn("target", dumped[0])
+
+    def test_check_item_in_union(self):
+        from apo_engine.patch_ops import CheckItemOp, ops_to_dicts
+
+        dumped = ops_to_dicts([
+            CheckItemOp.model_validate({
+                "op": "check_item",
+                "item": "Do thing",
+                "heading": "## Next action",
+            })
+        ])
+        self.assertEqual(dumped[0]["op"], "check_item")
+        self.assertEqual(dumped[0]["scope"], {"heading": "## Next action"})
+        self.assertNotIn("heading", dumped[0])
 
 
 if __name__ == "__main__":

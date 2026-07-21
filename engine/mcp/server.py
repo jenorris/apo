@@ -672,7 +672,7 @@ async def patch_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Batch mutate: set_field, delete_field, replace_text, replace_section, append/prepend, append_eof. Ops are typed by op."""
+    """Batch mutate: set_field, delete_field, replace_text, replace_section, append/prepend, append_eof, check_item. Ops are typed by op."""
     return await asyncio.to_thread(
         _patch_note_sync, path, ops, strict, dry_run, index, verbose, expected_mtime, vault
     )
