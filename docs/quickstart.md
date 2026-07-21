@@ -115,4 +115,4 @@ curl -sf http://127.0.0.1:11434/api/tags | grep -q bge-m3 && \
 
 ## What Apo is (one paragraph)
 
-Agents search and update **your markdown files**. The index is disposable. Prefer surgical writes (`append_note` / `patch_note`) over full-file rewrites. Folders and frontmatter schemas are **yours**; Apo stays path + YAML agnostic.
+Agents search and update **your markdown files**. The index is disposable. Prefer surgical writes (`append_note` / `patch_note`) over full-file rewrites. Folders and frontmatter schemas are **yours**; Apo stays path + YAML agnostic. See [patch-note-ops.md](patch-note-ops.md) for `target` vs `scope` roles and the `check_item` intent op.

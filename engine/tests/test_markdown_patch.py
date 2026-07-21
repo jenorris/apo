@@ -103,6 +103,45 @@ class TestPatch(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIn("- [x] Do thing", result.content)
 
+    def test_replace_text_top_level_heading_alias(self):
+        result = apply_patch(
+            THREAD,
+            [{
+                "op": "replace_text",
+                "find": "- [ ] Do thing",
+                "replace": "- [x] Do thing",
+                "heading": "## Next action",
+            }],
+        )
+        self.assertTrue(result.ok)
+        self.assertIn("- [x] Do thing", result.content)
+
+    def test_replace_section_target_alias(self):
+        result = apply_patch(
+            THREAD,
+            [{"op": "replace_section", "target": "## Summary", "text": "Via target."}],
+        )
+        self.assertTrue(result.ok)
+        self.assertIn("Via target.", result.content)
+        self.assertNotIn("Short summary.", result.content)
+
+    def test_check_item_scoped(self):
+        result = apply_patch(
+            THREAD,
+            [{"op": "check_item", "item": "Do thing", "heading": "## Next action"}],
+        )
+        self.assertTrue(result.ok)
+        self.assertIn("- [x] Do thing", result.content)
+
+    def test_check_item_already_checked(self):
+        checked = THREAD.replace("- [ ] Do thing", "- [x] Do thing")
+        result = apply_patch(
+            checked,
+            [{"op": "check_item", "item": "Do thing", "scope": {"heading": "## Next action"}}],
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.content.count("- [x] Do thing"), 1)
+
     def test_batch_thread_upsert(self):
         ops = [
             {"op": "append", "heading": "## History", "text": "- 2026-07-09 — done.\n"},
