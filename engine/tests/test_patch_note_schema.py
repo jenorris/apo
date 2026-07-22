@@ -83,7 +83,6 @@ class PatchNoteSchemaTest(unittest.TestCase):
             "append",
             "prepend",
             "append_eof",
-            "check_item",
         }
         self.assertTrue(
             expected <= op_names,
@@ -137,20 +136,6 @@ class PatchNoteSchemaTest(unittest.TestCase):
         ])
         self.assertEqual(dumped[0]["heading"], "## Summary")
         self.assertNotIn("target", dumped[0])
-
-    def test_check_item_in_union(self):
-        from apo_engine.patch_ops import CheckItemOp, ops_to_dicts
-
-        dumped = ops_to_dicts([
-            CheckItemOp.model_validate({
-                "op": "check_item",
-                "item": "Do thing",
-                "heading": "## Next action",
-            })
-        ])
-        self.assertEqual(dumped[0]["op"], "check_item")
-        self.assertEqual(dumped[0]["scope"], {"heading": "## Next action"})
-        self.assertNotIn("heading", dumped[0])
 
 
 if __name__ == "__main__":

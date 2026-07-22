@@ -8,8 +8,8 @@ Role vocabulary (agent UX):
   optional location for ``append`` / ``prepend``). Canonical wire key remains
   ``heading``; ``target`` is an accepted alias.
 - **scope** — optional search bound for find/replace-style ops
-  (``replace_text``, ``check_item``). ``scope.heading`` is canonical;
-  top-level ``heading`` is an accepted alias (agent success rate).
+  (``replace_text``). ``scope.heading`` is canonical; top-level ``heading``
+  is an accepted alias (agent success rate).
 """
 
 from __future__ import annotations
@@ -139,35 +139,6 @@ class AppendEofOp(_OpBase):
     text: str
 
 
-class CheckItemOp(_OpBase):
-    """Flip a markdown checkbox line (intent op — prefer over scoped replace_text)."""
-
-    op: Literal["check_item"]
-    item: str
-    checked: bool = True
-    count: int = 1
-    scope: ReplaceTextScope | None = None
-    heading: str | None = None  # alias for scope.heading
-
-    @model_validator(mode="before")
-    @classmethod
-    def _alias_heading_to_scope(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        top = data.get("heading")
-        if top is None:
-            return data
-        scope = data.get("scope")
-        if scope is None:
-            return {**data, "scope": {"heading": top}}
-        if isinstance(scope, dict):
-            sh = scope.get("heading")
-            if sh is not None:
-                _conflict(str(top), str(sh), left="heading", right="scope.heading")
-            return {**data, "scope": {**scope, "heading": top}}
-        return data
-
-
 PatchOp = Annotated[
     Union[
         SetFieldOp,
@@ -177,7 +148,6 @@ PatchOp = Annotated[
         AppendOp,
         PrependOp,
         AppendEofOp,
-        CheckItemOp,
     ],
     Field(discriminator="op"),
 ]
@@ -186,22 +156,21 @@ OPS_FIELD_DESC = (
     "Deterministic mutators; discriminated by op. "
     "Keys are field/find/replace — never key/old/new. "
     "Roles: target (section identity; wire key `heading`, alias `target`) vs "
-    "scope (search bound; `scope.heading`, alias top-level `heading` on "
-    "replace_text/check_item). Prefer check_item for checkbox flips."
+    "scope (search bound; `scope.heading`, alias top-level `heading` on replace_text)."
 )
 
 
 def normalize_op_dict(data: dict[str, Any]) -> dict[str, Any]:
     """Normalize aliases for the markdown apply path (dict or model dump).
 
-    - replace_text / check_item: top-level ``heading`` → ``scope.heading``
+    - replace_text: top-level ``heading`` → ``scope.heading``
     - replace_section / append / prepend: ``target`` → ``heading``
     Alias keys are stripped so apply_op sees one canonical shape.
     """
     data = dict(data)
     kind = data.get("op")
 
-    if kind in ("replace_text", "check_item"):
+    if kind == "replace_text":
         top = data.pop("heading", None)
         scope_raw = data.get("scope")
         scope: dict[str, Any] = dict(scope_raw) if isinstance(scope_raw, dict) else {}

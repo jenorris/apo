@@ -326,75 +326,6 @@ def apply_replace_section(lines: list[str], heading: str, text: str) -> tuple[li
     return merged, f"replaced body under {'#' * section.level} {section.title}"
 
 
-_CHECKBOX_PREFIX_RE = re.compile(r"^[-*]\s+\[[ xX]\]\s+(.*)$")
-_CHECKBOX_LINE_RE = re.compile(r"^([-*]\s+)\[([ xX])\](\s+)(.*)$")
-
-
-def _checkbox_item_body(item: str) -> str:
-    item = item.strip()
-    m = _CHECKBOX_PREFIX_RE.match(item)
-    return m.group(1).strip() if m else item
-
-
-def apply_check_item(
-    lines: list[str],
-    item: str,
-    *,
-    checked: bool = True,
-    count: int = 1,
-    scope_heading: str | None = None,
-) -> tuple[list[str], str]:
-    """Flip markdown task checkboxes matching ``item`` text.
-
-    ``item`` may be bare task text (``Send HECVAT``) or a full checkbox line
-    (``- [ ] Send HECVAT``). Prefer this over scoped ``replace_text`` for
-    checkbox flips.
-    """
-    body = _checkbox_item_body(item)
-    if not body:
-        raise PatchError("invalid_op", "check_item requires non-empty item text")
-
-    if scope_heading:
-        section = find_section(lines, scope_heading)
-        start, end = section.body_start, section.body_end
-        label = scope_heading
-    else:
-        start, end = 0, len(lines)
-        label = "note"
-
-    want = "x" if checked else " "
-    flipped = 0
-    already = 0
-    new_lines = list(lines)
-
-    for i in range(start, end):
-        if flipped >= count:
-            break
-        m = _CHECKBOX_LINE_RE.match(new_lines[i])
-        if not m:
-            continue
-        prefix, mark, gap, text = m.group(1), m.group(2), m.group(3), m.group(4)
-        if text.strip() != body:
-            continue
-        cur_checked = mark.lower() == "x"
-        if cur_checked == checked:
-            already += 1
-            continue
-        new_lines[i] = f"{prefix}[{want}]{gap}{text}"
-        flipped += 1
-
-    if flipped == 0 and already == 0:
-        raise PatchError(
-            "match_not_found",
-            f"checkbox item {body!r} not found in {label}",
-        )
-    if flipped == 0 and already > 0:
-        state = "checked" if checked else "unchecked"
-        return new_lines, f"checkbox already {state} ({already}) in {label}"
-    state = "checked" if checked else "unchecked"
-    return new_lines, f"set {flipped} checkbox(es) {state} in {label}"
-
-
 def _scope_heading_from_op(op: dict[str, Any]) -> str | None:
     """Resolve scope heading from ``scope.heading`` or top-level ``heading`` alias."""
     scope = op.get("scope") or {}
@@ -463,17 +394,6 @@ def apply_op(lines: list[str], op: dict[str, Any]) -> tuple[list[str], str]:
             lines,
             str(find),
             str(op.get("replace", "")),
-            count=int(op.get("count", 1)),
-            scope_heading=_scope_heading_from_op(op),
-        )
-    if kind == "check_item":
-        item = op.get("item")
-        if item is None or str(item).strip() == "":
-            raise PatchError("invalid_op", "check_item requires item")
-        return apply_check_item(
-            lines,
-            str(item),
-            checked=bool(op.get("checked", True)),
             count=int(op.get("count", 1)),
             scope_heading=_scope_heading_from_op(op),
         )

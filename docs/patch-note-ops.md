@@ -8,7 +8,7 @@ wire contract for MCP / RPC clients.
 | Role | Meaning | Ops | Wire keys |
 |------|---------|-----|-----------|
 | **target** | Section identity / append location | `replace_section`, `append`, `prepend` | `heading` (canonical), `target` (alias) |
-| **scope** | Search bound for find/replace | `replace_text`, `check_item` | `scope.heading` (canonical), top-level `heading` (alias) |
+| **scope** | Search bound for find/replace | `replace_text` | `scope.heading` (canonical), top-level `heading` (alias) |
 
 Conflicting alias pairs (`heading` vs `scope.heading`, or `target` vs `heading`)
 raise validation / `invalid_op` errors.
@@ -20,16 +20,9 @@ raise validation / `invalid_op` errors.
 | `set_field` | `field` | `value` |
 | `delete_field` | `field` | — |
 | `replace_text` | `find` | `replace`, `count`, `scope.heading` **or** `heading` |
-| `check_item` | `item` | `checked` (default true), `count`, `scope.heading` **or** `heading` |
 | `replace_section` | `heading` **or** `target` | `text` |
 | `append` / `prepend` | `text` | `heading` **or** `target`, `position` |
 | `append_eof` | `text` | — |
-
-Prefer **`check_item`** for checkbox flips instead of scoped `replace_text`.
-
-```json
-{"op": "check_item", "item": "Send HECVAT", "heading": "## Next action"}
-```
 
 ```json
 {"op": "replace_text", "find": "old", "replace": "new", "heading": "## Summary"}
