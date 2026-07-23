@@ -32,6 +32,7 @@ from apo_engine.markdown_patch import (
     section_from_chunk,
 )
 from apo_engine.patch_ops import OPS_FIELD_DESC, PatchOp, ops_to_dicts
+from apo_engine.validation_hints import flatten_patch_failure_error
 
 WATCH_PID_FILE = Path.home() / ".apo" / "watch.pid"
 DEFERRED_DIR = Path.home() / ".apo"
@@ -309,6 +310,12 @@ _MCP_INSTRUCTIONS = (
     else " Admin (APO_MCP_LEAN off): reload_config, memory_status, reindex_deferred, reindex."
 )
 mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
+
+# Rewrite opaque Pydantic ValidationError text into agent-actionable ToolError hints
+# (FastMCP validates args before tool bodies — see apo_engine.validation_hints).
+from apo_engine.agent_validation import AgentValidationMiddleware  # noqa: E402
+
+mcp.add_middleware(AgentValidationMiddleware())
 
 # Load vault registry at import (fast); the index backend connects lazily per vault.
 _load_vaults()
@@ -600,7 +607,7 @@ def _patch_note_sync(
 
     if dry_run:
         failed = sum(1 for r in result.results if r.get("status") == "error")
-        return {
+        out_dry: dict[str, Any] = {
             "ok": result.ok,
             "path": path,
             "dry_run": True,
@@ -608,9 +615,16 @@ def _patch_note_sync(
             "failed": failed,
             "partial": bool(failed and result.applied),
             "results": result.results,
-            "error": result.error,
-            "suggestions": result.suggestions,
         }
+        if result.error is not None:
+            out_dry.update(
+                flatten_patch_failure_error(
+                    result.error, suggestions=result.suggestions or None
+                )
+            )
+        elif result.suggestions:
+            out_dry["suggestions"] = result.suggestions
+        return out_dry
 
     # Non-strict: persist partial applies; surface failures via ok=false + results.
     if not result.ok and (strict or result.applied == 0):
@@ -618,8 +632,9 @@ def _patch_note_sync(
             path=path,
             applied=result.applied,
             results=result.results,
-            error=result.error,
-            suggestions=result.suggestions,
+            **flatten_patch_failure_error(
+                result.error, suggestions=result.suggestions or None
+            ),
         )
 
     to_write = result.content

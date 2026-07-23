@@ -23,6 +23,7 @@ from apo_engine.markdown_patch import (
 )
 from apo_engine.mcp_backend import shape_search_hits
 from apo_engine.patch_ops import ops_to_dicts
+from apo_engine.validation_hints import flatten_patch_failure_error
 
 
 class OpsError(Exception):
@@ -573,7 +574,7 @@ def patch_note(
 
     if dry_run:
         failed = sum(1 for r in result.results if r.get("status") == "error")
-        return {
+        out_dry: dict[str, Any] = {
             "ok": result.ok,
             "path": path,
             "dry_run": True,
@@ -581,18 +582,26 @@ def patch_note(
             "failed": failed,
             "partial": bool(failed and result.applied),
             "results": result.results,
-            "error": result.error,
-            "suggestions": result.suggestions,
             "vault": b.name,
         }
+        if result.error is not None:
+            out_dry.update(
+                flatten_patch_failure_error(
+                    result.error, suggestions=result.suggestions or None
+                )
+            )
+        elif result.suggestions:
+            out_dry["suggestions"] = result.suggestions
+        return out_dry
 
     if not result.ok and (strict or result.applied == 0):
         return _err(
             path=path,
             applied=result.applied,
             results=result.results,
-            error=result.error,
-            suggestions=result.suggestions,
+            **flatten_patch_failure_error(
+                result.error, suggestions=result.suggestions or None
+            ),
         )
 
     to_write = result.content

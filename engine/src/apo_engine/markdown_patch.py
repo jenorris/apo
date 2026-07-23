@@ -93,7 +93,11 @@ def find_section(
     level: int | None = None,
 ) -> Section:
     if not heading or heading.lower() in ("eof", "preamble"):
-        raise PatchError("anchor_not_found", f"heading anchor required (got {heading!r})")
+        raise PatchError(
+            "anchor_not_found",
+            f"heading anchor required (got {heading!r}); "
+            "pass heading=\"Section title\" for section ops, or use append_eof / omit heading for EOF append",
+        )
 
     if level is None:
         # A caller writing "### Notes" is specifying depth 3 explicitly — that's the whole
@@ -231,7 +235,11 @@ def _set_field_lines(lines: list[str], field: str, value: str) -> list[str]:
 def _delete_field_lines(lines: list[str], field: str) -> list[str]:
     bounds = _frontmatter_bounds(lines)
     if bounds is None:
-        raise PatchError("invalid_frontmatter", "no frontmatter block found")
+        raise PatchError(
+            "invalid_frontmatter",
+            "no YAML frontmatter block found; use set_field to create --- fields, "
+            "or write_note with a frontmatter stub",
+        )
     start, end = bounds
     key_prefix = f"{field}:"
     for i in range(start + 1, end):
@@ -298,10 +306,18 @@ def apply_replace_text(
         section = find_section(lines, scope_heading)
         segment = "\n".join(lines[section.body_start : section.body_end])
         if find not in segment:
-            raise PatchError("match_not_found", f"text not found in section {scope_heading!r}")
+            preview = find if len(find) <= 80 else find[:77] + "..."
+            raise PatchError(
+                "match_not_found",
+                f"text not found in section {scope_heading!r} (find={preview!r}); "
+                "re-read with read_note(path, heading=…) and retry replace_text",
+            )
         occurrences = segment.count(find)
         if count > occurrences:
-            raise PatchError("match_not_found", f"expected {count} replacement(s), found {occurrences}")
+            raise PatchError(
+                "match_not_found",
+                f"expected {count} replacement(s), found {occurrences} in section {scope_heading!r}",
+            )
         new_segment = segment.replace(find, replace, count)
         new_lines = new_segment.split("\n")
         merged = lines[: section.body_start] + new_lines + lines[section.body_end :]
@@ -309,10 +325,17 @@ def apply_replace_text(
 
     whole = "\n".join(lines)
     if find not in whole:
-        raise PatchError("match_not_found", "text not found in note")
+        preview = find if len(find) <= 80 else find[:77] + "..."
+        raise PatchError(
+            "match_not_found",
+            f"text not found in note (find={preview!r}); re-read with read_note and retry",
+        )
     occurrences = whole.count(find)
     if count > occurrences:
-        raise PatchError("match_not_found", f"expected {count} replacement(s), found {occurrences}")
+        raise PatchError(
+            "match_not_found",
+            f"expected {count} replacement(s), found {occurrences} in note",
+        )
     new_whole = whole.replace(find, replace, count)
     return new_whole.split("\n"), f"replaced {count} occurrence(s)"
 
@@ -377,7 +400,10 @@ def apply_op(lines: list[str], op: dict[str, Any]) -> tuple[list[str], str]:
     if kind == "set_field":
         field = op.get("field")
         if not field:
-            raise PatchError("invalid_op", "set_field requires field")
+            raise PatchError(
+                "invalid_op",
+                "set_field requires field (op uses field/value — not key/old/new)",
+            )
         merged = _set_field_lines(lines, str(field), str(op.get("value", "")))
         return merged, f"set frontmatter field {field!r}"
     if kind == "delete_field":
@@ -389,7 +415,10 @@ def apply_op(lines: list[str], op: dict[str, Any]) -> tuple[list[str], str]:
     if kind == "replace_text":
         find = op.get("find")
         if find is None:
-            raise PatchError("invalid_op", "replace_text requires find")
+            raise PatchError(
+                "invalid_op",
+                "replace_text requires find (use find/replace — not old/new)",
+            )
         return apply_replace_text(
             lines,
             str(find),
@@ -400,11 +429,18 @@ def apply_op(lines: list[str], op: dict[str, Any]) -> tuple[list[str], str]:
     if kind == "replace_section":
         heading = _target_heading_from_op(op)
         if not heading:
-            raise PatchError("invalid_op", "replace_section requires target or heading")
+            raise PatchError(
+                "invalid_op",
+                "replace_section requires heading or target (section title)",
+            )
         return apply_replace_section(lines, heading, str(op.get("text", "")))
     if kind == "append_eof":
         return apply_append(lines, op.get("text", ""), heading=None, section=None, position="end")
-    raise PatchError("invalid_op", f"unknown op {kind!r}")
+    raise PatchError(
+        "invalid_op",
+        f"unknown op {kind!r}; allowed: set_field, delete_field, replace_text, "
+        "replace_section, append, prepend, append_eof",
+    )
 
 
 def apply_patch(content: str, ops: list[dict[str, Any]], *, strict: bool = False) -> PatchResult:
