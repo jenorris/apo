@@ -20,6 +20,7 @@ from apo_engine import core as apo_core
 from apo_engine import deferred as index_deferred
 from apo_engine import okf as apo_okf
 from apo_engine import vaults as apo_vaults
+from apo_engine.agent_args import resolve_top_k, resolve_where, slice_note_content
 from apo_engine.mcp_backend import ApoMem
 from apo_engine.markdown_patch import (
     PatchError,
@@ -754,7 +755,14 @@ async def delete_note(path: str, vault: str = "") -> dict:
 ###############################################################################
 
 
-def _read_note_sync(path: str, heading: str | None = None, vault: str = "") -> dict:
+def _read_note_sync(
+    path: str,
+    heading: str | None = None,
+    vault: str = "",
+    start_line: int | None = None,
+    end_line: int | None = None,
+    max_chars: int | None = None,
+) -> dict:
     try:
         v = _vault(vault)
         full = _safe_resolve(v, path)
@@ -763,51 +771,74 @@ def _read_note_sync(path: str, heading: str | None = None, vault: str = "") -> d
     if not full.exists():
         return _err(path=path, error="not_found", message=f"note not found: {path}")
 
-    content = full.read_text(encoding="utf-8")
+    raw = full.read_text(encoding="utf-8")
     out: dict[str, Any] = {"ok": True, "path": path, "mtime": _mtime(full), "size": full.stat().st_size}
-    if heading:
-        lines = normalize_lines(content)
-        try:
-            section = find_section(lines, heading)
-        except PatchError as e:
-            return _err(path=path, error=e.code, message=e.message, suggestions=e.suggestions)
-        out["heading"] = f"{'#' * section.level} {section.title}"
-        out["content"] = "\n".join(lines[section.heading_line : section.body_end])
-    else:
-        out["content"] = content
+    try:
+        sliced = slice_note_content(
+            raw,
+            heading=heading,
+            start_line=start_line,
+            end_line=end_line,
+            max_chars=max_chars,
+        )
+    except PatchError as e:
+        return _err(path=path, error=e.code, message=e.message, suggestions=e.suggestions)
+    except ValueError as e:
+        return _err(path=path, error="bad_request", message=str(e))
+    if sliced["heading"]:
+        out["heading"] = sliced["heading"]
+    out["content"] = sliced["content"]
+    out["start_line"] = sliced["start_line"]
+    out["end_line"] = sliced["end_line"]
+    out["truncated"] = sliced["truncated"]
     return out
 
 
 @mcp.tool(annotations=_RO)
-async def read_note(path: str, heading: str | None = None, vault: str = "") -> dict:
-    """Read a note; optional heading= returns that section only."""
-    return await asyncio.to_thread(_read_note_sync, path, heading, vault)
+async def read_note(
+    path: str,
+    heading: str | None = None,
+    vault: str = "",
+    start_line: int | None = None,
+    end_line: int | None = None,
+    max_chars: int | None = None,
+) -> dict:
+    """Read a note. Optional heading= (section), start_line/end_line (1-based inclusive file lines), max_chars (truncate)."""
+    return await asyncio.to_thread(
+        _read_note_sync, path, heading, vault, start_line, end_line, max_chars
+    )
+
 
 @mcp.tool(annotations=_RO)
 async def search_notes(
     query: str,
-    top_k: int = 5,
+    top_k: int | None = None,
     folder: str = "",
     vault: str = "",
     snippet_chars: int = _DEFAULT_SEARCH_SNIPPET,
+    limit: int | None = None,
 ) -> dict:
-    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). folder= scopes. Hits include chunk_hash/heading for append/expand. content is a snippet (snippet_chars; 0=full). Pass vault= for multi-index."""
+    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). folder= scopes. Hits include chunk_hash/heading for append/expand. content is a snippet (snippet_chars; 0=full). limit= is an alias for top_k (default 5). Pass vault= for multi-index."""
     return await asyncio.to_thread(
-        _search_notes_sync, query, top_k, folder, vault, snippet_chars
+        _search_notes_sync, query, top_k, folder, vault, snippet_chars, limit
     )
 
 
 def _search_notes_sync(
     query: str,
-    top_k: int = 5,
+    top_k: int | None = None,
     folder: str = "",
     vault: str = "",
     snippet_chars: int = _DEFAULT_SEARCH_SNIPPET,
+    limit: int | None = None,
 ) -> dict:
     try:
         v = _vault(vault)
     except VaultError as e:
         return _err(error="bad_vault", message=str(e))
+    k, err = resolve_top_k(top_k, limit)
+    if err:
+        return _err(error="bad_request", message=err)
     folder_clean = folder.replace("\\", "/").strip("/")
     try:
         with _bound(v):
@@ -815,7 +846,7 @@ def _search_notes_sync(
 
             hits = apo_core.search(
                 query,
-                k=top_k,
+                k=k,
                 folder=folder_clean,
                 snippet_chars=snippet_chars,
             )
@@ -893,17 +924,25 @@ async def expand_chunk(
 
 
 def _filter_notes_sync(
-    where: dict,
+    where: dict | None = None,
     folder: str = "",
     limit: int = 20,
     vault: str = "",
+    offset: int = 0,
+    filters: dict | None = None,
 ) -> dict:
     try:
         v = _vault(vault)
     except VaultError as e:
         return _err(error="bad_vault", message=str(e))
-    if not isinstance(where, dict):
-        return _err(error="bad_query", message="`where` must be an object (use {} to list all indexed notes in folder)")
+    where_obj, where_err = resolve_where(where, filters)
+    if where_err:
+        return _err(error="bad_query", message=where_err)
+    assert where_obj is not None
+    if offset < 0:
+        return _err(error="bad_request", message="offset must be >= 0")
+    if limit < 0:
+        return _err(error="bad_request", message="limit must be >= 0")
 
     folder_clean = folder.replace("\\", "/").strip("/")
     # Traversal check only — filter is index-backed and must not require the dir on disk.
@@ -914,7 +953,7 @@ def _filter_notes_sync(
             return _err(error="bad_path", message=str(e))
 
     with _bound(v):
-        total, matches = apo_core.filter_notes(where, folder_clean, limit)
+        total, matches = apo_core.filter_notes(where_obj, folder_clean, limit, offset)
     notes = [
         {
             "path": path,
@@ -923,18 +962,29 @@ def _filter_notes_sync(
         }
         for mt, path, fm in matches
     ]
-    return {"ok": True, "total": total, "notes": notes, "vault": v.name}
+    return {
+        "ok": True,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "notes": notes,
+        "vault": v.name,
+    }
 
 
 @mcp.tool(annotations=_RO)
 async def filter_notes(
-    where: dict,
+    where: dict | None = None,
     folder: str = "",
     limit: int = 20,
     vault: str = "",
+    offset: int = 0,
+    filters: dict | None = None,
 ) -> dict:
-    """Frontmatter catalog (no embeddings). where: {} = all in folder; else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in}. Newest first. Example: filter_notes({\"status\": {\"$in\": [\"active\", \"waiting\"]}}, folder=\"areas/threads\")."""
-    return await asyncio.to_thread(_filter_notes_sync, where, folder, limit, vault)
+    """Frontmatter catalog (no embeddings). where: {} = all in folder; else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in}. filters= aliases where. offset pages (0-based). Newest first. Example: filter_notes({\"status\": {\"$in\": [\"active\", \"waiting\"]}}, folder=\"areas/threads\")."""
+    return await asyncio.to_thread(
+        _filter_notes_sync, where, folder, limit, vault, offset, filters
+    )
 
 
 def _backlinks_sync(path: str, limit: int = 100, vault: str = "") -> dict:

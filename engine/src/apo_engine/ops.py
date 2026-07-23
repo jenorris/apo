@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from apo_engine import __version__, core, deferred as index_deferred, okf as apo_okf, vaults
+from apo_engine.agent_args import resolve_top_k, resolve_where, slice_note_content
 from apo_engine.markdown_patch import (
     PatchError,
     apply_append,
@@ -117,23 +118,27 @@ def stats(*, vault: str = "") -> dict[str, Any]:
 def search(
     query: str,
     *,
-    top_k: int = 5,
+    top_k: int | None = None,
     folder: str = "",
     vault: str = "",
     snippet_chars: int = 240,
     exclude: list[str] | None = None,
     hybrid: bool = True,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     try:
         b = _binding(vault)
     except OpsError as e:
         return _err(error=e.code, message=e.message)
+    k, err = resolve_top_k(top_k, limit)
+    if err:
+        return _err(error="bad_request", message=err)
     folder_clean = folder.replace("\\", "/").strip("/")
     try:
         with vaults.bind(b):
             hits = core.search(
                 query,
-                k=top_k,
+                k=k,
                 folder=folder_clean,
                 snippet_chars=snippet_chars,
                 exclude=exclude,
@@ -147,7 +152,15 @@ def search(
     return {"ok": True, "results": results, "vault": b.name}
 
 
-def read_note(path: str, *, heading: str | None = None, vault: str = "") -> dict[str, Any]:
+def read_note(
+    path: str,
+    *,
+    heading: str | None = None,
+    vault: str = "",
+    start_line: int | None = None,
+    end_line: int | None = None,
+    max_chars: int | None = None,
+) -> dict[str, Any]:
     try:
         b = _binding(vault)
         root = b.resolved().root
@@ -159,7 +172,7 @@ def read_note(path: str, *, heading: str | None = None, vault: str = "") -> dict
     if not full.exists():
         return _err(path=path, error="not_found", message=f"note not found: {path}")
 
-    content = full.read_text(encoding="utf-8")
+    raw = full.read_text(encoding="utf-8")
     out: dict[str, Any] = {
         "ok": True,
         "path": path,
@@ -167,21 +180,29 @@ def read_note(path: str, *, heading: str | None = None, vault: str = "") -> dict
         "size": full.stat().st_size,
         "vault": b.name,
     }
-    if heading:
-        lines = normalize_lines(content)
-        try:
-            section = find_section(lines, heading)
-        except PatchError as e:
-            return _err(
-                path=path,
-                error=e.code,
-                message=e.message,
-                suggestions=e.suggestions,
-            )
-        out["heading"] = f"{'#' * section.level} {section.title}"
-        out["content"] = "\n".join(lines[section.heading_line : section.body_end])
-    else:
-        out["content"] = content
+    try:
+        sliced = slice_note_content(
+            raw,
+            heading=heading,
+            start_line=start_line,
+            end_line=end_line,
+            max_chars=max_chars,
+        )
+    except PatchError as e:
+        return _err(
+            path=path,
+            error=e.code,
+            message=e.message,
+            suggestions=e.suggestions,
+        )
+    except ValueError as e:
+        return _err(path=path, error="bad_request", message=str(e))
+    if sliced["heading"]:
+        out["heading"] = sliced["heading"]
+    out["content"] = sliced["content"]
+    out["start_line"] = sliced["start_line"]
+    out["end_line"] = sliced["end_line"]
+    out["truncated"] = sliced["truncated"]
     return out
 
 
@@ -190,15 +211,18 @@ def filter_notes(
     *,
     folder: str = "",
     limit: int = 20,
+    offset: int = 0,
     vault: str = "",
+    filters: dict | None = None,
 ) -> dict[str, Any]:
-    if where is None:
-        where = {}
-    if not isinstance(where, dict):
-        return _err(
-            error="bad_query",
-            message="`where` must be an object (use {} to list all indexed notes in folder)",
-        )
+    where_obj, where_err = resolve_where(where, filters)
+    if where_err:
+        return _err(error="bad_query", message=where_err)
+    assert where_obj is not None
+    if offset < 0:
+        return _err(error="bad_request", message="offset must be >= 0")
+    if limit < 0:
+        return _err(error="bad_request", message="limit must be >= 0")
     try:
         b = _binding(vault)
         root = b.resolved().root
@@ -213,7 +237,7 @@ def filter_notes(
             return _err(error="bad_path", message=str(e))
 
     with vaults.bind(b):
-        total, matches = core.filter_notes(where, folder_clean, limit)
+        total, matches = core.filter_notes(where_obj, folder_clean, limit, offset)
     notes = [
         {
             "path": path,
@@ -222,7 +246,14 @@ def filter_notes(
         }
         for mt, path, fm in matches
     ]
-    return {"ok": True, "total": total, "notes": notes, "vault": b.name}
+    return {
+        "ok": True,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "notes": notes,
+        "vault": b.name,
+    }
 
 
 def expand_chunk(

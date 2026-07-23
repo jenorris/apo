@@ -370,6 +370,23 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertEqual(total, 5)
         self.assertEqual(len(rows), 2)
 
+    def test_filter_notes_offset_pages(self):
+        for i in range(5):
+            self.write(
+                f"o{i}.md",
+                f"---\nstatus: open\nseq: {i}\n---\n\n# O{i}\n\nbody {i}\n",
+            )
+        core.index_vault(verbose=False)
+        total, page0 = core.filter_notes({"status": "open"}, limit=2, offset=0)
+        total2, page1 = core.filter_notes({"status": "open"}, limit=2, offset=2)
+        self.assertEqual(total, 5)
+        self.assertEqual(total2, 5)
+        self.assertEqual(len(page0), 2)
+        self.assertEqual(len(page1), 2)
+        self.assertNotEqual({r[1] for r in page0}, {r[1] for r in page1})
+        _, page_tail = core.filter_notes({"status": "open"}, limit=2, offset=4)
+        self.assertEqual(len(page_tail), 1)
+
     def test_recent_preview_and_frontmatter_field(self):
         self.write("t.md", "---\ntitle: Hello\n---\n\n# Head\n\npreview body here\n")
         core.index_vault(verbose=False)

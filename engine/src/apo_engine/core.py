@@ -1658,17 +1658,27 @@ def _sql_json_scalar(v: Any) -> Any:
     return str(v)
 
 
-def filter_notes(where: dict, folder: str = "", limit: int = 20) -> tuple[int, list[tuple[float, str, dict]]]:
+def filter_notes(
+    where: dict,
+    folder: str = "",
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[int, list[tuple[float, str, dict]]]:
     """Deterministic frontmatter query over the cached `files.frontmatter` column.
 
-    Returns (total_matches, top-`limit` matches), each match (mtime, path, frontmatter),
-    sorted by mtime desc. No filesystem walk — reads the index only. ``$exists`` (and
-    empty ``where``) push into SQL via ``json_extract``; equality and richer operators
-    use the Python matcher (correct for list-valued fields and loose type coercion).
+    Returns (total_matches, page of matches), each match (mtime, path, frontmatter),
+    sorted by mtime desc. ``offset`` skips that many matches (0-based). No filesystem
+    walk — reads the index only. ``$exists`` (and empty ``where``) push into SQL via
+    ``json_extract``; equality and richer operators use the Python matcher (correct for
+    list-valued fields and loose type coercion).
 
-    SQL-pushdown path uses ``COUNT(*)`` plus ``ORDER BY mtime DESC LIMIT`` — never
-    materializes every matching frontmatter blob just to page ``limit`` rows.
+    SQL-pushdown path uses ``COUNT(*)`` plus ``ORDER BY mtime DESC LIMIT/OFFSET`` —
+    never materializes every matching frontmatter blob just to page ``limit`` rows.
     """
+    if offset < 0:
+        raise ValueError("offset must be >= 0")
+    if limit < 0:
+        raise ValueError("limit must be >= 0")
     folder_prefix = folder.replace("\\", "/").strip("/")
     db = reader_connect()
     sql_pred = _sql_pushdown_predicates(where) if where else ("1", [])
@@ -1686,8 +1696,8 @@ def filter_notes(where: dict, folder: str = "", limit: int = 20) -> tuple[int, l
         total = int(db.execute(f"SELECT COUNT(*) FROM files WHERE {where_sql}", params).fetchone()[0])
         rows = db.execute(
             f"SELECT path, mtime, frontmatter FROM files WHERE {where_sql} "
-            f"ORDER BY mtime DESC LIMIT ?",
-            [*params, limit],
+            f"ORDER BY mtime DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
         ).fetchall()
         matches: list[tuple[float, str, dict]] = []
         for path, mtime, fm_json in rows:
@@ -1713,7 +1723,7 @@ def filter_notes(where: dict, folder: str = "", limit: int = 20) -> tuple[int, l
         if all(_match_condition(fm.get(k), cond) for k, cond in where.items()):
             matches.append((mtime, path, fm))
     matches.sort(key=lambda t: t[0], reverse=True)
-    return len(matches), matches[:limit]
+    return len(matches), matches[offset : offset + limit]
 
 
 def _escape_like(s: str) -> str:

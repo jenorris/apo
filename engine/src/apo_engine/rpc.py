@@ -49,9 +49,12 @@ def _search(body: dict[str, Any]) -> dict[str, Any]:
     exclude = body.get("exclude")
     if exclude is not None and not isinstance(exclude, list):
         return {"ok": False, "error": "bad_request", "message": "`exclude` must be an array of strings"}
+    top_k = body.get("top_k", body.get("k"))
+    limit = body.get("limit")
     return ops.search(
         query,
-        top_k=int(body.get("top_k") or body.get("k") or 5),
+        top_k=int(top_k) if top_k is not None else None,
+        limit=int(limit) if limit is not None else None,
         folder=str(body.get("folder") or ""),
         vault=str(body.get("vault") or ""),
         snippet_chars=int(body.get("snippet_chars", 240)),
@@ -68,22 +71,43 @@ def _read(body: dict[str, Any]) -> dict[str, Any]:
     heading = body.get("heading")
     if heading is not None and not isinstance(heading, str):
         return {"ok": False, "error": "bad_request", "message": "`heading` must be a string"}
-    return ops.read_note(path, heading=heading, vault=str(body.get("vault") or ""))
+    start_line = body.get("start_line")
+    end_line = body.get("end_line")
+    max_chars = body.get("max_chars")
+    return ops.read_note(
+        path,
+        heading=heading,
+        vault=str(body.get("vault") or ""),
+        start_line=int(start_line) if start_line is not None else None,
+        end_line=int(end_line) if end_line is not None else None,
+        max_chars=int(max_chars) if max_chars is not None else None,
+    )
 
 
 @_route("POST", "/v1/filter")
 def _filter(body: dict[str, Any]) -> dict[str, Any]:
-    where = body.get("where", {})
+    where = body.get("where")
+    filters = body.get("filters")
+    if where is None and "where" not in body and filters is None and "filters" not in body:
+        where = {}
     if where is not None and not isinstance(where, dict):
         return {
             "ok": False,
             "error": "bad_query",
             "message": "`where` must be an object (use {} to list all indexed notes in folder)",
         }
+    if filters is not None and not isinstance(filters, dict):
+        return {
+            "ok": False,
+            "error": "bad_query",
+            "message": "`filters` must be an object (alias for where)",
+        }
     return ops.filter_notes(
-        where or {},
+        where,
+        filters=filters,
         folder=str(body.get("folder") or ""),
         limit=int(body.get("limit") or 20),
+        offset=int(body.get("offset") or 0),
         vault=str(body.get("vault") or ""),
     )
 
