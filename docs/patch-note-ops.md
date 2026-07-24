@@ -3,6 +3,15 @@
 Discriminated union on `op`. Files are source of truth; this document is the
 wire contract for MCP / RPC clients.
 
+## Write routing (append paths)
+
+| Need | Tool |
+|------|------|
+| Session log / History / post-search add | **`append_note`** (preferred) |
+| Frontmatter + section mutate in one call | **`patch_note`** (`set_field`, `replace_*`, …) |
+| Append text *while* batching other ops | `patch_note` `append` / `prepend` / `append_eof` |
+| Raw file tail (no heading) | `write_note(..., append=True)` — avoid; prefer `append_note` |
+
 ## Roles (not one overloaded “anchor”)
 
 | Role | Meaning | Ops | Wire keys |
@@ -11,21 +20,45 @@ wire contract for MCP / RPC clients.
 | **scope** | Search bound for find/replace | `replace_text` | `scope.heading` (canonical), top-level `heading` (alias) |
 
 Conflicting alias pairs (`heading` vs `scope.heading`, or `target` vs `heading`)
-raise validation / `invalid_op` errors.
+raise validation / `invalid_op` errors. Prefer canonical keys in new calls.
 
-## Ops
+## Ops (canonical shapes)
 
 | op | Required | Optional |
 |----|----------|----------|
 | `set_field` | `field` | `value` |
 | `delete_field` | `field` | — |
-| `replace_text` | `find` | `replace`, `count`, `scope.heading` **or** `heading` |
-| `replace_section` | `heading` **or** `target` | `text` |
-| `append` / `prepend` | `text` | `heading` **or** `target`, `position` |
+| `replace_text` | `find` | `replace`, `count`, `scope.heading` (**or** alias `heading`) |
+| `replace_section` | `heading` (**or** alias `target`) | `text` |
+| `append` / `prepend` | `text` | `heading` (**or** alias `target`), `position` |
 | `append_eof` | `text` | — |
 
 ```json
-{"op": "replace_text", "find": "old", "replace": "new", "heading": "## Summary"}
+{"op": "set_field", "field": "status", "value": "active"}
+```
+
+```json
+{"op": "delete_field", "field": "draft"}
+```
+
+```json
+{"op": "replace_text", "find": "old", "replace": "new", "scope": {"heading": "## Summary"}}
+```
+
+```json
+{"op": "replace_section", "heading": "## Summary", "text": "Replacement body\n"}
+```
+
+```json
+{"op": "append", "heading": "## History", "text": "- 2026-07-24 — note\n"}
+```
+
+```json
+{"op": "prepend", "heading": "## Session log", "text": "**2026-07-24 08:00 ET** — …\n\n"}
+```
+
+```json
+{"op": "append_eof", "text": "\n---\nfooter\n"}
 ```
 
 Normalization (`ops_to_dicts` / apply path) strips aliases so the engine sees one

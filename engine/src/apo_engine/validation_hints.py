@@ -12,11 +12,12 @@ from typing import Any
 
 
 _OPS_HINT = (
-    'Each ops[] item needs "op". Examples: '
-    '{"op":"replace_text","find":"…","replace":"…"}, '
-    '{"op":"replace_section","heading":"Next action","text":"…"}, '
-    '{"op":"append","heading":"History","text":"…"}, '
-    '{"op":"set_field","field":"status","value":"active"}. '
+    'Each ops[] item needs "op". Canonical examples: '
+    '{"op":"set_field","field":"status","value":"active"}, '
+    '{"op":"replace_text","find":"…","replace":"…","scope":{"heading":"## Summary"}}, '
+    '{"op":"replace_section","heading":"## Next action","text":"…"}, '
+    '{"op":"append","heading":"## History","text":"…"} '
+    "(standalone add → append_note). "
     "Keys are field/find/replace — never key/old/new."
 )
 

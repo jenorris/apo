@@ -14,14 +14,14 @@ _SERVER = _ENGINE / "mcp" / "server.py"
 _SRC = _ENGINE / "src"
 
 
-def _patch_note_tool():
-    with tempfile.TemporaryDirectory(prefix="apo-patch-schema-") as tmp:
+def _list_tools_lean(*, collection: str):
+    with tempfile.TemporaryDirectory(prefix="apo-mcp-schema-") as tmp:
         vault = Path(tmp) / "vault"
         vault.mkdir()
         os.environ["APO_MCP_LEAN"] = "1"
         os.environ["APO_NOTES_ROOT"] = str(vault)
         os.environ["APO_INDEX"] = str(Path(tmp) / "index.db")
-        os.environ["APO_COLLECTION"] = "patch_schema_test"
+        os.environ["APO_COLLECTION"] = collection
         # Prefer this worktree's apo_engine over a stale editable install.
         import sys
 
@@ -32,16 +32,20 @@ def _patch_note_tool():
         for name in list(sys.modules):
             if name == "apo_engine" or name.startswith("apo_engine."):
                 del sys.modules[name]
-        spec = importlib.util.spec_from_file_location("apo_mcp_patch_schema", _SERVER)
+        spec = importlib.util.spec_from_file_location(f"apo_mcp_{collection}", _SERVER)
         mod = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(mod)
-
         tools = asyncio.run(mod.mcp.list_tools())
-        for t in tools:
-            if t.name == "patch_note":
-                return t
-        raise AssertionError("patch_note not registered")
+        return mod, tools
+
+
+def _patch_note_tool():
+    _mod, tools = _list_tools_lean(collection="patch_schema_test")
+    for t in tools:
+        if t.name == "patch_note":
+            return t
+    raise AssertionError("patch_note not registered")
 
 
 def _ops_schema(tool) -> dict:
@@ -50,12 +54,47 @@ def _ops_schema(tool) -> dict:
     return schema["properties"]["ops"]
 
 
+def _tool_params(tool) -> dict:
+    schema = getattr(tool, "parameters", None) or tool.model_dump().get("parameters")
+    assert isinstance(schema, dict)
+    return schema["properties"]
+
+
 class PatchNoteSchemaTest(unittest.TestCase):
     def test_ops_description_names_contract(self):
         ops = _ops_schema(_patch_note_tool())
         desc = ops.get("description") or ""
-        for token in ("discriminated", "field", "find", "replace", "key/old/new"):
+        for token in (
+            "discriminated",
+            "field",
+            "find",
+            "replace",
+            "key/old/new",
+            "set_field",
+            "replace_text",
+            "append_note",
+            "scope",
+        ):
             self.assertIn(token, desc, msg=f"ops description missing {token!r}: {desc!r}")
+
+    def test_tool_descriptions_prefer_canonical_routing(self):
+        mod, tools = _list_tools_lean(collection="patch_desc_test")
+        by_name = {t.name: t for t in tools}
+
+        self.assertIn("prefer", (by_name["append_note"].description or "").lower())
+        self.assertIn("archives", (by_name["delete_note"].description or "").lower())
+
+        search_params = _tool_params(by_name["search_notes"])
+        self.assertIn("Prefer", search_params["limit"].get("description") or "")
+        self.assertIn("Alias", search_params["top_k"].get("description") or "")
+
+        filter_params = _tool_params(by_name["filter_notes"])
+        self.assertIn("canonical", (filter_params["where"].get("description") or "").lower())
+        self.assertIn("Alias", filter_params["filters"].get("description") or "")
+
+        instr = getattr(mod.mcp, "instructions", None) or ""
+        self.assertIn("append_note", instr)
+        self.assertIn("note://", instr)
 
     def test_ops_items_are_typed_oneof(self):
         tool = _patch_note_tool()

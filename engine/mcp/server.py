@@ -296,14 +296,19 @@ def _top_level_dirs(v: Vault) -> list[str]:
 _LEAN_BOOT = _env_truthy("APO_MCP_LEAN")
 _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown; sqlite-vec hybrid search; files are source of truth. "
-    "Writes: write_note (create/overwrite), append_note (add), "
-    "patch_note (mutate — ops use field/value, find/replace, heading/text; not key/old/new), "
-    "move_note (rename — not read+write+delete). "
-    "search_notes hits expose chunk_hash/heading for append/expand (skip read when possible). "
-    "filter_notes = frontmatter catalog; backlinks = [[wiki-links]]. "
-    "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole index.db "
-    "writer and wakes on enqueue. Multi-vault: pass vault= (APO_VAULTS registry); each vault "
-    "has its own index + deferred collection."
+    "Routing: write_note=create/overwrite; "
+    "append_note=session log / History / post-search add "
+    "(prefer over patch_note append and write_note append=True); "
+    "patch_note=frontmatter + section mutate "
+    "(ops use field/value, find/replace — not key/old/new); "
+    "move_note=rename/archive (prefer over delete_note). "
+    "search_notes=content (prefer limit=; top_k alias); "
+    "filter_notes=frontmatter catalog (prefer where=; filters alias). "
+    "Hits expose chunk_hash/heading for append/expand (skip read when possible). "
+    "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
+    "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
+    "index.db writer and wakes on enqueue. Multi-vault: pass vault= "
+    "(APO_VAULTS registry); each vault has its own index + deferred collection."
 ) + (
     ""
     if _LEAN_BOOT
@@ -465,12 +470,20 @@ def _write_note_sync(
 async def write_note(
     path: str,
     content: str,
-    append: bool = False,
+    append: Annotated[
+        bool,
+        Field(
+            description=(
+                "Raw file-tail append when the note already exists. "
+                "Prefer append_note (heading/chunk_hash) or patch_note for edits."
+            ),
+        ),
+    ] = False,
     index: bool | None = None,
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Create or overwrite a note. Prefer append_note / patch_note for edits. append=True = raw file tail."""
+    """Create or overwrite a note. Prefer append_note / patch_note for edits; avoid append=True."""
     return await asyncio.to_thread(
         _write_note_sync, path, content, append, index, expected_mtime, vault
     )
@@ -565,7 +578,7 @@ async def append_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Add text under heading, at search chunk_hash, or EOF (chunk_hash → heading → EOF)."""
+    """Preferred add for session log / History / post-search text. Anchor: chunk_hash → heading → EOF. Batch with other mutators → patch_note."""
     return await asyncio.to_thread(
         _append_note_sync,
         path,
@@ -688,7 +701,7 @@ async def patch_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    """Batch mutate: set_field, delete_field, replace_text, replace_section, append/prepend, append_eof. Ops are typed by op."""
+    """Batch mutate frontmatter/sections. Prefer set_field + replace_text/replace_section. Standalone text add → append_note."""
     return await asyncio.to_thread(
         _patch_note_sync, path, ops, strict, dry_run, index, verbose, expected_mtime, vault
     )
@@ -736,7 +749,7 @@ async def move_note(
     index: bool | None = None,
     vault: str = "",
 ) -> dict:
-    """Atomic rename/move (updates index). Prefer over read+write+delete. overwrite=True replaces dst."""
+    """Atomic rename/move/archive (updates index). Prefer over delete_note or read+write+delete. overwrite=True replaces dst."""
     return await asyncio.to_thread(_move_note_sync, src, dst, overwrite, index, vault)
 
 
@@ -761,7 +774,7 @@ def _delete_note_sync(path: str, vault: str = "") -> dict:
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False})
 async def delete_note(path: str, vault: str = "") -> dict:
-    """Delete a note and purge its chunks from the search index. Cannot be undone."""
+    """Irreversible delete + index purge. Prefer move_note to archives/ unless permanent removal is explicit."""
     return await asyncio.to_thread(_delete_note_sync, path, vault)
 
 
@@ -818,7 +831,7 @@ async def read_note(
     end_line: int | None = None,
     max_chars: int | None = None,
 ) -> dict:
-    """Read a note. Optional heading= (section), start_line/end_line (1-based inclusive file lines), max_chars (truncate)."""
+    """Read a known path. Optional heading= (section), start_line/end_line (1-based inclusive), max_chars (truncate). Unknown path → search_notes first."""
     return await asyncio.to_thread(
         _read_note_sync, path, heading, vault, start_line, end_line, max_chars
     )
@@ -827,13 +840,22 @@ async def read_note(
 @mcp.tool(annotations=_RO)
 async def search_notes(
     query: str,
-    top_k: int | None = None,
+    top_k: Annotated[
+        int | None,
+        Field(description="Alias for limit. Prefer limit=; conflicting values → bad_request."),
+    ] = None,
     folder: str = "",
     vault: str = "",
-    snippet_chars: int = _DEFAULT_SEARCH_SNIPPET,
-    limit: int | None = None,
+    snippet_chars: Annotated[
+        int,
+        Field(description="Hit preview length (default 240). 0 = full chunk text."),
+    ] = _DEFAULT_SEARCH_SNIPPET,
+    limit: Annotated[
+        int | None,
+        Field(description="Max hits (canonical; default 5). Prefer over top_k."),
+    ] = None,
 ) -> dict:
-    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). folder= scopes. Hits include chunk_hash/heading for append/expand. content is a snippet (snippet_chars; 0=full). limit= is an alias for top_k (default 5). Pass vault= for multi-index."""
+    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). Prefer limit= over top_k. folder= scopes. Hits include chunk_hash/heading for append/expand."""
     return await asyncio.to_thread(
         _search_notes_sync, query, top_k, folder, vault, snippet_chars, limit
     )
@@ -934,7 +956,7 @@ async def expand_chunk(
     vault: str = "",
     scope: Literal["section", "chunk"] = "section",
 ) -> dict:
-    """Expand search chunk_hash: scope=section (default, surrounding markdown) or chunk (indexed body, no disk read)."""
+    """Grow a search_notes hit by chunk_hash only (no path/heading). scope=section (default, disk) or chunk (index body)."""
     return await asyncio.to_thread(_expand_chunk_sync, chunk_hash, vault, scope)
 
 
@@ -989,14 +1011,26 @@ def _filter_notes_sync(
 
 @mcp.tool(annotations=_RO)
 async def filter_notes(
-    where: dict | None = None,
+    where: Annotated[
+        dict | None,
+        Field(
+            description=(
+                "Frontmatter predicate (canonical). {} = all in folder; "
+                "else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in}. "
+                'Example: {"status": {"$in": ["active", "waiting"]}}.'
+            ),
+        ),
+    ] = None,
     folder: str = "",
     limit: int = 20,
     vault: str = "",
     offset: int = 0,
-    filters: dict | None = None,
+    filters: Annotated[
+        dict | None,
+        Field(description="Alias for where. Prefer where=; do not pass both with different values."),
+    ] = None,
 ) -> dict:
-    """Frontmatter catalog (no embeddings). where: {} = all in folder; else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in}. filters= aliases where. offset pages (0-based). Newest first. Example: filter_notes({\"status\": {\"$in\": [\"active\", \"waiting\"]}}, folder=\"areas/threads\")."""
+    """Frontmatter catalog (no embeddings). Prefer where= over filters=. offset pages (0-based). Newest first."""
     return await asyncio.to_thread(
         _filter_notes_sync, where, folder, limit, vault, offset, filters
     )
@@ -1030,7 +1064,7 @@ def _backlinks_sync(path: str, limit: int = 100, vault: str = "") -> dict:
 
 @mcp.tool(annotations=_RO)
 async def backlinks(path: str, limit: int = 100, vault: str = "") -> dict:
-    """Notes that [[wiki-link]] this path/stem/title (target need not exist)."""
+    """Index-backed inbound [[wiki-links]] to this path/stem/title (target need not exist on disk)."""
     return await asyncio.to_thread(_backlinks_sync, path, limit, vault)
 
 
@@ -1057,7 +1091,7 @@ def _recent_activity_sync(limit: int = 10, folder: str = "", vault: str = "") ->
 
 @mcp.tool(annotations=_RO)
 async def recent_activity(limit: int = 10, folder: str = "", vault: str = "") -> dict:
-    """Most recently modified notes; optional folder= scope."""
+    """Browse newest notes by mtime; optional folder= scope. Status sweeps → filter_notes."""
     return await asyncio.to_thread(_recent_activity_sync, limit, folder, vault)
 
 
@@ -1139,7 +1173,7 @@ async def reindex(force: bool = False, vault: str = "") -> dict:
 
 @mcp.resource("note://{vault}/{path*}", mime_type="text/markdown")
 def note_resource(vault: str, path: str) -> str:
-    """Raw markdown content of a note, addressed as note://<vault>/<relative-path>."""
+    """Raw markdown via MCP resource URI note://<vault>/<relative-path>. Prefer read_note for agents."""
     v = _vault(vault)
     full = _safe_resolve(v, path)
     if not full.is_file():
@@ -1149,7 +1183,7 @@ def note_resource(vault: str, path: str) -> str:
 
 @mcp.resource("memory://vaults", mime_type="application/json")
 def vaults_resource() -> dict:
-    """Registered vaults with their roots, collections, and top-level directories."""
+    """Registered vaults (roots, collections, top-level dirs) via memory://vaults."""
     return {
         "default_vault": DEFAULT_VAULT,
         "vaults": {
