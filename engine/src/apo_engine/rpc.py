@@ -231,6 +231,7 @@ def _move(body: dict[str, Any]) -> dict[str, Any]:
         src,
         dst,
         overwrite=bool(body.get("overwrite")),
+        expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
     )
 

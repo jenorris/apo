@@ -396,6 +396,15 @@ def write_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
+    if append:
+        return _err(
+            path=path,
+            error="append_deprecated",
+            message=(
+                "write_note append is removed; use append_note(path, text, "
+                "heading=… or chunk_hash=…)"
+            ),
+        )
     try:
         b = _binding(vault)
         root = b.resolved().root
@@ -413,32 +422,26 @@ def write_note(
     new_top = len(parts) > 1 and not (root / parts[0]).exists()
 
     okf_meta: dict[str, Any] = {}
-    to_write = content
-    if not (append and existed):
-        okf = apo_okf.process_concept(vault_root=root, rel_path=path, content=content)
-        okf_meta = okf.as_response_fields()
-        if not okf.ok:
-            return _err(
-                path=path,
-                error=okf.error or "okf_validation",
-                message=okf.message or "OKF validation failed",
-                **{k: val for k, val in okf_meta.items() if k != "enforcement"},
-                enforcement=okf.enforcement,
-            )
-        to_write = okf.content
+    okf = apo_okf.process_concept(vault_root=root, rel_path=path, content=content)
+    okf_meta = okf.as_response_fields()
+    if not okf.ok:
+        return _err(
+            path=path,
+            error=okf.error or "okf_validation",
+            message=okf.message or "OKF validation failed",
+            **{k: val for k, val in okf_meta.items() if k != "enforcement"},
+            enforcement=okf.enforcement,
+        )
+    to_write = okf.content
 
     full.parent.mkdir(parents=True, exist_ok=True)
-    if append and existed:
-        with full.open("a", encoding="utf-8") as f:
-            f.write("\n" + content)
-    else:
-        full.write_text(to_write, encoding="utf-8")
+    full.write_text(to_write, encoding="utf-8")
     _enqueue_index(b, full)
 
     out: dict[str, Any] = {
         "ok": True,
         "path": path,
-        "action": "appended" if (append and existed) else ("overwrote" if existed else "created"),
+        "action": "overwrote" if existed else "created",
         "bytes": full.stat().st_size,
         "mtime": _mtime(full),
         "vault": b.name,
@@ -650,6 +653,7 @@ def move_note(
     dst: str,
     *,
     overwrite: bool = False,
+    expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
     try:
@@ -664,6 +668,8 @@ def move_note(
 
     if not src_full.exists():
         return _err(src=src, dst=dst, error="not_found", message=f"source note not found: {src}")
+    if (guard := _check_mtime(src_full, expected_mtime, src)):
+        return {**guard, "src": src, "dst": dst}
     if dst_full.exists() and not overwrite:
         return _err(
             src=src,

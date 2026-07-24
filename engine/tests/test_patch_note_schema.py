@@ -82,7 +82,17 @@ class PatchNoteSchemaTest(unittest.TestCase):
         by_name = {t.name: t for t in tools}
 
         self.assertIn("prefer", (by_name["append_note"].description or "").lower())
-        self.assertIn("archives", (by_name["delete_note"].description or "").lower())
+        self.assertIn("archive", (by_name["move_note"].description or "").lower())
+        self.assertNotIn("delete_note", by_name)
+
+        write_params = _tool_params(by_name["write_note"])
+        self.assertNotIn("index", write_params)
+        self.assertIn("Deprecated", write_params["append"].get("description") or "")
+        self.assertIn("mtime", (write_params["expected_mtime"].get("description") or "").lower())
+
+        move_params = _tool_params(by_name["move_note"])
+        self.assertIn("expected_mtime", move_params)
+        self.assertNotIn("index", move_params)
 
         search_params = _tool_params(by_name["search_notes"])
         self.assertIn("Prefer", search_params["limit"].get("description") or "")
@@ -95,6 +105,7 @@ class PatchNoteSchemaTest(unittest.TestCase):
         instr = getattr(mod.mcp, "instructions", None) or ""
         self.assertIn("append_note", instr)
         self.assertIn("note://", instr)
+        self.assertIn("Lean desk is default", instr)
 
     def test_ops_items_are_typed_oneof(self):
         tool = _patch_note_tool()

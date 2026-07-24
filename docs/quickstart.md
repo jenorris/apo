@@ -47,11 +47,12 @@ Add an `apo` block to `~/.cursor/mcp.json` (merge into existing `mcpServers`):
     "APO_EMBED_BACKEND": "ollama",
     "APO_MODEL": "bge-m3",
     "APO_OLLAMA_URL": "http://127.0.0.1:11434",
-    "OLLAMA_KEEP_ALIVE": "5m",
-    "APO_MCP_LEAN": "1"
+    "OLLAMA_KEEP_ALIVE": "5m"
   }
 }
 ```
+
+Lean desk is **default** (admin tools + `delete_note` hidden). Set `"APO_MCP_LEAN": "0"` only when you need `memory_status` / `reindex` / `delete_note`.
 
 **Quit Cursor fully** (Cmd+Q on macOS) and reopen. MCP subprocesses do not reliably hot-reload.
 
@@ -63,7 +64,7 @@ claude mcp add -s user apo -- \
   /ABSOLUTE/PATH/TO/apo/engine/mcp/server.py
 ```
 
-Ensure the same env vars as the Cursor block are visible to that process (`~/.claude.json` or shell profile). Set `APO_MCP_LEAN=1` unless you need admin tools (`memory_status`, `reindex`, …).
+Ensure the same env vars as the Cursor block are visible to that process (`~/.claude.json` or shell profile). Omit `APO_MCP_LEAN` (lean default) unless you need admin tools (`memory_status`, `reindex`, `delete_note` → set `APO_MCP_LEAN=0`).
 
 ## 4. Verify
 
@@ -71,7 +72,7 @@ Ensure the same env vars as the Cursor block are visible to that process (`~/.cl
 cd /ABSOLUTE/PATH/TO/apo && just inspect
 ```
 
-With `APO_MCP_LEAN=1`, expect **11** tools. Without lean, expect **15**.
+Lean default: expect **10** tools. With `APO_MCP_LEAN=0`, expect **15**.
 
 In the agent, run a known `search_notes` query — the right note should land near the top.
 

@@ -42,13 +42,19 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         ),
         "snippet_chars": "expand_chunk has no snippet_chars — pass chunk_hash (+ optional scope=section|chunk).",
     },
-    "append_note": {
-        "content": "append_note uses text= (not content). For full overwrite use write_note(path, content).",
-        "ops": "append_note has no ops — use patch_note for mutators, or append_note(path, text, heading=…).",
-    },
     "write_note": {
         "text": "write_note uses content= (not text). For append under a heading use append_note(path, text, heading=…).",
         "ops": "write_note has no ops — use patch_note for surgical edits.",
+        "append": (
+            "write_note append is removed — use append_note(path, text, heading=… "
+            "or chunk_hash=…)."
+        ),
+        "index": "write_note has no index= — writes always enqueue for apo-engine watch.",
+    },
+    "append_note": {
+        "content": "append_note uses text= (not content). For full overwrite use write_note(path, content).",
+        "ops": "append_note has no ops — use patch_note for mutators, or append_note(path, text, heading=…).",
+        "index": "append_note has no index= — writes always enqueue for apo-engine watch.",
     },
     "patch_note": {
         "text": "patch_note mutates via ops[] — put text on an op (append/replace_section), not top-level.",
@@ -57,6 +63,11 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "old": _OPS_HINT,
         "new": _OPS_HINT,
         "key": _OPS_HINT,
+        "index": "patch_note has no index= — writes always enqueue for apo-engine watch.",
+    },
+    "move_note": {
+        "index": "move_note has no index= — moves always enqueue purge/reindex for apo-engine watch.",
+        "path": "move_note uses src= and dst= (not path=).",
     },
     "search_notes": {
         "path": (

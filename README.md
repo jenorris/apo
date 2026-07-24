@@ -73,7 +73,7 @@ No separate issue tracker required for “show me open X in folder Y.” Prefer 
 |--|--|
 | **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown |
 | **Frontmatter catalogs** | `filter_notes` on any YAML property (`okf_type`, `status`, tags, …) |
-| **MCP surface** | 15 tools (11 with `APO_MCP_LEAN=1`) for Cursor and Claude Code |
+| **MCP surface** | 15 tools (10 lean default) for Cursor and Claude Code |
 | **Surgical writes** | `append_note` / `patch_note` with heading / `chunk_hash` anchors and `expected_mtime` |
 | **Index-backed graphs** | `backlinks` + `recent_activity` hit sqlite — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
@@ -177,10 +177,10 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 | Mode | Count | Includes |
 |------|------:|----------|
-| Lean (`APO_MCP_LEAN=1`) | **11** | search/read/write/catalog tools for daily agent use |
-| Full | **15** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config` |
+| Lean (**default**) | **10** | search/read/write/catalog tools for daily agent use |
+| Full (`APO_MCP_LEAN=0`) | **15** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note` |
 
-Core write/read tools: `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note`, `move_note`, `delete_note`, `filter_notes`, `backlinks`, `recent_activity`.
+Core write/read tools: `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note`, `move_note`, `filter_notes`, `backlinks`, `recent_activity`.
 
 ## Configuration
 

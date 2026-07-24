@@ -142,6 +142,18 @@ class TestLocalRpc(unittest.TestCase):
         self.assertTrue(written["ok"])
         self.assertEqual(written["action"], "created")
 
+        status, rejected = self._post(
+            "/v1/write",
+            {
+                "path": "inbox/rpc-write.md",
+                "content": "tail\n",
+                "append": True,
+            },
+        )
+        self.assertEqual(status, 400, rejected)
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["error"], "append_deprecated")
+
         status, appended = self._post(
             "/v1/append",
             {"path": "inbox/rpc-write.md", "text": "- bullet\n", "heading": "Head"},
@@ -159,9 +171,25 @@ class TestLocalRpc(unittest.TestCase):
         self.assertEqual(status, 200, patched)
         self.assertTrue(patched["ok"])
 
+        mtime = patched["mtime"]
+        status, stale = self._post(
+            "/v1/move",
+            {
+                "src": "inbox/rpc-write.md",
+                "dst": "inbox/rpc-moved.md",
+                "expected_mtime": mtime - 10,
+            },
+        )
+        self.assertEqual(status, 409, stale)
+        self.assertEqual(stale["error"], "stale_write")
+
         status, moved = self._post(
             "/v1/move",
-            {"src": "inbox/rpc-write.md", "dst": "inbox/rpc-moved.md"},
+            {
+                "src": "inbox/rpc-write.md",
+                "dst": "inbox/rpc-moved.md",
+                "expected_mtime": mtime,
+            },
         )
         self.assertEqual(status, 200, moved)
         self.assertTrue(moved["ok"])
@@ -170,6 +198,12 @@ class TestLocalRpc(unittest.TestCase):
         self.assertEqual(status, 200, deleted)
         self.assertTrue(deleted["ok"])
         self.assertFalse((self.vault / "inbox" / "rpc-moved.md").exists())
+
+    def test_search_prefers_limit(self):
+        status, search = self._post("/v1/search", {"query": "alpha widget", "limit": 3})
+        self.assertEqual(status, 200)
+        self.assertTrue(search["ok"])
+        self.assertGreaterEqual(len(search["results"]), 1)
 
     def test_auth_required(self):
         status, body = self._get("/health", token="wrong")

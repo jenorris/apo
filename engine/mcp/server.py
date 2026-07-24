@@ -213,24 +213,46 @@ def _env_truthy(key: str) -> bool:
     return os.environ.get(key, "").lower() in ("1", "true", "yes")
 
 
+def _lean_enabled() -> bool:
+    """Lean desk is the default. Set APO_MCP_LEAN=0/false/no/off for admin tools."""
+    raw = os.environ.get("APO_MCP_LEAN")
+    if raw is None or str(raw).strip() == "":
+        return True
+    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
 def _default_index_on_write() -> bool:
     return _env_truthy("APO_INDEX_ON_WRITE")
 
 
-def _maybe_index(v: Vault, full: Path, index: bool | None) -> None:
+def _maybe_index(v: Vault, full: Path) -> None:
     """Queue path for the watcher — MCP never writes index.db (single-writer policy).
 
     Sync on purpose: write/read tools run via ``asyncio.to_thread``, so flock/queue I/O
     must not sit in an ``async def`` body (that would still block the event loop).
-    ``index`` is API-compat only; the watcher owns all SQLite writes.
     Best-effort: enqueue failure must not fail an already-successful note write.
     """
-    del index
     try:
         # enqueue_index returns the updated set — avoid a second flock/re-read.
         v.deferred = index_deferred.enqueue_index(v.collection, str(full.resolve()))
     except Exception:
         pass
+
+
+def _attach_watcher_tip(out: dict[str, Any]) -> dict[str, Any]:
+    """Surface missing watcher on successful writes (lean has no memory_status)."""
+    if not out.get("ok"):
+        return out
+    watcher = _watcher_status()
+    if watcher.get("running"):
+        return out
+    tip = (
+        "watcher not running — write is on disk and enqueued, but search won't "
+        "update until apo-engine watch is up (just watch-status)"
+    )
+    existing = out.get("warning")
+    out["warning"] = f"{existing}; {tip}" if existing else tip
+    return out
 
 
 def _purge_index(v: Vault, full: Path) -> bool:
@@ -293,15 +315,17 @@ def _top_level_dirs(v: Vault) -> list[str]:
 # Server
 ###############################################################################
 
-_LEAN_BOOT = _env_truthy("APO_MCP_LEAN")
+_LEAN_BOOT = _lean_enabled()
 _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown; sqlite-vec hybrid search; files are source of truth. "
-    "Routing: write_note=create/overwrite; "
+    "Lean desk is default (APO_MCP_LEAN=0 exposes admin + delete_note). "
+    "Routing: write_note=create/overwrite only (no append); "
     "append_note=session log / History / post-search add "
-    "(prefer over patch_note append and write_note append=True); "
+    "(prefer over patch_note append); "
     "patch_note=frontmatter + section mutate "
     "(ops use field/value, find/replace — not key/old/new); "
-    "move_note=rename/archive (prefer over delete_note). "
+    "move_note=rename/archive (delete_note is admin-only). "
+    "Thread mtime → expected_mtime on follow-up writes. "
     "search_notes=content (prefer limit=; top_k alias); "
     "filter_notes=frontmatter catalog (prefer where=; filters alias). "
     "Hits expose chunk_hash/heading for append/expand (skip read when possible). "
@@ -312,7 +336,7 @@ _MCP_INSTRUCTIONS = (
 ) + (
     ""
     if _LEAN_BOOT
-    else " Admin (APO_MCP_LEAN off): reload_config, memory_status, reindex_deferred, reindex."
+    else " Admin (APO_MCP_LEAN=0): reload_config, memory_status, reindex_deferred, reindex, delete_note."
 )
 mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
 
@@ -409,10 +433,18 @@ def _write_note_sync(
     path: str,
     content: str,
     append: bool = False,
-    index: bool | None = None,
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
+    if append:
+        return _err(
+            path=path,
+            error="append_deprecated",
+            message=(
+                "write_note append is removed; use append_note(path, text, "
+                "heading=… or chunk_hash=…)"
+            ),
+        )
     try:
         v = _vault(vault)
         full = _safe_resolve(v, path)
@@ -427,33 +459,26 @@ def _write_note_sync(
     new_top = len(parts) > 1 and not (v.root / parts[0]).exists()
 
     okf_meta: dict[str, Any] = {}
-    to_write = content
-    # append=True is raw tail — skip OKF stamp (same spirit as append_note).
-    if not (append and existed):
-        okf = apo_okf.process_concept(vault_root=v.root, rel_path=path, content=content)
-        okf_meta = okf.as_response_fields()
-        if not okf.ok:
-            return _err(
-                path=path,
-                error=okf.error or "okf_validation",
-                message=okf.message or "OKF validation failed",
-                **{k: v for k, v in okf_meta.items() if k != "enforcement"},
-                enforcement=okf.enforcement,
-            )
-        to_write = okf.content
+    okf = apo_okf.process_concept(vault_root=v.root, rel_path=path, content=content)
+    okf_meta = okf.as_response_fields()
+    if not okf.ok:
+        return _err(
+            path=path,
+            error=okf.error or "okf_validation",
+            message=okf.message or "OKF validation failed",
+            **{k: v for k, v in okf_meta.items() if k != "enforcement"},
+            enforcement=okf.enforcement,
+        )
+    to_write = okf.content
 
     full.parent.mkdir(parents=True, exist_ok=True)
-    if append and existed:
-        with full.open("a", encoding="utf-8") as f:
-            f.write("\n" + content)
-    else:
-        full.write_text(to_write, encoding="utf-8")
-    _maybe_index(v, full, index)
+    full.write_text(to_write, encoding="utf-8")
+    _maybe_index(v, full)
 
     out: dict[str, Any] = {
         "ok": True,
         "path": path,
-        "action": "appended" if (append and existed) else ("overwrote" if existed else "created"),
+        "action": "overwrote" if existed else "created",
         "bytes": full.stat().st_size,
         "mtime": _mtime(full),
     }
@@ -463,7 +488,7 @@ def _write_note_sync(
             f"created new top-level directory {parts[0]!r} — "
             f"existing top-level dirs: {_top_level_dirs(v)}"
         )
-    return out
+    return _attach_watcher_tip(out)
 
 
 @mcp.tool(annotations=_MUTATE)
@@ -474,18 +499,25 @@ async def write_note(
         bool,
         Field(
             description=(
-                "Raw file-tail append when the note already exists. "
-                "Prefer append_note (heading/chunk_hash) or patch_note for edits."
+                "Deprecated — always rejected. Use append_note(path, text, heading=…) "
+                "or patch_note append ops."
             ),
         ),
     ] = False,
-    index: bool | None = None,
-    expected_mtime: float | None = None,
+    expected_mtime: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Optimistic concurrency: pass mtime from a prior read/write for this path. "
+                "On stale_write, re-read and retry."
+            ),
+        ),
+    ] = None,
     vault: str = "",
 ) -> dict:
-    """Create or overwrite a note. Prefer append_note / patch_note for edits; avoid append=True."""
+    """Create or overwrite a note. Prefer append_note / patch_note for edits."""
     return await asyncio.to_thread(
-        _write_note_sync, path, content, append, index, expected_mtime, vault
+        _write_note_sync, path, content, append, expected_mtime, vault
     )
 
 
@@ -496,7 +528,6 @@ def _append_note_sync(
     chunk_hash: str | None = None,
     position: Literal["end", "start"] = "end",
     create: bool = False,
-    index: bool | None = None,
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
@@ -553,9 +584,9 @@ def _append_note_sync(
     if content.endswith("\n") and not new_content.endswith("\n"):
         new_content += "\n"
     full.write_text(new_content, encoding="utf-8")
-    _maybe_index(v, full, index)
+    _maybe_index(v, full)
 
-    return {
+    return _attach_watcher_tip({
         "ok": True,
         "path": path,
         "anchor": anchor_label,
@@ -563,7 +594,7 @@ def _append_note_sync(
         "lines_added": max(0, len(merged) - len(lines)),
         "bytes": full.stat().st_size,
         "mtime": _mtime(full),
-    }
+    })
 
 
 @mcp.tool(annotations=_WRITE)
@@ -574,8 +605,15 @@ async def append_note(
     chunk_hash: str | None = None,
     position: Literal["end", "start"] = "end",
     create: bool = False,
-    index: bool | None = None,
-    expected_mtime: float | None = None,
+    expected_mtime: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Optimistic concurrency: pass mtime from a prior read/write for this path. "
+                "On stale_write, re-read and retry."
+            ),
+        ),
+    ] = None,
     vault: str = "",
 ) -> dict:
     """Preferred add for session log / History / post-search text. Anchor: chunk_hash → heading → EOF. Batch with other mutators → patch_note."""
@@ -587,7 +625,6 @@ async def append_note(
         chunk_hash,
         position,
         create,
-        index,
         expected_mtime,
         vault,
     )
@@ -598,7 +635,6 @@ def _patch_note_sync(
     ops: list[Any],
     strict: bool = False,
     dry_run: bool = False,
-    index: bool | None = None,
     verbose: bool = False,
     expected_mtime: float | None = None,
     vault: str = "",
@@ -671,7 +707,7 @@ def _patch_note_sync(
     to_write = okf.content
 
     full.write_text(to_write, encoding="utf-8")
-    _maybe_index(v, full, index)
+    _maybe_index(v, full)
 
     failed = sum(1 for r in result.results if r.get("status") == "error")
     out: dict[str, Any] = {
@@ -687,7 +723,7 @@ def _patch_note_sync(
     out.update(okf_meta)
     if verbose:
         out["lines_added"] = result.lines_added
-    return out
+    return _attach_watcher_tip(out)
 
 
 @mcp.tool(annotations=_MUTATE)
@@ -696,14 +732,21 @@ async def patch_note(
     ops: Annotated[list[PatchOp], Field(description=OPS_FIELD_DESC)],
     strict: bool = False,
     dry_run: bool = False,
-    index: bool | None = None,
     verbose: bool = False,
-    expected_mtime: float | None = None,
+    expected_mtime: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Optimistic concurrency: pass mtime from a prior read/write for this path. "
+                "On stale_write, re-read and retry."
+            ),
+        ),
+    ] = None,
     vault: str = "",
 ) -> dict:
     """Batch mutate frontmatter/sections. Prefer set_field + replace_text/replace_section. Standalone text add → append_note."""
     return await asyncio.to_thread(
-        _patch_note_sync, path, ops, strict, dry_run, index, verbose, expected_mtime, vault
+        _patch_note_sync, path, ops, strict, dry_run, verbose, expected_mtime, vault
     )
 
 
@@ -711,7 +754,7 @@ def _move_note_sync(
     src: str,
     dst: str,
     overwrite: bool = False,
-    index: bool | None = None,
+    expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
     try:
@@ -723,6 +766,8 @@ def _move_note_sync(
 
     if not src_full.exists():
         return _err(src=src, dst=dst, error="not_found", message=f"source note not found: {src}")
+    if (guard := _check_mtime(src_full, expected_mtime, src)):
+        return {**guard, "src": src, "dst": dst}
     if dst_full.exists() and not overwrite:
         return _err(src=src, dst=dst, error="destination_exists", message="pass overwrite=true to replace")
 
@@ -732,13 +777,17 @@ def _move_note_sync(
 
     purged = _purge_index(v, Path(src_abs))
     v.deferred = index_deferred.requeue_move(v.collection, src_abs, str(dst_full.resolve()))
-    # requeue_move already wakes + enqueues dst; skip a second flock/_maybe_index.
-    del index  # API compat
 
-    out: dict[str, Any] = {"ok": True, "src": src, "dst": dst, "index_purged": purged, "mtime": _mtime(dst_full)}
+    out: dict[str, Any] = {
+        "ok": True,
+        "src": src,
+        "dst": dst,
+        "index_purged": purged,
+        "mtime": _mtime(dst_full),
+    }
     if not purged:
         out["warning"] = "purge not queued — watcher may retain stale chunks"
-    return out
+    return _attach_watcher_tip(out)
 
 
 @mcp.tool(annotations=_MUTATE)
@@ -746,11 +795,21 @@ async def move_note(
     src: str,
     dst: str,
     overwrite: bool = False,
-    index: bool | None = None,
+    expected_mtime: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Optimistic concurrency on the source path: pass src mtime from a prior "
+                "read/write. On stale_write, re-read and retry."
+            ),
+        ),
+    ] = None,
     vault: str = "",
 ) -> dict:
     """Atomic rename/move/archive (updates index). Prefer over delete_note or read+write+delete. overwrite=True replaces dst."""
-    return await asyncio.to_thread(_move_note_sync, src, dst, overwrite, index, vault)
+    return await asyncio.to_thread(
+        _move_note_sync, src, dst, overwrite, expected_mtime, vault
+    )
 
 
 def _delete_note_sync(path: str, vault: str = "") -> dict:
@@ -769,12 +828,20 @@ def _delete_note_sync(path: str, vault: str = "") -> dict:
     out: dict[str, Any] = {"ok": True, "path": path, "index_purged": purged}
     if not purged:
         out["warning"] = "purge not queued — watcher may retain stale chunks"
-    return out
+    return _attach_watcher_tip(out)
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False})
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    tags={"admin"},
+)
 async def delete_note(path: str, vault: str = "") -> dict:
-    """Irreversible delete + index purge. Prefer move_note to archives/ unless permanent removal is explicit."""
+    """Irreversible delete + index purge (admin / APO_MCP_LEAN=0). Prefer move_note to archives/."""
     return await asyncio.to_thread(_delete_note_sync, path, vault)
 
 
@@ -1199,15 +1266,21 @@ def vaults_resource() -> dict:
 
 
 ###############################################################################
-# Lean mode — hide admin tools from list_tools / schema (opt-in)
+# Lean mode — hide admin tools from list_tools / schema (default on)
 ###############################################################################
 
-_ADMIN_TOOLS = frozenset({"reload_config", "memory_status", "reindex_deferred", "reindex"})
+_ADMIN_TOOLS = frozenset({
+    "reload_config",
+    "memory_status",
+    "reindex_deferred",
+    "reindex",
+    "delete_note",
+})
 
 
 def _apply_lean_mode() -> bool:
-    """If APO_MCP_LEAN is truthy, disable admin-tagged tools. Returns whether lean applied."""
-    if not _env_truthy("APO_MCP_LEAN"):
+    """Lean (default) disables admin-tagged tools. Returns whether lean applied."""
+    if not _lean_enabled():
         return False
     mcp.disable(tags={"admin"})
     return True

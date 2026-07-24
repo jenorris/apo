@@ -3,6 +3,10 @@
 Discriminated union on `op`. Files are source of truth; this document is the
 wire contract for MCP / RPC clients.
 
+**Alias freeze:** keep existing aliases (`target`≡`heading`, top-level
+`heading`≡`scope.heading`, `limit`≡`top_k`, `filters`≡`where`). Do **not** add
+new aliases without an agent-success regression and a docs bump.
+
 ## Write routing (append paths)
 
 | Need | Tool |
@@ -10,7 +14,10 @@ wire contract for MCP / RPC clients.
 | Session log / History / post-search add | **`append_note`** (preferred) |
 | Frontmatter + section mutate in one call | **`patch_note`** (`set_field`, `replace_*`, …) |
 | Append text *while* batching other ops | `patch_note` `append` / `prepend` / `append_eof` |
-| Raw file tail (no heading) | `write_note(..., append=True)` — avoid; prefer `append_note` |
+| Create / full overwrite | `write_note` — **no** `append` (rejected as `append_deprecated`) |
+
+Thread `mtime` from read/write into **`expected_mtime`** on the next mutate for
+the same path (including `move_note` on **src**).
 
 ## Roles (not one overloaded “anchor”)
 

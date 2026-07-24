@@ -1,4 +1,4 @@
-"""APO_MCP_LEAN hides admin tools from FastMCP list_tools."""
+"""APO_MCP_LEAN hides admin tools from FastMCP list_tools (default on)."""
 from __future__ import annotations
 
 import os
@@ -10,20 +10,31 @@ from pathlib import Path
 
 _ENGINE = Path(__file__).resolve().parents[1]
 _SERVER = _ENGINE / "mcp" / "server.py"
-_ADMIN = frozenset({"reload_config", "memory_status", "reindex_deferred", "reindex"})
+_ADMIN = frozenset({
+    "reload_config",
+    "memory_status",
+    "reindex_deferred",
+    "reindex",
+    "delete_note",
+})
 
 
-def _list_tool_names(*, lean: bool) -> set[str]:
-    """Import server in a subprocess so lean env is fixed before registration."""
+def _list_tool_names(*, lean: bool | None) -> set[str]:
+    """Import server in a subprocess so lean env is fixed before registration.
+
+    lean=True → APO_MCP_LEAN=1; False → 0; None → unset (default lean).
+    """
     with tempfile.TemporaryDirectory(prefix="apo-lean-") as tmp:
         vault = Path(tmp) / "vault"
         vault.mkdir()
         env = os.environ.copy()
-        env["APO_MCP_LEAN"] = "1" if lean else "0"
+        if lean is None:
+            env.pop("APO_MCP_LEAN", None)
+        else:
+            env["APO_MCP_LEAN"] = "1" if lean else "0"
         env["APO_NOTES_ROOT"] = str(vault)
         env["APO_INDEX"] = str(Path(tmp) / "index.db")
         env["APO_COLLECTION"] = "lean_test"
-        # Avoid inheriting a parent lean setting confused by empty-vs-unset
         script = r"""
 import asyncio, importlib.util, sys
 from pathlib import Path
@@ -59,6 +70,7 @@ class LeanModeTest(unittest.TestCase):
         self.assertTrue(_ADMIN <= names, msg=f"missing admin in full: {_ADMIN - names}")
         self.assertIn("search_notes", names)
         self.assertIn("append_note", names)
+        self.assertIn("delete_note", names)
 
     def test_lean_mode_hides_admin(self):
         names = _list_tool_names(lean=True)
@@ -66,8 +78,15 @@ class LeanModeTest(unittest.TestCase):
         self.assertIn("search_notes", names)
         self.assertIn("filter_notes", names)
         self.assertIn("append_note", names)
+        self.assertIn("move_note", names)
+        self.assertNotIn("delete_note", names)
         self.assertNotIn("list_directory", names)
         self.assertEqual(len(names), len(_list_tool_names(lean=False)) - len(_ADMIN))
+
+    def test_lean_is_default_when_unset(self):
+        names = _list_tool_names(lean=None)
+        self.assertFalse(names & _ADMIN, msg=f"admin listed with unset lean: {names & _ADMIN}")
+        self.assertEqual(names, _list_tool_names(lean=True))
 
 
 if __name__ == "__main__":

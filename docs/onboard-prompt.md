@@ -69,7 +69,7 @@ Produce **draft markdown** for me to approve, tailored to the inferred vault:
 **Draft A — Persistent agent memory rule** (Cursor rule or Claude/AGENTS section), including:
 - Apo as sole markdown memory backend for this vault (retire conflicting backends if any)
 - Tool routing table adapted to *our* folders (not a generic PARA lecture)
-- Write discipline: prefer append/patch; use heading/chunk_hash when available; `expected_mtime` when editing hot notes; `reindex_deferred` after batches
+- Write discipline: prefer append/patch; use heading/chunk_hash when available; `expected_mtime` when editing hot notes; lean desk hides admin reindex — rely on write enqueue + watcher
 - Consequential-turn writes *only if* this vault already has a logging/decision habit — map onto existing paths (do not invent a session-log format unless the vault already uses something like it)
 - Explicit non-goals: code search, email, ticket systems stay outside Apo
 
