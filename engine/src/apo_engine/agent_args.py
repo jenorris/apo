@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from apo_engine import core
 from apo_engine.markdown_patch import PatchError, find_section, normalize_lines
 
 
@@ -103,6 +104,67 @@ def slice_note_content(
         "start_line": lo + 1 if hi > lo or lo < len(lines) else lo,
         "end_line": hi,
         "truncated": truncated,
+    }
+
+
+def shape_note_read(
+    raw: str,
+    *,
+    heading: str | None = None,
+    start_line: int | None = None,
+    end_line: int | None = None,
+    max_chars: int | None = None,
+    raw_content: bool = False,
+) -> dict[str, Any]:
+    """Build ``read_note`` content fields from on-disk markdown.
+
+    Always includes parsed ``frontmatter`` (``None`` when no YAML block).
+    Default full-file reads return body-only ``content``; pass ``raw_content=True``
+    for byte-exact file text (or an absolute-line slice of it). Heading / line
+    slices always use absolute file coordinates and keep FM in-range when the
+    slice covers it; note-level ``frontmatter`` is still attached as a sidecar.
+    """
+    frontmatter = core.note_frontmatter(raw)
+    scoped = (
+        heading is not None
+        or start_line is not None
+        or end_line is not None
+    )
+
+    if raw_content or scoped:
+        sliced = slice_note_content(
+            raw,
+            heading=heading,
+            start_line=start_line,
+            end_line=end_line,
+            max_chars=max_chars,
+        )
+        return {
+            "frontmatter": frontmatter,
+            "content": sliced["content"],
+            "heading": sliced["heading"],
+            "start_line": sliced["start_line"],
+            "end_line": sliced["end_line"],
+            "truncated": sliced["truncated"],
+        }
+
+    body, body_line = core._body_start_line(raw)
+    sliced = slice_note_content(body, max_chars=max_chars)
+    # Remap 1-based body-relative lines to absolute file lines.
+    rel_start = sliced["start_line"]
+    rel_end = sliced["end_line"]
+    if rel_start <= 0 and rel_end <= 0:
+        abs_start, abs_end = rel_start, rel_end
+    else:
+        abs_start = body_line + max(rel_start, 1) - 1
+        abs_end = body_line + max(rel_end, 0) - 1 if rel_end > 0 else rel_end
+    return {
+        "frontmatter": frontmatter,
+        "content": sliced["content"],
+        "heading": sliced["heading"],
+        "start_line": abs_start,
+        "end_line": abs_end,
+        "truncated": sliced["truncated"],
     }
 
 

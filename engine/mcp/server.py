@@ -21,7 +21,7 @@ from apo_engine import deferred as index_deferred
 from apo_engine import okf as apo_okf
 from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
-from apo_engine.agent_args import resolve_top_k, resolve_where, slice_note_content
+from apo_engine.agent_args import resolve_top_k, resolve_where, shape_note_read
 from apo_engine.mcp_backend import ApoMem
 from apo_engine.markdown_patch import (
     PatchError,
@@ -910,6 +910,7 @@ def _read_note_sync(
     start_line: int | None = None,
     end_line: int | None = None,
     max_chars: int | None = None,
+    raw: bool = False,
 ) -> dict:
     try:
         v = _vault(vault)
@@ -919,26 +920,28 @@ def _read_note_sync(
     if not full.exists():
         return _err(path=path, error="not_found", message=f"note not found: {path}")
 
-    raw = full.read_text(encoding="utf-8")
+    text = full.read_text(encoding="utf-8")
     out: dict[str, Any] = {"ok": True, "path": path, "mtime": _mtime(full), "size": full.stat().st_size}
     try:
-        sliced = slice_note_content(
-            raw,
+        shaped = shape_note_read(
+            text,
             heading=heading,
             start_line=start_line,
             end_line=end_line,
             max_chars=max_chars,
+            raw_content=raw,
         )
     except PatchError as e:
         return _err(path=path, error=e.code, message=e.message, suggestions=e.suggestions)
     except ValueError as e:
         return _err(path=path, error="bad_request", message=str(e))
-    if sliced["heading"]:
-        out["heading"] = sliced["heading"]
-    out["content"] = sliced["content"]
-    out["start_line"] = sliced["start_line"]
-    out["end_line"] = sliced["end_line"]
-    out["truncated"] = sliced["truncated"]
+    out["frontmatter"] = shaped["frontmatter"]
+    if shaped["heading"]:
+        out["heading"] = shaped["heading"]
+    out["content"] = shaped["content"]
+    out["start_line"] = shaped["start_line"]
+    out["end_line"] = shaped["end_line"]
+    out["truncated"] = shaped["truncated"]
     return out
 
 
@@ -950,10 +953,19 @@ async def read_note(
     start_line: int | None = None,
     end_line: int | None = None,
     max_chars: int | None = None,
+    raw: Annotated[
+        bool,
+        Field(
+            description=(
+                "If true, content is byte-exact file text (or an absolute-line slice). "
+                "Default full-file reads return body only; frontmatter is always a sidecar."
+            ),
+        ),
+    ] = False,
 ) -> dict:
-    """Read a known path. Optional heading= (section), start_line/end_line (1-based inclusive), max_chars (truncate). Unknown path → search_notes first."""
+    """Read a known path. Returns frontmatter (parsed) + content (body by default). Optional heading=/line range/max_chars; raw=true for byte-exact. Unknown path → search_notes first."""
     return await asyncio.to_thread(
-        _read_note_sync, path, heading, vault, start_line, end_line, max_chars
+        _read_note_sync, path, heading, vault, start_line, end_line, max_chars, raw
     )
 
 

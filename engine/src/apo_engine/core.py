@@ -343,6 +343,13 @@ def _parse_frontmatter(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def note_frontmatter(text: str) -> dict | None:
+    """Parsed YAML frontmatter, or ``None`` when the note has no ``---`` block."""
+    if not _FRONTMATTER_YAML.match(text):
+        return None
+    return _parse_frontmatter(text)
+
+
 def _extract_wikilinks(text: str) -> list[tuple[int, str, str, str]]:
     """Return (line, target_key, target_stem, line_text) for each [[wiki-link]] in text."""
     if "[[" not in text:

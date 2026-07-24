@@ -121,6 +121,15 @@ class TestLocalRpc(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(read["ok"])
         self.assertIn("alpha widget", read["content"].lower())
+        self.assertNotIn("title: Alpha", read["content"])
+        self.assertEqual(read["frontmatter"]["title"], "Alpha")
+        self.assertEqual(read["frontmatter"]["status"], "open")
+
+        status, raw = self._post("/v1/read", {"path": "note.md", "raw": True})
+        self.assertEqual(status, 200)
+        self.assertTrue(raw["ok"])
+        self.assertIn("title: Alpha", raw["content"])
+        self.assertEqual(raw["frontmatter"]["title"], "Alpha")
 
         status, filt = self._post(
             "/v1/filter",

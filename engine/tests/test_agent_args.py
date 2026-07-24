@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import unittest
 
-from apo_engine.agent_args import resolve_top_k, resolve_where, slice_note_content
+from apo_engine.agent_args import (
+    resolve_top_k,
+    resolve_where,
+    shape_note_read,
+    slice_note_content,
+)
 from apo_engine.markdown_patch import PatchError
 
 
@@ -88,6 +93,53 @@ class SliceNoteContentTest(unittest.TestCase):
     def test_bad_heading(self):
         with self.assertRaises(PatchError):
             slice_note_content(self.SAMPLE, heading="## Missing")
+
+
+class ShapeNoteReadTest(unittest.TestCase):
+    SAMPLE = (
+        "---\ntitle: T\nstatus: open\n---\n\n"
+        "# Intro\n\n"
+        "line one\n"
+        "line two\n\n"
+        "## Detail\n\n"
+        "detail body\n"
+    )
+
+    def test_full_body_strips_frontmatter(self):
+        out = shape_note_read(self.SAMPLE)
+        self.assertEqual(out["frontmatter"], {"title": "T", "status": "open"})
+        self.assertNotIn("title: T", out["content"])
+        self.assertIn("# Intro", out["content"])
+        self.assertIn("detail body", out["content"])
+        self.assertEqual(out["start_line"], 5)
+        self.assertFalse(out["truncated"])
+
+    def test_raw_keeps_yaml(self):
+        out = shape_note_read(self.SAMPLE, raw_content=True)
+        self.assertEqual(out["frontmatter"], {"title": "T", "status": "open"})
+        self.assertTrue(out["content"].startswith("---\n"))
+        self.assertIn("title: T", out["content"])
+        self.assertEqual(out["start_line"], 1)
+
+    def test_heading_keeps_sidecar(self):
+        out = shape_note_read(self.SAMPLE, heading="## Detail")
+        self.assertEqual(out["frontmatter"]["title"], "T")
+        self.assertIn("detail body", out["content"])
+        self.assertNotIn("line one", out["content"])
+        self.assertNotIn("title: T", out["content"])
+
+    def test_no_frontmatter(self):
+        out = shape_note_read("# Only\n\nbody\n")
+        self.assertIsNone(out["frontmatter"])
+        self.assertEqual(out["content"], "# Only\n\nbody\n")
+        self.assertEqual(out["start_line"], 1)
+
+    def test_line_range_absolute(self):
+        # Lines: 1-4 FM, 5 blank, 6 # Intro, 7 blank, 8–9 body lines
+        out = shape_note_read(self.SAMPLE, start_line=8, end_line=9)
+        self.assertEqual(out["frontmatter"]["status"], "open")
+        self.assertEqual(out["content"], "line one\nline two")
+        self.assertEqual(out["start_line"], 8)
 
 
 if __name__ == "__main__":

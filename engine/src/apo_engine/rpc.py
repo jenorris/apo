@@ -74,6 +74,9 @@ def _read(body: dict[str, Any]) -> dict[str, Any]:
     start_line = body.get("start_line")
     end_line = body.get("end_line")
     max_chars = body.get("max_chars")
+    raw = body.get("raw", False)
+    if not isinstance(raw, bool):
+        return {"ok": False, "error": "bad_request", "message": "`raw` must be a boolean"}
     return ops.read_note(
         path,
         heading=heading,
@@ -81,6 +84,7 @@ def _read(body: dict[str, Any]) -> dict[str, Any]:
         start_line=int(start_line) if start_line is not None else None,
         end_line=int(end_line) if end_line is not None else None,
         max_chars=int(max_chars) if max_chars is not None else None,
+        raw=raw,
     )
 
 
