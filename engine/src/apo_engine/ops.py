@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from apo_engine import __version__, core, deferred as index_deferred, okf as apo_okf, vaults
+from apo_engine import __version__, config, core, deferred as index_deferred, okf as apo_okf, vaults
 from apo_engine.agent_args import resolve_top_k, resolve_where, slice_note_content
 from apo_engine.markdown_patch import (
     PatchError,
@@ -91,6 +91,87 @@ def _top_level_dirs(root: Path) -> list[str]:
     if not root.exists():
         return []
     return sorted(p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith("."))
+
+
+def _send_allow_roots() -> list[Path]:
+    raw = (config.SEND_ALLOW_ROOTS or "").strip()
+    if not raw:
+        return [Path.home().expanduser().resolve()]
+    roots: list[Path] = []
+    for part in raw.split(":"):
+        p = part.strip()
+        if not p:
+            continue
+        roots.append(Path(p).expanduser().resolve())
+    return roots or [Path.home().expanduser().resolve()]
+
+
+def _resolve_send_src(src: str, vault_root: Path) -> Path:
+    """Resolve a host-path markdown source for send_note.
+
+    Raises OpsError with a stable code on failure.
+    """
+    raw = (src or "").strip()
+    if not raw:
+        raise OpsError("bad_path", "src host path required")
+    # Absolute or ~/… only — relative paths are ambiguous across MCP cwd.
+    expanded = Path(raw).expanduser()
+    if not expanded.is_absolute():
+        raise OpsError(
+            "bad_path",
+            f"src must be an absolute host path (got {src!r}); "
+            "use ~/… or /… — relative paths are rejected",
+        )
+    try:
+        full = expanded.resolve(strict=True)
+    except FileNotFoundError as e:
+        raise OpsError("not_found", f"source file not found: {src}") from e
+    except OSError as e:
+        raise OpsError("bad_path", f"cannot resolve src: {e}") from e
+
+    if not full.is_file():
+        raise OpsError("bad_path", f"src is not a file: {src}")
+    if full.suffix.lower() != ".md":
+        raise OpsError("bad_path", f"src must be a .md file (got suffix {full.suffix!r})")
+
+    vault_res = vault_root.expanduser().resolve()
+    try:
+        full.relative_to(vault_res)
+    except ValueError:
+        pass
+    else:
+        raise OpsError(
+            "use_move_note",
+            "src is already inside the vault; use move_note for rename/archive "
+            "(or write_note / patch_note to edit in place)",
+        )
+
+    allowed = False
+    for root in _send_allow_roots():
+        try:
+            full.relative_to(root)
+            allowed = True
+            break
+        except ValueError:
+            continue
+    if not allowed:
+        roots = ", ".join(str(r) for r in _send_allow_roots())
+        raise OpsError(
+            "forbidden_src",
+            f"src {str(full)!r} is outside allowed roots ({roots}); "
+            "set APO_SEND_ALLOW_ROOTS to extend",
+        )
+
+    try:
+        size = full.stat().st_size
+    except OSError as e:
+        raise OpsError("bad_path", f"cannot stat src: {e}") from e
+    if size > int(config.SEND_MAX_BYTES):
+        raise OpsError(
+            "too_large",
+            f"src is {size} bytes; max APO_SEND_MAX_BYTES={config.SEND_MAX_BYTES}",
+        )
+    return full
 
 
 def health() -> dict[str, Any]:
@@ -695,6 +776,110 @@ def move_note(
     }
     if not purged:
         out["warning"] = "purge not queued — watcher may retain stale chunks"
+    return out
+
+
+def send_note(
+    src: str,
+    dst: str,
+    *,
+    overwrite: bool = False,
+    fields: dict[str, Any] | None = None,
+    expected_mtime: float | None = None,
+    vault: str = "",
+) -> dict[str, Any]:
+    """Copy a host .md file into the vault (optional frontmatter merge). Leaves src in place."""
+    try:
+        b = _binding(vault)
+        root = b.resolved().root
+        src_full = _resolve_send_src(src, root)
+        dst_full = _safe_resolve(root, dst)
+    except OpsError as e:
+        return _err(src=src, dst=dst, error=e.code, message=e.message)
+    except ValueError as e:
+        return _err(src=src, dst=dst, error="bad_path", message=str(e))
+
+    if (guard := _check_mtime(dst_full, expected_mtime, dst)):
+        return {**guard, "src": src, "dst": dst}
+    if dst_full.exists() and not overwrite:
+        return _err(
+            src=src,
+            dst=dst,
+            error="destination_exists",
+            message="pass overwrite=true to replace",
+        )
+
+    try:
+        content = src_full.read_text(encoding="utf-8")
+    except OSError as e:
+        return _err(src=src, dst=dst, error="bad_path", message=f"cannot read src: {e}")
+    except UnicodeDecodeError as e:
+        return _err(src=src, dst=dst, error="bad_path", message=f"src is not utf-8 text: {e}")
+
+    fields_applied: list[str] = []
+    if fields:
+        if not isinstance(fields, dict):
+            return _err(
+                src=src,
+                dst=dst,
+                error="bad_request",
+                message="fields must be an object of frontmatter key→value",
+            )
+        patch_ops = [
+            {"op": "set_field", "field": str(k), "value": v}
+            for k, v in fields.items()
+        ]
+        result = apply_patch(content, patch_ops, strict=False)
+        if not result.ok and result.applied == 0:
+            return _err(
+                src=src,
+                dst=dst,
+                applied=result.applied,
+                results=result.results,
+                **flatten_patch_failure_error(
+                    result.error, suggestions=result.suggestions or None
+                ),
+            )
+        content = result.content
+        fields_applied = [str(k) for k in fields]
+
+    existed = dst_full.exists()
+    parts = Path(dst.replace("\\", "/")).parts
+    new_top = len(parts) > 1 and not (root / parts[0]).exists()
+
+    okf = apo_okf.process_concept(vault_root=root, rel_path=dst, content=content)
+    okf_meta = okf.as_response_fields()
+    if not okf.ok:
+        return _err(
+            src=src,
+            dst=dst,
+            error=okf.error or "okf_validation",
+            message=okf.message or "OKF validation failed",
+            **{k: val for k, val in okf_meta.items() if k != "enforcement"},
+            enforcement=okf.enforcement,
+        )
+    to_write = okf.content
+
+    dst_full.parent.mkdir(parents=True, exist_ok=True)
+    dst_full.write_text(to_write, encoding="utf-8")
+    _enqueue_index(b, dst_full)
+
+    out: dict[str, Any] = {
+        "ok": True,
+        "src": str(src_full),
+        "dst": dst,
+        "action": "overwrote" if existed else "created",
+        "bytes": dst_full.stat().st_size,
+        "mtime": _mtime(dst_full),
+        "fields_applied": fields_applied,
+        "vault": b.name,
+    }
+    out.update(okf_meta)
+    if new_top:
+        out["warning"] = (
+            f"created new top-level directory {parts[0]!r} — "
+            f"existing top-level dirs: {_top_level_dirs(root)}"
+        )
     return out
 
 

@@ -47,9 +47,10 @@ Writes update markdown on disk and **enqueue** reindex for `apo-engine watch` (s
 | POST | `/v1/append` | `{path, text, heading?, chunk_hash?, position?, create?, expected_mtime?, vault?}` | surgical append |
 | POST | `/v1/patch` | `{path, ops, strict?, dry_run?, verbose?, expected_mtime?, vault?}` | batch mutators |
 | POST | `/v1/move` | `{src, dst, overwrite?, expected_mtime?, vault?}` | atomic rename; `expected_mtime` guards **src** |
+| POST | `/v1/send` | `{src, dst, overwrite?, fields?, expected_mtime?, vault?}` | copy host `.md` → vault (`src` absolute; leaves src) |
 | POST | `/v1/delete` | `{path, vault?}` | delete + purge queue |
 
-All responses are JSON with `ok: true|false`. Error bodies include `error` + `message`. HTTP: `404` not found, `409` stale_write / destination_exists / path_mismatch.
+All responses are JSON with `ok: true|false`. Error bodies include `error` + `message`. HTTP: `404` not found, `409` stale_write / destination_exists / path_mismatch, `403` forbidden_src / use_move_note / too_large.
 
 ## Env
 
@@ -59,6 +60,8 @@ All responses are JSON with `ok: true|false`. Error bodies include `error` + `me
 | `APO_RPC_PORT` | `8765` | Bind port |
 | `APO_RPC_SOCKET` | (empty) | If set, Unix socket path (overrides host/port) |
 | `APO_RPC_TOKEN` | (empty) | Optional bearer; empty = no auth |
+| `APO_SEND_ALLOW_ROOTS` | `$HOME` | Colon-separated roots for `send_note` host `src` |
+| `APO_SEND_MAX_BYTES` | `5242880` | Max host file size for `send_note` |
 
 Vault / index / Ollama settings are the same as the rest of the engine (`APO_NOTES_ROOT`, `APO_INDEX`, …).
 

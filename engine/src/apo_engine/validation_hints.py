@@ -67,7 +67,13 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
     },
     "move_note": {
         "index": "move_note has no index= — moves always enqueue purge/reindex for apo-engine watch.",
-        "path": "move_note uses src= and dst= (not path=).",
+        "path": "move_note uses src= and dst= (not path=). Both must be vault-relative.",
+    },
+    "send_note": {
+        "path": "send_note uses src= (absolute host .md) and dst= (vault-relative).",
+        "content": "send_note copies file bytes — do not pass content=; use fields={} for frontmatter merge.",
+        "text": "send_note copies a host .md file; for in-vault append use append_note.",
+        "heading": "send_note has no heading — promote whole files; edit after with append_note/patch_note.",
     },
     "search_notes": {
         "path": (

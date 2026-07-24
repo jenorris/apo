@@ -79,6 +79,7 @@ class LeanModeTest(unittest.TestCase):
         self.assertIn("filter_notes", names)
         self.assertIn("append_note", names)
         self.assertIn("move_note", names)
+        self.assertIn("send_note", names)
         self.assertNotIn("delete_note", names)
         self.assertNotIn("list_directory", names)
         self.assertEqual(len(names), len(_list_tool_names(lean=False)) - len(_ADMIN))

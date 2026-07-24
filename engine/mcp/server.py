@@ -19,6 +19,7 @@ from apo_engine import config as apo_config
 from apo_engine import core as apo_core
 from apo_engine import deferred as index_deferred
 from apo_engine import okf as apo_okf
+from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
 from apo_engine.agent_args import resolve_top_k, resolve_where, slice_note_content
 from apo_engine.mcp_backend import ApoMem
@@ -324,7 +325,8 @@ _MCP_INSTRUCTIONS = (
     "(prefer over patch_note append); "
     "patch_note=frontmatter + section mutate "
     "(ops use field/value, find/replace — not key/old/new); "
-    "move_note=rename/archive (delete_note is admin-only). "
+    "move_note=rename/archive (delete_note is admin-only); "
+    "send_note=copy host .md into vault (token-cheap promote). "
     "Thread mtime → expected_mtime on follow-up writes. "
     "search_notes=content (prefer limit=; top_k alias); "
     "filter_notes=frontmatter catalog (prefer where=; filters alias). "
@@ -810,6 +812,57 @@ async def move_note(
     return await asyncio.to_thread(
         _move_note_sync, src, dst, overwrite, expected_mtime, vault
     )
+
+
+@mcp.tool(annotations=_WRITE)
+async def send_note(
+    src: Annotated[
+        str,
+        Field(
+            description=(
+                "Absolute host path to a .md file (or ~/…). Must be outside the vault "
+                "and under APO_SEND_ALLOW_ROOTS (default: home). Leaves src in place."
+            ),
+        ),
+    ],
+    dst: Annotated[
+        str,
+        Field(description="Vault-relative destination path (e.g. resources/wiki/example.md)."),
+    ],
+    overwrite: bool = False,
+    fields: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description=(
+                "Optional frontmatter merge (set_field semantics) before write — "
+                'e.g. {"source":"report","ingested_at":"2026-07-24"}.'
+            ),
+        ),
+    ] = None,
+    expected_mtime: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Optimistic concurrency on dst if it already exists. "
+                "On stale_write, re-read and retry."
+            ),
+        ),
+    ] = None,
+    vault: str = "",
+) -> dict:
+    """Copy host .md into the vault without round-tripping the body through the model. Vault-internal moves → move_note."""
+    def run() -> dict:
+        out = apo_ops.send_note(
+            src,
+            dst,
+            overwrite=overwrite,
+            fields=fields,
+            expected_mtime=expected_mtime,
+            vault=vault,
+        )
+        return _attach_watcher_tip(out) if out.get("ok") else out
+
+    return await asyncio.to_thread(run)
 
 
 def _delete_note_sync(path: str, vault: str = "") -> dict:

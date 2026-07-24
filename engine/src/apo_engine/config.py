@@ -95,3 +95,8 @@ RPC_HOST: str = os.environ.get("APO_RPC_HOST", "127.0.0.1")
 RPC_PORT: int = int(os.environ.get("APO_RPC_PORT", "8765"))
 RPC_SOCKET: str = os.environ.get("APO_RPC_SOCKET", "").strip()
 RPC_TOKEN: str = os.environ.get("APO_RPC_TOKEN", "").strip()
+
+# send_note: copy host .md into the vault (token-cheap promote).
+# Colon-separated absolute roots; empty → Path.home() only.
+SEND_ALLOW_ROOTS: str = os.environ.get("APO_SEND_ALLOW_ROOTS", "").strip()
+SEND_MAX_BYTES: int = int(os.environ.get("APO_SEND_MAX_BYTES", str(5 * 1024 * 1024)))

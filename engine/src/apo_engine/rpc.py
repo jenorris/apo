@@ -236,6 +236,27 @@ def _move(body: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+@_route("POST", "/v1/send")
+def _send(body: dict[str, Any]) -> dict[str, Any]:
+    src = body.get("src")
+    dst = body.get("dst")
+    if not isinstance(src, str) or not src.strip():
+        return {"ok": False, "error": "bad_request", "message": "`src` string required"}
+    if not isinstance(dst, str) or not dst.strip():
+        return {"ok": False, "error": "bad_request", "message": "`dst` string required"}
+    fields = body.get("fields")
+    if fields is not None and not isinstance(fields, dict):
+        return {"ok": False, "error": "bad_request", "message": "`fields` must be an object"}
+    return ops.send_note(
+        src,
+        dst,
+        overwrite=bool(body.get("overwrite")),
+        fields=fields,
+        expected_mtime=_opt_float(body, "expected_mtime"),
+        vault=str(body.get("vault") or ""),
+    )
+
+
 @_route("POST", "/v1/delete")
 def _delete(body: dict[str, Any]) -> dict[str, Any]:
     path = body.get("path")
@@ -349,6 +370,8 @@ class RpcHandler(BaseHTTPRequestHandler):
             status = 404
         elif err in ("stale_write", "destination_exists", "path_mismatch"):
             status = 409
+        elif err in ("forbidden_src", "use_move_note", "too_large"):
+            status = 403
         payload, _ = _json_bytes(result, status)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")

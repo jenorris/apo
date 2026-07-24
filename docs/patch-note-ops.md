@@ -15,9 +15,10 @@ new aliases without an agent-success regression and a docs bump.
 | Frontmatter + section mutate in one call | **`patch_note`** (`set_field`, `replace_*`, …) |
 | Append text *while* batching other ops | `patch_note` `append` / `prepend` / `append_eof` |
 | Create / full overwrite | `write_note` — **no** `append` (rejected as `append_deprecated`) |
+| Promote host `.md` into vault | **`send_note(src, dst, fields=?)`** — absolute host path; leaves src |
 
 Thread `mtime` from read/write into **`expected_mtime`** on the next mutate for
-the same path (including `move_note` on **src**).
+the same path (including `move_note` on **src**, `send_note` on **dst**).
 
 ## Roles (not one overloaded “anchor”)
 

@@ -199,6 +199,25 @@ class TestLocalRpc(unittest.TestCase):
         self.assertTrue(deleted["ok"])
         self.assertFalse((self.vault / "inbox" / "rpc-moved.md").exists())
 
+    def test_send_note_promotes_host_md(self):
+        host = self.tmp / "host-report.md"
+        host.write_text("---\ntitle: Host\n---\n\n# Host\n\npromoted\n", encoding="utf-8")
+        with unittest.mock.patch.object(config, "SEND_ALLOW_ROOTS", str(self.tmp.resolve())):
+            status, sent = self._post(
+                "/v1/send",
+                {
+                    "src": str(host),
+                    "dst": "resources/wiki/host-report.md",
+                    "fields": {"source": "rpc-test"},
+                },
+            )
+        self.assertEqual(status, 200, sent)
+        self.assertTrue(sent["ok"], sent)
+        self.assertTrue(host.exists())
+        dest = self.vault / "resources" / "wiki" / "host-report.md"
+        self.assertTrue(dest.is_file())
+        self.assertIn("source: rpc-test", dest.read_text(encoding="utf-8"))
+
     def test_search_prefers_limit(self):
         status, search = self._post("/v1/search", {"query": "alpha widget", "limit": 3})
         self.assertEqual(status, 200)
