@@ -74,8 +74,11 @@ class PatchNoteSchemaTest(unittest.TestCase):
             "replace_text",
             "append_note",
             "scope",
+            "Aliases frozen",
         ):
             self.assertIn(token, desc, msg=f"ops description missing {token!r}: {desc!r}")
+        # Prefer compact key map over shipping full JSON examples in schema.
+        self.assertNotIn('"op":"set_field"', desc)
 
     def test_tool_descriptions_prefer_canonical_routing(self):
         mod, tools = _list_tools_lean(collection="patch_desc_test")
@@ -87,7 +90,7 @@ class PatchNoteSchemaTest(unittest.TestCase):
 
         write_params = _tool_params(by_name["write_note"])
         self.assertNotIn("index", write_params)
-        self.assertIn("Deprecated", write_params["append"].get("description") or "")
+        self.assertNotIn("append", write_params)
         self.assertIn("mtime", (write_params["expected_mtime"].get("description") or "").lower())
 
         move_params = _tool_params(by_name["move_note"])
@@ -101,11 +104,15 @@ class PatchNoteSchemaTest(unittest.TestCase):
         filter_params = _tool_params(by_name["filter_notes"])
         self.assertIn("canonical", (filter_params["where"].get("description") or "").lower())
         self.assertIn("Alias", filter_params["filters"].get("description") or "")
+        self.assertIn("fields", filter_params)
 
         instr = getattr(mod.mcp, "instructions", None) or ""
         self.assertIn("append_note", instr)
         self.assertIn("note://", instr)
         self.assertIn("Lean desk is default", instr)
+        self.assertIn("fields=", instr)
+        self.assertIn("parallel", instr.lower())
+        self.assertIn("recent_activity", instr)
 
     def test_ops_items_are_typed_oneof(self):
         tool = _patch_note_tool()

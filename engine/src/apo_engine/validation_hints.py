@@ -12,13 +12,11 @@ from typing import Any
 
 
 _OPS_HINT = (
-    'Each ops[] item needs "op". Canonical examples: '
-    '{"op":"set_field","field":"status","value":"active"}, '
-    '{"op":"replace_text","find":"…","replace":"…","scope":{"heading":"## Summary"}}, '
-    '{"op":"replace_section","heading":"## Next action","text":"…"}, '
-    '{"op":"append","heading":"## History","text":"…"} '
+    'Each ops[] item needs "op". '
+    "Ops: set_field(field,value); replace_text(find,replace,scope.heading|heading); "
+    "replace_section(heading,text); append(heading,text) "
     "(standalone add → append_note). "
-    "Keys are field/find/replace — never key/old/new."
+    "Keys: field/find/replace — never key/old/new."
 )
 
 _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {

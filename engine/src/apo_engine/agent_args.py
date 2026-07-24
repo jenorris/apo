@@ -52,6 +52,24 @@ def resolve_where(
     return chosen, None
 
 
+def project_frontmatter(
+    fm: dict[str, Any] | None,
+    fields: list[str] | None,
+) -> dict[str, Any]:
+    """Project frontmatter keys. ``None``/empty ``fields`` → full dict (default)."""
+    src = fm if isinstance(fm, dict) else {}
+    if not fields:
+        return src
+    out: dict[str, Any] = {}
+    for key in fields:
+        name = str(key).strip()
+        if not name:
+            continue
+        if name in src:
+            out[name] = src[name]
+    return out
+
+
 def slice_note_content(
     content: str,
     *,

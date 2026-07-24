@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from apo_engine.agent_args import (
+    project_frontmatter,
     resolve_top_k,
     resolve_where,
     shape_note_read,
@@ -55,6 +56,37 @@ class ResolveWhereTest(unittest.TestCase):
         w, err = resolve_where({"a": 1}, {"a": 2})
         self.assertIsNone(w)
         self.assertIn("filters is an alias", err or "")
+
+
+class ProjectFrontmatterTest(unittest.TestCase):
+    FM = {
+        "title": "T",
+        "status": "active",
+        "okf_type": "Thread",
+        "description": "long text",
+        "last_checked": "2026-07-24",
+    }
+
+    def test_default_full(self):
+        self.assertEqual(project_frontmatter(self.FM, None), self.FM)
+        self.assertEqual(project_frontmatter(self.FM, []), self.FM)
+
+    def test_projection(self):
+        out = project_frontmatter(
+            self.FM,
+            ["status", "okf_type", "last_checked", "title", "missing"],
+        )
+        self.assertEqual(
+            out,
+            {
+                "status": "active",
+                "okf_type": "Thread",
+                "last_checked": "2026-07-24",
+                "title": "T",
+            },
+        )
+        self.assertNotIn("description", out)
+        self.assertNotIn("missing", out)
 
 
 class SliceNoteContentTest(unittest.TestCase):

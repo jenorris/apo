@@ -113,6 +113,7 @@ def _filter(body: dict[str, Any]) -> dict[str, Any]:
         limit=int(body.get("limit") or 20),
         offset=int(body.get("offset") or 0),
         vault=str(body.get("vault") or ""),
+        fields=body.get("fields") if isinstance(body.get("fields"), list) else None,
     )
 
 
@@ -166,10 +167,18 @@ def _write(body: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "bad_request", "message": "`path` string required"}
     if not isinstance(content, str):
         return {"ok": False, "error": "bad_request", "message": "`content` string required"}
+    if "append" in body:
+        return {
+            "ok": False,
+            "error": "append_removed",
+            "message": (
+                "write_note append is removed; use POST /v1/append "
+                "(or append_note MCP) with path + text"
+            ),
+        }
     return ops.write_note(
         path,
         content,
-        append=bool(body.get("append")),
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
     )

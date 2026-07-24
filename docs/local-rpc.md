@@ -32,7 +32,7 @@ Arg names match MCP where possible. Prefer **`limit`** / **`where`** (aliases `t
 | GET/POST | `/v1/stats` | `{vault?}` | index stats |
 | POST | `/v1/search` | `{query, limit?, top_k?, folder?, exclude?, snippet_chars?, vault?, no_hybrid?}` | hybrid search — prefer `limit` |
 | POST | `/v1/read` | `{path, heading?, start_line?, end_line?, max_chars?, raw?, vault?}` | `frontmatter` sidecar + body `content` (raw=true → byte-exact) |
-| POST | `/v1/filter` | `{where, folder?, limit?, offset?, vault?}` | frontmatter catalog — prefer `where` |
+| POST | `/v1/filter` | `{where, folder?, limit?, offset?, fields?, vault?}` | frontmatter catalog — prefer `where`; `fields` projects FM keys |
 | POST | `/v1/expand` | `{chunk_hash, scope?, vault?}` | section or chunk |
 | POST | `/v1/backlinks` | `{path, limit?, vault?}` | wiki-link backlinks |
 | POST | `/v1/recent` | `{limit?, folder?, vault?}` | recent notes |
@@ -43,7 +43,7 @@ Writes update markdown on disk and **enqueue** reindex for `apo-engine watch` (s
 
 | Method | Path | Body | Notes |
 |--------|------|------|-------|
-| POST | `/v1/write` | `{path, content, expected_mtime?, vault?}` | create/overwrite only (`append` → `append_deprecated`) |
+| POST | `/v1/write` | `{path, content, expected_mtime?, vault?}` | create/overwrite only (`append` key → `append_removed`) |
 | POST | `/v1/append` | `{path, text, heading?, chunk_hash?, position?, create?, expected_mtime?, vault?}` | surgical append |
 | POST | `/v1/patch` | `{path, ops, strict?, dry_run?, verbose?, expected_mtime?, vault?}` | batch mutators |
 | POST | `/v1/move` | `{src, dst, overwrite?, expected_mtime?, vault?}` | atomic rename; `expected_mtime` guards **src** |

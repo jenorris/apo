@@ -154,18 +154,13 @@ PatchOp = Annotated[
 
 OPS_FIELD_DESC = (
     "Deterministic mutators; discriminated by op. "
-    "Keys are field/find/replace — never key/old/new. "
-    "Canonical examples (prefer these keys): "
-    '{"op":"set_field","field":"status","value":"active"}; '
-    '{"op":"delete_field","field":"draft"}; '
-    '{"op":"replace_text","find":"old","replace":"new","scope":{"heading":"## Summary"}}; '
-    '{"op":"replace_section","heading":"## Summary","text":"…"}; '
-    '{"op":"append","heading":"## History","text":"…"} '
-    "(standalone add → append_note instead); "
-    '{"op":"prepend","heading":"## Session log","text":"…"}; '
-    '{"op":"append_eof","text":"…"}. '
-    "Aliases only: target≡heading on replace_section/append/prepend; "
-    "top-level heading≡scope.heading on replace_text. Conflicting aliases fail."
+    "Keys: field/find/replace — never key/old/new. "
+    "Ops: set_field(field,value); delete_field(field); "
+    "replace_text(find,replace,scope.heading|heading); "
+    "replace_section(heading|target,text); "
+    "append/prepend(text,heading|target); append_eof(text). "
+    "Standalone add → append_note. "
+    "Aliases frozen: target≡heading; replace_text heading≡scope.heading."
 )
 
 
