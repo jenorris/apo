@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from apo_engine import __version__, config, core, deferred as index_deferred, okf as apo_okf, vaults
-from apo_engine.agent_args import resolve_top_k, resolve_where, shape_note_read
+from apo_engine.agent_args import resolve_top_k, resolve_where, shape_note_read, project_frontmatter
 from apo_engine.markdown_patch import (
     PatchError,
     apply_append,
@@ -299,6 +299,7 @@ def filter_notes(
     offset: int = 0,
     vault: str = "",
     filters: dict | None = None,
+    fields: list[str] | None = None,
 ) -> dict[str, Any]:
     where_obj, where_err = resolve_where(where, filters)
     if where_err:
@@ -308,6 +309,9 @@ def filter_notes(
         return _err(error="bad_request", message="offset must be >= 0")
     if limit < 0:
         return _err(error="bad_request", message="limit must be >= 0")
+    if fields is not None:
+        if not isinstance(fields, list) or any(not isinstance(x, str) for x in fields):
+            return _err(error="bad_request", message="fields must be a list of strings")
     try:
         b = _binding(vault)
         root = b.resolved().root
@@ -327,7 +331,7 @@ def filter_notes(
         {
             "path": path,
             "modified": datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
-            "frontmatter": fm,
+            "frontmatter": project_frontmatter(fm, fields),
         }
         for mt, path, fm in matches
     ]
@@ -476,19 +480,9 @@ def write_note(
     path: str,
     content: str,
     *,
-    append: bool = False,
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
-    if append:
-        return _err(
-            path=path,
-            error="append_deprecated",
-            message=(
-                "write_note append is removed; use append_note(path, text, "
-                "heading=… or chunk_hash=…)"
-            ),
-        )
     try:
         b = _binding(vault)
         root = b.resolved().root

@@ -161,7 +161,7 @@ class TestLocalRpc(unittest.TestCase):
         )
         self.assertEqual(status, 400, rejected)
         self.assertFalse(rejected["ok"])
-        self.assertEqual(rejected["error"], "append_deprecated")
+        self.assertEqual(rejected["error"], "append_removed")
 
         status, appended = self._post(
             "/v1/append",

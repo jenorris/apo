@@ -32,6 +32,9 @@ search *ARGS:
 stats:
     {{eng}} stats
 
+tool-stats *ARGS:
+    {{eng}} tool-stats {{ARGS}}
+
 # Local JSON HTTP RPC for gateways (default http://127.0.0.1:8765).
 rpc *ARGS:
     {{eng}} serve {{ARGS}}

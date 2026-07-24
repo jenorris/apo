@@ -16,6 +16,7 @@ _ADMIN = frozenset({
     "reindex_deferred",
     "reindex",
     "delete_note",
+    "tool_stats",
 })
 
 

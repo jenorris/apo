@@ -21,7 +21,12 @@ from apo_engine import deferred as index_deferred
 from apo_engine import okf as apo_okf
 from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
-from apo_engine.agent_args import resolve_top_k, resolve_where, shape_note_read
+from apo_engine.agent_args import (
+    project_frontmatter,
+    resolve_top_k,
+    resolve_where,
+    shape_note_read,
+)
 from apo_engine.mcp_backend import ApoMem
 from apo_engine.markdown_patch import (
     PatchError,
@@ -323,13 +328,17 @@ _MCP_INSTRUCTIONS = (
     "Routing: write_note=create/overwrite only (no append); "
     "append_note=session log / History / post-search add "
     "(prefer over patch_note append); "
-    "patch_note=frontmatter + section mutate "
+    "patch_note=frontmatter + section mutate on one path "
     "(ops use field/value, find/replace — not key/old/new); "
+    "dual-write (domain + daily session log)=parallel append_note/patch_note in one turn "
+    "(no multi-path batch tool); "
     "move_note=rename/archive (delete_note is admin-only); "
     "send_note=copy host .md into vault (token-cheap promote). "
     "Thread mtime → expected_mtime on follow-up writes. "
     "search_notes=content (prefer limit=; top_k alias); "
-    "filter_notes=frontmatter catalog (prefer where=; filters alias). "
+    "filter_notes=frontmatter catalog (prefer where=; filters alias; "
+    "status sweeps pass fields=[status,okf_type,last_checked,title]); "
+    "recent_activity=browse by mtime (first_line); status sweeps → filter_notes. "
     "Hits expose chunk_hash/heading for append/expand (skip read when possible). "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
     "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
@@ -338,15 +347,20 @@ _MCP_INSTRUCTIONS = (
 ) + (
     ""
     if _LEAN_BOOT
-    else " Admin (APO_MCP_LEAN=0): reload_config, memory_status, reindex_deferred, reindex, delete_note."
+    else (
+        " Admin (APO_MCP_LEAN=0): reload_config, memory_status, reindex_deferred, "
+        "reindex, delete_note, tool_stats."
+    )
 )
 mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
 
 # Rewrite opaque Pydantic ValidationError text into agent-actionable ToolError hints
 # (FastMCP validates args before tool bodies — see apo_engine.validation_hints).
 from apo_engine.agent_validation import AgentValidationMiddleware  # noqa: E402
+from apo_engine.tool_metrics_middleware import ToolMetricsMiddleware  # noqa: E402
 
 mcp.add_middleware(AgentValidationMiddleware())
+mcp.add_middleware(ToolMetricsMiddleware())
 
 # Load vault registry at import (fast); the index backend connects lazily per vault.
 _load_vaults()
@@ -388,6 +402,38 @@ def _reload_config_sync() -> dict:
 async def memory_status() -> dict:
     """Vault roots, index health, deferred queues, watcher state — diagnose before retrying failures."""
     return await asyncio.to_thread(_memory_status_sync)
+
+
+@mcp.tool(annotations=_RO, tags={"admin"})
+async def tool_stats(
+    days: Annotated[
+        int | None,
+        Field(description="Rollup window in days (default 7). Pass null for all events."),
+    ] = 7,
+    tool: Annotated[
+        str | None,
+        Field(description="Optional tool name filter (e.g. filter_notes)."),
+    ] = None,
+    vault: str = "",
+) -> dict:
+    """MCP tool-use rollups from ~/.apo/tool-metrics-*.jsonl (admin). No note bodies/paths stored."""
+    return await asyncio.to_thread(_tool_stats_sync, days, tool, vault)
+
+
+def _tool_stats_sync(
+    days: int | None = 7,
+    tool: str | None = None,
+    vault: str = "",
+) -> dict:
+    from apo_engine import tool_metrics as apo_metrics
+
+    try:
+        v = _vault(vault)
+    except VaultError as e:
+        return _err(error="bad_vault", message=str(e))
+    if days is not None and days < 0:
+        return _err(error="bad_request", message="days must be >= 0 or null")
+    return apo_metrics.tool_stats(v.collection, days=days, tool=tool)
 
 
 def _memory_status_sync() -> dict:
@@ -434,19 +480,9 @@ _DEFAULT_SEARCH_SNIPPET = 240
 def _write_note_sync(
     path: str,
     content: str,
-    append: bool = False,
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict:
-    if append:
-        return _err(
-            path=path,
-            error="append_deprecated",
-            message=(
-                "write_note append is removed; use append_note(path, text, "
-                "heading=… or chunk_hash=…)"
-            ),
-        )
     try:
         v = _vault(vault)
         full = _safe_resolve(v, path)
@@ -497,15 +533,6 @@ def _write_note_sync(
 async def write_note(
     path: str,
     content: str,
-    append: Annotated[
-        bool,
-        Field(
-            description=(
-                "Deprecated — always rejected. Use append_note(path, text, heading=…) "
-                "or patch_note append ops."
-            ),
-        ),
-    ] = False,
     expected_mtime: Annotated[
         float | None,
         Field(
@@ -519,7 +546,7 @@ async def write_note(
 ) -> dict:
     """Create or overwrite a note. Prefer append_note / patch_note for edits."""
     return await asyncio.to_thread(
-        _write_note_sync, path, content, append, expected_mtime, vault
+        _write_note_sync, path, content, expected_mtime, vault
     )
 
 
@@ -1099,6 +1126,7 @@ def _filter_notes_sync(
     vault: str = "",
     offset: int = 0,
     filters: dict | None = None,
+    fields: list[str] | None = None,
 ) -> dict:
     try:
         v = _vault(vault)
@@ -1112,6 +1140,9 @@ def _filter_notes_sync(
         return _err(error="bad_request", message="offset must be >= 0")
     if limit < 0:
         return _err(error="bad_request", message="limit must be >= 0")
+    if fields is not None:
+        if not isinstance(fields, list) or any(not isinstance(x, str) for x in fields):
+            return _err(error="bad_request", message="fields must be a list of strings")
 
     folder_clean = folder.replace("\\", "/").strip("/")
     # Traversal check only — filter is index-backed and must not require the dir on disk.
@@ -1127,7 +1158,7 @@ def _filter_notes_sync(
         {
             "path": path,
             "modified": datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
-            "frontmatter": fm,
+            "frontmatter": project_frontmatter(fm, fields),
         }
         for mt, path, fm in matches
     ]
@@ -1161,10 +1192,19 @@ async def filter_notes(
         dict | None,
         Field(description="Alias for where. Prefer where=; do not pass both with different values."),
     ] = None,
+    fields: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "Optional frontmatter key projection. Default=full. "
+                "Status sweeps: [\"status\",\"okf_type\",\"last_checked\",\"title\"]."
+            ),
+        ),
+    ] = None,
 ) -> dict:
-    """Frontmatter catalog (no embeddings). Prefer where= over filters=. offset pages (0-based). Newest first."""
+    """Frontmatter catalog (no embeddings). Prefer where=; pass fields= on status sweeps. Newest first."""
     return await asyncio.to_thread(
-        _filter_notes_sync, where, folder, limit, vault, offset, filters
+        _filter_notes_sync, where, folder, limit, vault, offset, filters, fields
     )
 
 
@@ -1340,6 +1380,7 @@ _ADMIN_TOOLS = frozenset({
     "reindex_deferred",
     "reindex",
     "delete_note",
+    "tool_stats",
 })
 
 

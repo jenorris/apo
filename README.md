@@ -178,9 +178,11 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 | Mode | Count | Includes |
 |------|------:|----------|
 | Lean (**default**) | **11** | search/read/write/catalog + `send_note` promote |
-| Full (`APO_MCP_LEAN=0`) | **16** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note` |
+| Full (`APO_MCP_LEAN=0`) | **17** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note`, `tool_stats` |
 
 Core write/read tools: `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note`, `move_note`, `send_note`, `filter_notes`, `backlinks`, `recent_activity`.
+
+Admin analytics: `tool_stats` / CLI `apo-engine tool-stats` (JSONL under `~/.apo/tool-metrics-*.jsonl`; disable with `APO_TOOL_METRICS=0`).
 
 ## Configuration
 
@@ -194,6 +196,7 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | `APO_NOTES_ROOT` | (required) | Absolute path to the vault root |
 | `APO_INDEX` | `engine/index.db` | sqlite-vec database path |
 | `APO_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace |
+| `APO_TOOL_METRICS` | `1` | Append MCP tool-use JSONL under `~/.apo/` (`0` disables) |
 | `APO_INGEST_DIR` | `resources/wiki` | Advisory convention for wiki ingest paths |
 | `APO_SEND_ALLOW_ROOTS` | `$HOME` | Colon-separated host roots allowed for `send_note` |
 | `APO_SEND_MAX_BYTES` | `5242880` | Max size for `send_note` source files |
