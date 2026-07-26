@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from apo_engine import __version__, config, core, deferred as index_deferred, okf as apo_okf, vaults
+from apo_engine import __version__, config, core, deferred as index_deferred, git_contract, okf as apo_okf, vaults
 from apo_engine.agent_args import resolve_top_k, resolve_where, shape_note_read, project_frontmatter
 from apo_engine.markdown_patch import (
     PatchError,
@@ -442,18 +442,89 @@ def backlinks(path: str, *, limit: int = 100, vault: str = "") -> dict[str, Any]
     }
 
 
-def recent_activity(
+def history(
     *,
     limit: int = 10,
     folder: str = "",
+    path: str = "",
     vault: str = "",
 ) -> dict[str, Any]:
+    """Browse by mtime, or file-level git history when ``path`` is set.
+
+    - No ``path``: index-backed recent notes (same shape as legacy ``recent_activity``).
+    - With ``path`` + active git contract: ``source=git`` + commit list.
+    - With ``path`` but no git contract / no ``.git``: ``source=mtime`` metadata only.
+    """
     try:
         b = _binding(vault)
         root = b.resolved().root
-        base = _safe_resolve(root, folder) if folder else root
     except OpsError as e:
         return _err(error=e.code, message=e.message)
+
+    rel_path = (path or "").strip().replace("\\", "/")
+    if rel_path:
+        try:
+            full = _safe_resolve(root, rel_path)
+        except ValueError as e:
+            return _err(path=rel_path, error="bad_path", message=str(e))
+        if not full.exists():
+            return _err(path=rel_path, error="not_found", message=f"note not found: {rel_path}")
+
+        if git_contract.git_contract_active(root):
+            try:
+                commits = git_contract.git_file_log(root, rel_path, limit=limit)
+            except Exception as e:
+                return _err(
+                    path=rel_path,
+                    error="git_log_failed",
+                    message=str(e),
+                    vault=b.name,
+                )
+            return {
+                "ok": True,
+                "path": rel_path,
+                "source": "git",
+                "commits": commits,
+                "vault": b.name,
+            }
+
+        # No git contract: mtime + optional index first-line preview.
+        modified = datetime.fromtimestamp(full.stat().st_mtime).isoformat(timespec="seconds")
+        preview = ""
+        index_path = rel_path if rel_path.endswith(".md") else f"{rel_path}.md"
+        with vaults.bind(b):
+            try:
+                db = core.reader_connect()
+                db_row = db.execute(
+                    "SELECT f.mtime, COALESCE(substr(c.text, 1, 120), '') "
+                    "FROM files f LEFT JOIN chunks c ON c.path = f.path AND c.ord = 0 "
+                    "WHERE f.path = ?",
+                    (index_path,),
+                ).fetchone()
+                if db_row is None and index_path != rel_path:
+                    db_row = db.execute(
+                        "SELECT f.mtime, COALESCE(substr(c.text, 1, 120), '') "
+                        "FROM files f LEFT JOIN chunks c ON c.path = f.path AND c.ord = 0 "
+                        "WHERE f.path = ?",
+                        (rel_path,),
+                    ).fetchone()
+                if db_row:
+                    modified = datetime.fromtimestamp(db_row[0]).isoformat(timespec="seconds")
+                    preview = (db_row[1] or "").replace("\n", " ").strip()
+            except Exception:
+                pass
+        return {
+            "ok": True,
+            "path": rel_path,
+            "source": "mtime",
+            "modified": modified,
+            "first_line": preview,
+            "vault": b.name,
+        }
+
+    # Browse mode
+    try:
+        base = _safe_resolve(root, folder) if folder else root
     except ValueError as e:
         return _err(error="bad_path", message=str(e))
     if not base.exists():
@@ -462,13 +533,24 @@ def recent_activity(
         rows = core.recent_notes_preview(limit, folder)
     notes = [
         {
-            "path": path,
+            "path": p,
             "modified": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
             "first_line": first_line.replace("\n", " ").strip(),
         }
-        for path, mtime, first_line in rows
+        for p, mtime, first_line in rows
     ]
     return {"ok": True, "notes": notes, "vault": b.name}
+
+
+def recent_activity(
+    *,
+    limit: int = 10,
+    folder: str = "",
+    vault: str = "",
+    path: str = "",
+) -> dict[str, Any]:
+    """Frozen alias of :func:`history` for one release — prefer ``history``."""
+    return history(limit=limit, folder=folder, path=path, vault=vault)
 
 
 ###############################################################################

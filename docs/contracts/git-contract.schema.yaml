@@ -1,0 +1,25 @@
+# Apo git contract — template / example
+# Copy to <vault>/system/config/git-contract.schema.yaml and fill remote/host.
+# Prose twin: system/config/git.md (from docs/contracts/git.md)
+# Runtime: telegraph only — apo-engine does not load this file yet.
+
+git_contract_version: "0.1"
+remote: "https://github.com/OWNER/REPO.git"
+host: github # github | forgejo | gitlab | local
+default_branch: main
+backup:
+  expectation: "push after consequential batches; remote is SoT off-machine"
+  cadence_hint: "daily when vault is active; otherwise before travel"
+lfs:
+  enabled: false
+  sha256_sidecars: true # when binaries exist — digests stay in plain git
+never_commit:
+  - "*.db"
+  - "*.db-*"
+  - ".env"
+  - ".apo/"
+  - "**/Passport*.key"
+  - "*.sqlite"
+restore:
+  owner: "jeremy"
+  drill: "clone remote → point APO_VAULTS root → just index --vault <id>"

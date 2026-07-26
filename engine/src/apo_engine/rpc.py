@@ -144,11 +144,14 @@ def _backlinks(body: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+@_route("POST", "/v1/history")
 @_route("POST", "/v1/recent")
-def _recent(body: dict[str, Any]) -> dict[str, Any]:
-    return ops.recent_activity(
+def _history(body: dict[str, Any]) -> dict[str, Any]:
+    """Canonical /v1/history; /v1/recent is a one-release frozen alias."""
+    return ops.history(
         limit=int(body.get("limit") or 10),
         folder=str(body.get("folder") or ""),
+        path=str(body.get("path") or ""),
         vault=str(body.get("vault") or ""),
     )
 

@@ -338,7 +338,8 @@ _MCP_INSTRUCTIONS = (
     "search_notes=content (prefer limit=; top_k alias); "
     "filter_notes=frontmatter catalog (prefer where=; filters alias; "
     "status sweeps pass fields=[status,okf_type,last_checked,title]); "
-    "recent_activity=browse by mtime (first_line); status sweeps → filter_notes. "
+    "history=browse by mtime (first_line) or file git log when path= + git contract; "
+    "recent_activity=frozen alias of history (one release); status sweeps → filter_notes. "
     "Hits expose chunk_hash/heading for append/expand (skip read when possible). "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
     "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
@@ -1240,31 +1241,44 @@ async def backlinks(path: str, limit: int = 100, vault: str = "") -> dict:
     return await asyncio.to_thread(_backlinks_sync, path, limit, vault)
 
 
-def _recent_activity_sync(limit: int = 10, folder: str = "", vault: str = "") -> dict:
-    try:
-        v = _vault(vault)
-        base = _safe_resolve(v, folder) if folder else v.root
-    except (VaultError, ValueError) as e:
-        return _err(error="bad_path", message=str(e))
-    if not base.exists():
-        return _err(error="not_found", message=f"folder not found: {folder}")
-    with _bound(v):
-        rows = apo_core.recent_notes_preview(limit, folder)
-    notes = [
-        {
-            "path": path,
-            "modified": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
-            "first_line": first_line.replace("\n", " ").strip(),
-        }
-        for path, mtime, first_line in rows
-    ]
-    return {"ok": True, "notes": notes, "vault": v.name}
+def _history_sync(
+    limit: int = 10,
+    folder: str = "",
+    path: str = "",
+    vault: str = "",
+) -> dict:
+    return apo_ops.history(limit=limit, folder=folder, path=path, vault=vault)
 
 
 @mcp.tool(annotations=_RO)
-async def recent_activity(limit: int = 10, folder: str = "", vault: str = "") -> dict:
-    """Browse newest notes by mtime; optional folder= scope. Status sweeps → filter_notes."""
-    return await asyncio.to_thread(_recent_activity_sync, limit, folder, vault)
+async def history(
+    limit: int = 10,
+    folder: str = "",
+    path: Annotated[
+        str,
+        Field(
+            description=(
+                "Vault-relative note path for file-level history. "
+                "When set and the vault has an active git contract + .git, returns commits. "
+                "Empty → browse newest notes by mtime (optional folder=)."
+            ),
+        ),
+    ] = "",
+    vault: str = "",
+) -> dict:
+    """Browse newest notes by mtime, or file-level git history when path= is set (git contract). Prefer this over recent_activity."""
+    return await asyncio.to_thread(_history_sync, limit, folder, path, vault)
+
+
+@mcp.tool(annotations=_RO)
+async def recent_activity(
+    limit: int = 10,
+    folder: str = "",
+    path: str = "",
+    vault: str = "",
+) -> dict:
+    """Frozen alias of history for one release — prefer history. Same args/payload."""
+    return await asyncio.to_thread(_history_sync, limit, folder, path, vault)
 
 
 ###############################################################################
