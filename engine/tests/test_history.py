@@ -123,6 +123,41 @@ class TestHistory(unittest.TestCase):
             self.assertIn("date", c)
             self.assertIn("subject", c)
 
+    def test_nested_vault_under_parent_git(self):
+        """Meta-style: contract on vault subdir; .git on parent (foam)."""
+        parent = self.tmp / "notes"
+        parent.mkdir()
+        vault = parent / "Meta"
+        vault.mkdir()
+        (vault / "note.md").write_text("# Nested\n", encoding="utf-8")
+        cfg = vault / "system" / "config"
+        cfg.mkdir(parents=True)
+        (cfg / "git-contract.schema.yaml").write_text(
+            "git_contract_version: '0.1'\nremote: 'https://example.com/foam.git'\nhost: github\n",
+            encoding="utf-8",
+        )
+        _git(parent, "init")
+        _git(parent, "config", "user.email", "test@example.com")
+        _git(parent, "config", "user.name", "Test")
+        _git(parent, "add", "Meta/note.md")
+        _git(parent, "commit", "-m", "add meta note")
+
+        self.assertTrue(git_contract.is_git_work_tree(vault))
+        self.assertTrue(git_contract.git_contract_active(vault))
+        commits = git_contract.git_file_log(vault, "note.md", limit=5)
+        self.assertEqual(len(commits), 1)
+        self.assertEqual(commits[0]["subject"], "add meta note")
+
+        with unittest.mock.patch.object(config, "NOTES_ROOT", vault):
+            with unittest.mock.patch.object(config, "INDEX_PATH", self.tmp / "nested-index.db"):
+                with unittest.mock.patch.object(config, "COLLECTION", "nested_hist"):
+                    with unittest.mock.patch.object(config, "VAULTS_CONFIG", ""):
+                        core.index_vault(rebuild=True, verbose=False)
+                        out = ops.history(path="note.md", limit=5)
+        self.assertTrue(out["ok"], msg=out)
+        self.assertEqual(out["source"], "git")
+        self.assertEqual(out["commits"][0]["subject"], "add meta note")
+
 
 class TestHistoryRpc(unittest.TestCase):
     def setUp(self):

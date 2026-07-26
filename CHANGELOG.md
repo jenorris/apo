@@ -2,6 +2,12 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [Unreleased]
+
+### Fixed
+
+- **Git contract active check** — detect work trees via `git rev-parse` so Meta-style subdirectory vaults (parent `.git`) and dedicated vault checkouts both activate `history(path=)`.
+
 ## [0.1.0] — 2026-07-26
 
 First tagged release. Tool/schema surface is now versioned toward **v1**.

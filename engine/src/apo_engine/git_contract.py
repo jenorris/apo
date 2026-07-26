@@ -1,7 +1,8 @@
 """Git contract telegraph loader + file-level history (no push/pull).
 
 Active when ``system/config/git-contract.schema.yaml`` exists under the vault
-root **and** the root is a git work tree. Used by ``history`` for path mode.
+root **and** the vault is inside a git work tree (own ``.git`` or a parent
+checkout such as Meta under ``jenorris/foam``). Used by ``history`` for path mode.
 """
 
 from __future__ import annotations
@@ -42,12 +43,26 @@ def load_git_contract(vault_root: Path, explicit: str | None = None) -> dict[str
 
 
 def is_git_work_tree(vault_root: Path) -> bool:
-    git_meta = vault_root / ".git"
-    return git_meta.exists()
+    """True if vault_root is inside a git work tree (root or subdirectory).
+
+    Meta lives under ``~/Notes`` (``jenorris/foam``) without its own ``.git``;
+    Norris/Work are dedicated checkouts with ``.git`` on the vault root.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(vault_root), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_LOG_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
 
 
 def git_contract_active(vault_root: Path) -> bool:
-    """True when live git contract YAML exists and vault root is a git checkout."""
+    """True when live git contract YAML exists and vault root is in a git work tree."""
     return load_git_contract(vault_root) is not None and is_git_work_tree(vault_root)
 
 
