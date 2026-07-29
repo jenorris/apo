@@ -4,9 +4,16 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-07-28
+
 ### Fixed
 
 - **Duplicate section headers on append** — `append` / `prepend` / `replace_section` strip a leading markdown heading that repeats the section anchor (common MCP client misuse: `heading="## Session log"` plus the same line in `text`). EOF append is unchanged.
+
+## [0.1.1] — 2026-07-26
+
+### Fixed
+
 - **Git contract active check** — detect work trees via `git rev-parse` so Meta-style subdirectory vaults (parent `.git`) and dedicated vault checkouts both activate `history(path=)`.
 
 ## [0.1.0] — 2026-07-26
