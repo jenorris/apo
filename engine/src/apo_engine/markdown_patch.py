@@ -258,6 +258,31 @@ def _insert_text_lines(existing: list[str], insert_lines: list[str], at: int) ->
     return merged, len(insert_lines)
 
 
+def _strip_leading_anchor_heading(insert_lines: list[str], section_title: str) -> list[str]:
+    """Drop a leading markdown heading that repeats the section anchor.
+
+    MCP clients often pass ``heading="## Session log"`` *and* put the same
+    heading at the start of ``text``. Without this, append/prepend writes a
+    duplicate ``## Session log`` into the section body.
+    """
+    if not insert_lines or not section_title:
+        return insert_lines
+    i = 0
+    while i < len(insert_lines) and insert_lines[i].strip() == "":
+        i += 1
+    if i >= len(insert_lines):
+        return insert_lines
+    m = _HEADING_RE.match(insert_lines[i])
+    if not m:
+        return insert_lines
+    if _normalize_heading(m.group(2)) != _normalize_heading(section_title):
+        return insert_lines
+    i += 1
+    while i < len(insert_lines) and insert_lines[i].strip() == "":
+        i += 1
+    return insert_lines[i:]
+
+
 def apply_append(
     lines: list[str],
     text: str,
@@ -279,6 +304,8 @@ def apply_append(
             insert_lines = (["\n"] if lines[-1].strip() else []) + insert_lines
         merged, n = _insert_text_lines(lines, insert_lines, at)
         return merged, f"appended {n} line(s) at EOF"
+
+    insert_lines = _strip_leading_anchor_heading(insert_lines, section.title)
 
     if position == "start":
         at = section.body_start
@@ -343,6 +370,7 @@ def apply_replace_text(
 def apply_replace_section(lines: list[str], heading: str, text: str) -> tuple[list[str], str]:
     section = find_section(lines, heading)
     new_body = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    new_body = _strip_leading_anchor_heading(new_body, section.title)
     while new_body and new_body[-1] == "":
         new_body.pop()
     merged = lines[: section.body_start] + new_body + lines[section.body_end :]

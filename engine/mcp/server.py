@@ -646,7 +646,7 @@ async def append_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Preferred add for session log / History / post-search text. Anchor: chunk_hash → heading → EOF. Batch with other mutators → patch_note."""
+    """Preferred add for session log / History / post-search text. Anchor: chunk_hash → heading → EOF. ``text`` is body only (do not repeat the heading — a leading duplicate of the anchor is stripped). Batch with other mutators → patch_note."""
     return await asyncio.to_thread(
         _append_note_sync,
         path,

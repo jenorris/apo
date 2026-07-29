@@ -63,6 +63,71 @@ title: '2026-07-09'
         idx_old = result.content.index("**old entry**")
         self.assertLess(idx_new, idx_old)
 
+    def test_append_strips_duplicate_anchor_heading(self):
+        # Clients often pass heading= and also put "## Session log" in text.
+        lines = """---
+title: '2026-07-09'
+---
+
+## Session log
+
+**old**
+""".split("\n")
+        merged, _ = apply_append(
+            lines,
+            "## Session log\n\n**2026-07-09 17:19 ET** — new.\n\n",
+            heading="## Session log",
+            position="start",
+        )
+        text = "\n".join(merged)
+        self.assertEqual(text.count("## Session log"), 1)
+        self.assertIn("**2026-07-09 17:19 ET** — new.", text)
+        self.assertLess(text.index("**2026-07-09 17:19 ET**"), text.index("**old**"))
+
+    def test_prepend_strips_duplicate_anchor_heading_via_patch(self):
+        daily = """---
+title: '2026-07-09'
+---
+
+## Session log
+
+**old entry**
+"""
+        result = apply_patch(
+            daily,
+            [{
+                "op": "prepend",
+                "heading": "## Session log",
+                "text": "## Session log\n\n**new entry**\n\n",
+            }],
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.content.count("## Session log"), 1)
+        self.assertLess(
+            result.content.index("**new entry**"),
+            result.content.index("**old entry**"),
+        )
+
+    def test_append_keeps_unrelated_leading_heading(self):
+        lines = THREAD.split("\n")
+        merged, _ = apply_append(
+            lines,
+            "### Notes\n\n- detail\n",
+            heading="## History",
+        )
+        text = "\n".join(merged)
+        self.assertIn("### Notes", text)
+        self.assertIn("- detail", text)
+
+    def test_append_eof_does_not_strip_heading(self):
+        # No section anchor → leading heading is intentional (new section at EOF).
+        result = apply_patch(
+            "line1\n",
+            [{"op": "append_eof", "text": "## Footer\n\nx\n"}],
+        )
+        self.assertTrue(result.ok)
+        self.assertIn("## Footer", result.content)
+
     def test_append_eof(self):
         result = apply_patch("line1\n", [{"op": "append_eof", "text": "line2\n"}])
         self.assertTrue(result.ok)
@@ -171,6 +236,20 @@ class TestPatch(unittest.TestCase):
             [{"op": "replace_section", "heading": "## Summary", "text": "Updated summary."}],
         )
         self.assertTrue(result.ok)
+        self.assertIn("Updated summary.", result.content)
+        self.assertNotIn("Short summary.", result.content)
+
+    def test_replace_section_strips_duplicate_heading(self):
+        result = apply_patch(
+            THREAD,
+            [{
+                "op": "replace_section",
+                "heading": "## Summary",
+                "text": "## Summary\n\nUpdated summary.\n",
+            }],
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.content.count("## Summary"), 1)
         self.assertIn("Updated summary.", result.content)
         self.assertNotIn("Short summary.", result.content)
 

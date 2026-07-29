@@ -72,5 +72,11 @@ raise validation / `invalid_op` errors. Prefer canonical keys in new calls.
 {"op": "append_eof", "text": "\n---\nfooter\n"}
 ```
 
+**`text` is body only.** Pass the section via `heading` / `target` (or
+`chunk_hash` on `append_note`). A leading markdown heading that repeats the
+anchor title is stripped on `append` / `prepend` / `replace_section` so
+clients that copy `read_note(..., heading=…)` into `text` do not write
+double headers. EOF append (`append_eof` / no heading) does not strip.
+
 Normalization (`ops_to_dicts` / apply path) strips aliases so the engine sees one
 canonical shape per op.
