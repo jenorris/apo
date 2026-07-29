@@ -93,6 +93,59 @@ def _top_level_dirs(root: Path) -> list[str]:
     return sorted(p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith("."))
 
 
+WATCH_PID_FILE = Path.home() / ".apo" / "watch.pid"
+
+_WATCHER_TIP = (
+    "watcher not running — write is on disk and enqueued, but search won't "
+    "update until apo-engine watch is up (just watch-status)"
+)
+
+
+def watcher_status() -> dict[str, Any]:
+    """Best-effort liveness check for the watcher PID file.
+
+    PID existence alone (os.kill(pid, 0)) isn't process *identity* — if the watcher died
+    and the PID was later recycled by an unrelated process, that check false-positives.
+    Cross-check /proc/<pid>/cmdline where available (Linux); degrade to existence-only
+    elsewhere rather than fail the check outright.
+    """
+    status: dict[str, Any] = {"pid_file": str(WATCH_PID_FILE), "running": False}
+    try:
+        pid = int(WATCH_PID_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return status
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return status
+    status["pid"] = pid
+    cmdline_path = Path(f"/proc/{pid}/cmdline")
+    if cmdline_path.exists():
+        try:
+            cmdline = cmdline_path.read_bytes().decode("utf-8", "replace")
+        except OSError:
+            cmdline = ""
+        if cmdline and not ("apo-engine" in cmdline and "watch" in cmdline):
+            status["warning"] = (
+                f"pid {pid} is alive but doesn't look like apo-engine watch "
+                "(stale/recycled pid?)"
+            )
+            return status
+    status["running"] = True
+    return status
+
+
+def _attach_watcher_tip(out: dict[str, Any]) -> dict[str, Any]:
+    """Surface missing watcher on successful writes (lean has no memory_status)."""
+    if not out.get("ok"):
+        return out
+    if watcher_status().get("running"):
+        return out
+    existing = out.get("warning")
+    out["warning"] = f"{existing}; {_WATCHER_TIP}" if existing else _WATCHER_TIP
+    return out
+
+
 def _send_allow_roots() -> list[Path]:
     raw = (config.SEND_ALLOW_ROOTS or "").strip()
     if not raw:
@@ -369,10 +422,15 @@ def expand_chunk(
     if not rel:
         return _err(error="anchor_not_found", message="chunk has no path")
 
+    try:
+        full = _safe_resolve(b.resolved().root, rel)
+    except ValueError as e:
+        return _err(error="anchor_not_found", message=str(e))
+
     if scope == "chunk":
         heading = chunk.get("heading") or ""
         hlevel = int(chunk.get("heading_level") or 0)
-        return {
+        out_chunk: dict[str, Any] = {
             "ok": True,
             "path": rel,
             "heading": f"{'#' * hlevel} {heading}".strip() if heading else "",
@@ -382,11 +440,10 @@ def expand_chunk(
             "scope": "chunk",
             "vault": b.name,
         }
+        if full.exists():
+            out_chunk["mtime"] = _mtime(full)
+        return out_chunk
 
-    try:
-        full = _safe_resolve(b.resolved().root, rel)
-    except ValueError as e:
-        return _err(error="anchor_not_found", message=str(e))
     if not full.exists():
         return _err(error="stale_index", message=f"source file missing: {rel}")
 
@@ -405,6 +462,7 @@ def expand_chunk(
         "end_line": section.body_end,
         "content": "\n".join(lines[start : section.body_end]),
         "scope": "section",
+        "mtime": _mtime(full),
         "vault": b.name,
     }
 
@@ -549,7 +607,7 @@ def recent_activity(
     vault: str = "",
     path: str = "",
 ) -> dict[str, Any]:
-    """Frozen alias of :func:`history` for one release — prefer ``history``."""
+    """Frozen alias of :func:`history` through the v0.1.x line — prefer ``history``."""
     return history(limit=limit, folder=folder, path=path, vault=vault)
 
 
@@ -612,7 +670,7 @@ def write_note(
             f"created new top-level directory {parts[0]!r} — "
             f"existing top-level dirs: {_top_level_dirs(root)}"
         )
-    return out
+    return _attach_watcher_tip(out)
 
 
 def append_note(
@@ -692,7 +750,7 @@ def append_note(
     full.write_text(new_content, encoding="utf-8")
     _enqueue_index(b, full)
 
-    return {
+    return _attach_watcher_tip({
         "ok": True,
         "path": path,
         "anchor": anchor_label,
@@ -701,7 +759,7 @@ def append_note(
         "bytes": full.stat().st_size,
         "mtime": _mtime(full),
         "vault": b.name,
-    }
+    })
 
 
 def patch_note(
@@ -805,7 +863,7 @@ def patch_note(
     out.update(okf_meta)
     if verbose:
         out["lines_added"] = result.lines_added
-    return out
+    return _attach_watcher_tip(out)
 
 
 def move_note(
@@ -855,7 +913,7 @@ def move_note(
     }
     if not purged:
         out["warning"] = "purge not queued — watcher may retain stale chunks"
-    return out
+    return _attach_watcher_tip(out)
 
 
 def send_note(
@@ -959,7 +1017,7 @@ def send_note(
             f"created new top-level directory {parts[0]!r} — "
             f"existing top-level dirs: {_top_level_dirs(root)}"
         )
-    return out
+    return _attach_watcher_tip(out)
 
 
 def delete_note(path: str, *, vault: str = "") -> dict[str, Any]:
@@ -985,4 +1043,4 @@ def delete_note(path: str, *, vault: str = "") -> dict[str, Any]:
     }
     if not purged:
         out["warning"] = "purge not queued — watcher may retain stale chunks"
-    return out
+    return _attach_watcher_tip(out)

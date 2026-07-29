@@ -42,11 +42,8 @@ def resolve_where(
         )
     chosen = where if where is not None else filters
     if chosen is None:
-        return None, (
-            "missing where (required). Pass where={} to list notes in a folder, "
-            "or where={\"status\": \"active\"}. "
-            "Alias: filters= is accepted for the same object."
-        )
+        # Default empty predicate — list notes in folder (or all) without forcing where={}.
+        return {}, None
     if not isinstance(chosen, dict):
         return None, "`where` must be an object (use {} to list all indexed notes in folder)"
     return chosen, None

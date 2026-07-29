@@ -1,12 +1,10 @@
-"""MCP backend — async adapter over core's sync sqlite-vec index.
+"""MCP / ops search hit shaping — thin adapter over core's sync sqlite-vec index.
 
-Read paths (search, count, lookup) run in worker threads. Index writes are owned by
-apo-engine watch — MCP enqueues via apo_engine.deferred instead of calling index_file here.
+Index writes are owned by apo-engine watch — writers enqueue via apo_engine.deferred.
 """
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 
 from . import core
@@ -23,7 +21,7 @@ class ApoStore:
 def shape_search_hits(
     hits: list[core.Hit],
 ) -> list[dict]:
-    """Vault-relative rows for MCP — no Path.resolve() on the event loop."""
+    """Vault-relative rows for MCP / RPC — no Path.resolve() on the event loop."""
     rows: list[dict] = []
     for h in hits:
         mtime = h.mtime or 0.0
@@ -45,25 +43,3 @@ def shape_search_hits(
             }
         )
     return rows
-
-
-class ApoMem:
-    store = ApoStore()
-
-    async def search(
-        self,
-        query: str,
-        top_k: int = 5,
-        folder: str = "",
-        snippet_chars: int = 0,
-    ) -> list[dict]:
-        def run() -> list[dict]:
-            hits = core.search(
-                query,
-                k=top_k,
-                folder=folder,
-                snippet_chars=snippet_chars,
-            )
-            return shape_search_hits(hits)
-
-        return await asyncio.to_thread(run)

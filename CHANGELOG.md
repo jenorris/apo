@@ -4,6 +4,20 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-29
+
+### Changed
+
+- **MCP façade** — lean tools delegate to `apo_engine.ops` (parity with local RPC); watcher-not-running tip on successful writes is shared. `engine/mcp/server.py` is a thin FastMCP layer (admin tools + resources stay local).
+- **Published tool counts** — lean **12** / full **18** (docs + `just inspect` expectations).
+- **`filter_notes`** — omitted `where`/`filters` defaults to `{}` (list notes without forcing an empty object).
+- **`expand_chunk`** — returns `mtime` when the source file exists (chain into `expected_mtime`).
+- **Onboard / lean diagnostics** — stop requiring lean-hidden `memory_status`; prefer smoke tools + write `warning` / `just watch-status`.
+
+### Deprecated
+
+- **`recent_activity`** / `POST /v1/recent` — still frozen aliases of `history`. Removal deferred from this release to **v0.3.0** (0.2.0 is the MCP façade cut). Prefer `history`.
+
 ## [0.1.2] — 2026-07-28
 
 ### Fixed
@@ -27,7 +41,7 @@ First tagged release. Tool/schema surface is now versioned toward **v1**.
 
 ### Deprecated
 
-- **`recent_activity`** / `POST /v1/recent` — frozen aliases of `history` through the **v0.1.x** line. **Removed in v0.2.0.** Prefer `history`.
+- **`recent_activity`** / `POST /v1/recent` — frozen aliases of `history` through the **v0.1.x** line. Removal moved to **v0.3.0** (see 0.2.0 notes). Prefer `history`.
 
 ### Notes
 

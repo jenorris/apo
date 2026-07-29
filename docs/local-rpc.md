@@ -36,7 +36,7 @@ Arg names match MCP where possible. Prefer **`limit`** / **`where`** (aliases `t
 | POST | `/v1/expand` | `{chunk_hash, scope?, vault?}` | section or chunk |
 | POST | `/v1/backlinks` | `{path, limit?, vault?}` | wiki-link backlinks |
 | POST | `/v1/history` | `{limit?, folder?, path?, vault?}` | browse by mtime, or file git log when `path` + git contract |
-| POST | `/v1/recent` | same as `/v1/history` | **frozen alias** (one release) — prefer `/v1/history` |
+| POST | `/v1/recent` | same as `/v1/history` | **frozen alias** (through v0.1.x) — prefer `/v1/history` |
 
 ### Write
 

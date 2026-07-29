@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Apo MCP server — hybrid search + surgical writes over sqlite-vec + Ollama.
+Apo MCP server — FastMCP façade over apo_engine.ops (+ admin/resources).
 
 Vault: APO_NOTES_ROOT. Deferred queue: ~/.apo/deferred-<collection>.json
 """
@@ -9,44 +9,25 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass, field as dc_field
-from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from pydantic import Field
 from apo_engine import config as apo_config
-from apo_engine import core as apo_core
 from apo_engine import deferred as index_deferred
-from apo_engine import okf as apo_okf
 from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
-from apo_engine.agent_args import (
-    project_frontmatter,
-    resolve_top_k,
-    resolve_where,
-    shape_note_read,
-)
-from apo_engine.mcp_backend import ApoMem
-from apo_engine.markdown_patch import (
-    PatchError,
-    apply_append,
-    apply_patch,
-    find_section,
-    minimal_note_stub,
-    normalize_lines,
-    section_from_chunk,
-)
-from apo_engine.patch_ops import OPS_FIELD_DESC, PatchOp, ops_to_dicts
-from apo_engine.validation_hints import flatten_patch_failure_error
-
-WATCH_PID_FILE = Path.home() / ".apo" / "watch.pid"
-DEFERRED_DIR = Path.home() / ".apo"
+from apo_engine.mcp_backend import ApoStore
+from apo_engine.patch_ops import OPS_FIELD_DESC, PatchOp
 
 # Tool annotation presets
 _RO = {"readOnlyHint": True, "openWorldHint": False}
 _WRITE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
 _MUTATE = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False}
+
+# Default MCP search payload: anchors + short preview. Pass snippet_chars=0 for full chunk text.
+_DEFAULT_SEARCH_SNIPPET = 240
 
 
 class VaultError(Exception):
@@ -60,7 +41,6 @@ class Vault:
     collection: str
     index_path: Path
     ingest_dir: str = "wiki"
-    mem: ApoMem | None = None
     deferred: set[str] = dc_field(default_factory=set)
 
     def binding(self) -> apo_vaults.VaultBinding:
@@ -113,10 +93,6 @@ def _load_deferred(collection: str) -> set[str]:
     return index_deferred.load_index_queue(collection)
 
 
-def _save_deferred(v: Vault) -> None:
-    index_deferred.save_index_queue(v.collection, v.deferred)
-
-
 def _load_vaults() -> None:
     """(Re)build the vault registry from APO_VAULTS or legacy single-root env.
 
@@ -139,9 +115,7 @@ def _load_vaults() -> None:
     for name, b in bindings.items():
         coll = b.collection
         if name == default_name:
-            coll = (
-                _pick(overrides, "APO_COLLECTION", coll) or coll
-            )
+            coll = _pick(overrides, "APO_COLLECTION", coll) or coll
         VAULTS[name] = Vault(
             name=name,
             root=b.root,
@@ -161,13 +135,6 @@ def _vault(name: str = "") -> Vault:
     return v
 
 
-def _ensure_mem(v: Vault) -> ApoMem:
-    """Lazy-init index backend per vault."""
-    if v.mem is None:
-        v.mem = ApoMem()
-    return v.mem
-
-
 def _bound(v: Vault):
     """Context manager: activate this vault's root+index for core.* calls."""
     return apo_vaults.bind(v.binding())
@@ -180,43 +147,8 @@ def _safe_resolve(v: Vault, relative_path: str) -> Path:
     return full
 
 
-def _display_source(v: Vault, source: str) -> str:
-    """Vault-relative form of an absolute source path."""
-    if not source:
-        return ""
-    src = Path(source).expanduser().resolve()
-    try:
-        return str(src.relative_to(v.root))
-    except ValueError:
-        return str(src)
-
-
 def _err(**kw: Any) -> dict:
     return {"ok": False, **kw}
-
-
-def _mtime(full: Path) -> float:
-    return full.stat().st_mtime
-
-
-def _check_mtime(full: Path, expected: float | None, path: str) -> dict | None:
-    """Optimistic-concurrency guard: fail if the file changed since `expected`."""
-    if expected is None or not full.exists():
-        return None
-    actual = full.stat().st_mtime
-    if abs(actual - float(expected)) > 1e-6:
-        return _err(
-            path=path,
-            error="stale_write",
-            message="file modified since expected_mtime; re-read before writing",
-            expected_mtime=float(expected),
-            actual_mtime=actual,
-        )
-    return None
-
-
-def _env_truthy(key: str) -> bool:
-    return os.environ.get(key, "").lower() in ("1", "true", "yes")
 
 
 def _lean_enabled() -> bool:
@@ -225,90 +157,6 @@ def _lean_enabled() -> bool:
     if raw is None or str(raw).strip() == "":
         return True
     return str(raw).strip().lower() not in ("0", "false", "no", "off")
-
-
-def _default_index_on_write() -> bool:
-    return _env_truthy("APO_INDEX_ON_WRITE")
-
-
-def _maybe_index(v: Vault, full: Path) -> None:
-    """Queue path for the watcher — MCP never writes index.db (single-writer policy).
-
-    Sync on purpose: write/read tools run via ``asyncio.to_thread``, so flock/queue I/O
-    must not sit in an ``async def`` body (that would still block the event loop).
-    Best-effort: enqueue failure must not fail an already-successful note write.
-    """
-    try:
-        # enqueue_index returns the updated set — avoid a second flock/re-read.
-        v.deferred = index_deferred.enqueue_index(v.collection, str(full.resolve()))
-    except Exception:
-        pass
-
-
-def _attach_watcher_tip(out: dict[str, Any]) -> dict[str, Any]:
-    """Surface missing watcher on successful writes (lean has no memory_status)."""
-    if not out.get("ok"):
-        return out
-    watcher = _watcher_status()
-    if watcher.get("running"):
-        return out
-    tip = (
-        "watcher not running — write is on disk and enqueued, but search won't "
-        "update until apo-engine watch is up (just watch-status)"
-    )
-    existing = out.get("warning")
-    out["warning"] = f"{existing}; {tip}" if existing else tip
-    return out
-
-
-def _purge_index(v: Vault, full: Path) -> bool:
-    """Queue index purge for the watcher. Best-effort."""
-    try:
-        index_deferred.enqueue_purge(v.collection, str(full.resolve()))
-        return True
-    except Exception:
-        return False
-
-
-def _lookup_chunk(
-    v: Vault, chunk_hash: str, *, include_text: bool = True
-) -> dict[str, Any] | None:
-    try:
-        with _bound(v):
-            return _ensure_mem(v).store.lookup_chunk(chunk_hash, include_text=include_text)
-    except Exception:
-        return None
-
-
-def _watcher_status() -> dict[str, Any]:
-    """Best-effort liveness check for the watcher PID file.
-
-    PID existence alone (os.kill(pid, 0)) isn't process *identity* — if the watcher died
-    and the PID was later recycled by an unrelated process, that check false-positives.
-    Cross-check /proc/<pid>/cmdline where available (Linux); degrade to existence-only
-    elsewhere rather than fail the check outright.
-    """
-    status: dict[str, Any] = {"pid_file": str(WATCH_PID_FILE), "running": False}
-    try:
-        pid = int(WATCH_PID_FILE.read_text().strip())
-    except (OSError, ValueError):
-        return status
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return status
-    status["pid"] = pid
-    cmdline_path = Path(f"/proc/{pid}/cmdline")
-    if cmdline_path.exists():
-        try:
-            cmdline = cmdline_path.read_bytes().decode("utf-8", "replace")
-        except OSError:
-            cmdline = ""
-        if cmdline and not ("apo-engine" in cmdline and "watch" in cmdline):
-            status["warning"] = f"pid {pid} is alive but doesn't look like apo-engine watch (stale/recycled pid?)"
-            return status
-    status["running"] = True
-    return status
 
 
 def _top_level_dirs(v: Vault) -> list[str]:
@@ -337,9 +185,10 @@ _MCP_INSTRUCTIONS = (
     "Thread mtime → expected_mtime on follow-up writes. "
     "search_notes=content (prefer limit=; top_k alias); "
     "filter_notes=frontmatter catalog (prefer where=; filters alias; "
+    "omit where or pass where={} to list; "
     "status sweeps pass fields=[status,okf_type,last_checked,title]); "
     "history=browse by mtime (first_line) or file git log when path= + git contract; "
-    "recent_activity=frozen alias of history (one release); status sweeps → filter_notes. "
+    "recent_activity=frozen alias of history through v0.1.x; status sweeps → filter_notes. "
     "Hits expose chunk_hash/heading for append/expand (skip read when possible). "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
     "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
@@ -368,7 +217,7 @@ _load_vaults()
 
 
 ###############################################################################
-# Tools — config & status
+# Tools — config & status (admin)
 ###############################################################################
 
 
@@ -439,6 +288,7 @@ def _tool_stats_sync(
 
 def _memory_status_sync() -> dict:
     vaults: dict[str, Any] = {}
+    store = ApoStore()
     for name, v in VAULTS.items():
         info: dict[str, Any] = {
             "root": str(v.root),
@@ -451,83 +301,24 @@ def _memory_status_sync() -> dict:
         }
         try:
             with _bound(v):
-                info["indexed_chunks"] = _ensure_mem(v).store.count()
+                info["indexed_chunks"] = store.count()
             info["index"] = "ok"
         except Exception as e:
             info["index"] = f"error: {e}"
         vaults[name] = info
 
-    watcher = _watcher_status()
-
     return {
         "ok": True,
         "default_vault": DEFAULT_VAULT,
         "vaults": vaults,
-        "watcher": watcher,
+        "watcher": apo_ops.watcher_status(),
         "runtime_file": str(_runtime_config_path()),
-        "index_on_write_default": _default_index_on_write(),
     }
 
 
 ###############################################################################
-# Tools — writing (sync bodies; async wrappers offload via to_thread)
+# Tools — writing (delegate to ops)
 ###############################################################################
-
-
-# Default MCP search payload: anchors + short preview. Pass snippet_chars=0 for full chunk text.
-_DEFAULT_SEARCH_SNIPPET = 240
-
-
-def _write_note_sync(
-    path: str,
-    content: str,
-    expected_mtime: float | None = None,
-    vault: str = "",
-) -> dict:
-    try:
-        v = _vault(vault)
-        full = _safe_resolve(v, path)
-    except (VaultError, ValueError) as e:
-        return _err(path=path, error="bad_path", message=str(e))
-
-    if (guard := _check_mtime(full, expected_mtime, path)):
-        return guard
-
-    existed = full.exists()
-    parts = Path(path.replace("\\", "/")).parts
-    new_top = len(parts) > 1 and not (v.root / parts[0]).exists()
-
-    okf_meta: dict[str, Any] = {}
-    okf = apo_okf.process_concept(vault_root=v.root, rel_path=path, content=content)
-    okf_meta = okf.as_response_fields()
-    if not okf.ok:
-        return _err(
-            path=path,
-            error=okf.error or "okf_validation",
-            message=okf.message or "OKF validation failed",
-            **{k: v for k, v in okf_meta.items() if k != "enforcement"},
-            enforcement=okf.enforcement,
-        )
-    to_write = okf.content
-
-    full.parent.mkdir(parents=True, exist_ok=True)
-    full.write_text(to_write, encoding="utf-8")
-    _maybe_index(v, full)
-
-    out: dict[str, Any] = {
-        "ok": True,
-        "path": path,
-        "action": "overwrote" if existed else "created",
-        "bytes": full.stat().st_size,
-        "mtime": _mtime(full),
-    }
-    out.update(okf_meta)
-    if new_top:
-        out["warning"] = (
-            f"created new top-level directory {parts[0]!r} — "
-            f"existing top-level dirs: {_top_level_dirs(v)}"
-        )
-    return _attach_watcher_tip(out)
 
 
 @mcp.tool(annotations=_MUTATE)
@@ -547,84 +338,12 @@ async def write_note(
 ) -> dict:
     """Create or overwrite a note. Prefer append_note / patch_note for edits."""
     return await asyncio.to_thread(
-        _write_note_sync, path, content, expected_mtime, vault
+        apo_ops.write_note,
+        path,
+        content,
+        expected_mtime=expected_mtime,
+        vault=vault,
     )
-
-
-def _append_note_sync(
-    path: str,
-    text: str,
-    heading: str | None = None,
-    chunk_hash: str | None = None,
-    position: Literal["end", "start"] = "end",
-    create: bool = False,
-    expected_mtime: float | None = None,
-    vault: str = "",
-) -> dict:
-    try:
-        v = _vault(vault)
-        full = _safe_resolve(v, path)
-    except (VaultError, ValueError) as e:
-        return _err(path=path, error="bad_path", message=str(e))
-
-    if (guard := _check_mtime(full, expected_mtime, path)):
-        return guard
-
-    if not full.exists():
-        if not create:
-            return _err(path=path, error="not_found", message="note not found (pass create=true to create)")
-        full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(minimal_note_stub(path), encoding="utf-8")
-
-    content = full.read_text(encoding="utf-8")
-    lines = normalize_lines(content)
-
-    try:
-        section = None
-        anchor_label = "EOF"
-        if chunk_hash:
-            # Anchor metadata only — skip loading chunk body from SQLite.
-            chunk = _lookup_chunk(v, chunk_hash, include_text=False)
-            if not chunk:
-                return _err(path=path, error="anchor_not_found", message=f"chunk_hash {chunk_hash!r} not found")
-            chunk_path = (chunk.get("path") or "").replace("\\", "/")
-            want = path.replace("\\", "/")
-            if chunk_path and chunk_path != want:
-                return _err(
-                    path=path,
-                    error="path_mismatch",
-                    message=f"chunk_hash belongs to {chunk_path!r}, not {path!r}",
-                )
-            section = section_from_chunk(
-                lines,
-                int(chunk.get("start_line", 1)),
-                int(chunk.get("heading_level", 0)),
-            )
-            anchor_label = section.title or chunk_hash
-            merged, detail = apply_append(lines, text, section=section, position=position)
-        elif heading:
-            merged, detail = apply_append(lines, text, heading=heading, position=position)
-            anchor_label = heading
-        else:
-            merged, detail = apply_append(lines, text, heading=None, position="end")
-    except PatchError as e:
-        return _err(path=path, error=e.code, message=e.message, suggestions=e.suggestions)
-
-    new_content = "\n".join(merged)
-    if content.endswith("\n") and not new_content.endswith("\n"):
-        new_content += "\n"
-    full.write_text(new_content, encoding="utf-8")
-    _maybe_index(v, full)
-
-    return _attach_watcher_tip({
-        "ok": True,
-        "path": path,
-        "anchor": anchor_label,
-        "detail": detail,
-        "lines_added": max(0, len(merged) - len(lines)),
-        "bytes": full.stat().st_size,
-        "mtime": _mtime(full),
-    })
 
 
 @mcp.tool(annotations=_WRITE)
@@ -648,112 +367,16 @@ async def append_note(
 ) -> dict:
     """Preferred add for session log / History / post-search text. Anchor: chunk_hash → heading → EOF. ``text`` is body only (do not repeat the heading — a leading duplicate of the anchor is stripped). Batch with other mutators → patch_note."""
     return await asyncio.to_thread(
-        _append_note_sync,
+        apo_ops.append_note,
         path,
         text,
-        heading,
-        chunk_hash,
-        position,
-        create,
-        expected_mtime,
-        vault,
+        heading=heading,
+        chunk_hash=chunk_hash,
+        position=position,
+        create=create,
+        expected_mtime=expected_mtime,
+        vault=vault,
     )
-
-
-def _patch_note_sync(
-    path: str,
-    ops: list[Any],
-    strict: bool = False,
-    dry_run: bool = False,
-    verbose: bool = False,
-    expected_mtime: float | None = None,
-    vault: str = "",
-) -> dict:
-    try:
-        v = _vault(vault)
-        full = _safe_resolve(v, path)
-    except (VaultError, ValueError) as e:
-        return _err(path=path, error="bad_path", message=str(e))
-
-    if not full.exists():
-        return _err(path=path, error="not_found", message="note not found")
-
-    if (guard := _check_mtime(full, expected_mtime, path)):
-        return guard
-
-    content = full.read_text(encoding="utf-8")
-    result = apply_patch(content, ops_to_dicts(ops), strict=strict)
-
-    if dry_run:
-        failed = sum(1 for r in result.results if r.get("status") == "error")
-        out_dry: dict[str, Any] = {
-            "ok": result.ok,
-            "path": path,
-            "dry_run": True,
-            "applied": result.applied,
-            "failed": failed,
-            "partial": bool(failed and result.applied),
-            "results": result.results,
-        }
-        if result.error is not None:
-            out_dry.update(
-                flatten_patch_failure_error(
-                    result.error, suggestions=result.suggestions or None
-                )
-            )
-        elif result.suggestions:
-            out_dry["suggestions"] = result.suggestions
-        return out_dry
-
-    # Non-strict: persist partial applies; surface failures via ok=false + results.
-    if not result.ok and (strict or result.applied == 0):
-        return _err(
-            path=path,
-            applied=result.applied,
-            results=result.results,
-            **flatten_patch_failure_error(
-                result.error, suggestions=result.suggestions or None
-            ),
-        )
-
-    to_write = result.content
-    okf = apo_okf.process_concept(
-        vault_root=v.root,
-        rel_path=path,
-        content=result.content,
-        bump_timestamp=True,
-    )
-    okf_meta = okf.as_response_fields()
-    if not okf.ok:
-        return _err(
-            path=path,
-            error=okf.error or "okf_validation",
-            message=okf.message or "OKF validation failed",
-            applied=result.applied,
-            results=result.results,
-            **{k: val for k, val in okf_meta.items() if k != "enforcement"},
-            enforcement=okf.enforcement,
-        )
-    to_write = okf.content
-
-    full.write_text(to_write, encoding="utf-8")
-    _maybe_index(v, full)
-
-    failed = sum(1 for r in result.results if r.get("status") == "error")
-    out: dict[str, Any] = {
-        "ok": result.ok,
-        "path": path,
-        "applied": result.applied,
-        "failed": failed,
-        "partial": bool(failed and result.applied),
-        "bytes": full.stat().st_size,
-        "mtime": _mtime(full),
-        "results": result.results,
-    }
-    out.update(okf_meta)
-    if verbose:
-        out["lines_added"] = result.lines_added
-    return _attach_watcher_tip(out)
 
 
 @mcp.tool(annotations=_MUTATE)
@@ -776,48 +399,15 @@ async def patch_note(
 ) -> dict:
     """Batch mutate frontmatter/sections. Prefer set_field + replace_text/replace_section. Standalone text add → append_note."""
     return await asyncio.to_thread(
-        _patch_note_sync, path, ops, strict, dry_run, verbose, expected_mtime, vault
+        apo_ops.patch_note,
+        path,
+        ops,
+        strict=strict,
+        dry_run=dry_run,
+        verbose=verbose,
+        expected_mtime=expected_mtime,
+        vault=vault,
     )
-
-
-def _move_note_sync(
-    src: str,
-    dst: str,
-    overwrite: bool = False,
-    expected_mtime: float | None = None,
-    vault: str = "",
-) -> dict:
-    try:
-        v = _vault(vault)
-        src_full = _safe_resolve(v, src)
-        dst_full = _safe_resolve(v, dst)
-    except (VaultError, ValueError) as e:
-        return _err(src=src, dst=dst, error="bad_path", message=str(e))
-
-    if not src_full.exists():
-        return _err(src=src, dst=dst, error="not_found", message=f"source note not found: {src}")
-    if (guard := _check_mtime(src_full, expected_mtime, src)):
-        return {**guard, "src": src, "dst": dst}
-    if dst_full.exists() and not overwrite:
-        return _err(src=src, dst=dst, error="destination_exists", message="pass overwrite=true to replace")
-
-    dst_full.parent.mkdir(parents=True, exist_ok=True)
-    src_abs = str(src_full.resolve())
-    os.replace(src_full, dst_full)
-
-    purged = _purge_index(v, Path(src_abs))
-    v.deferred = index_deferred.requeue_move(v.collection, src_abs, str(dst_full.resolve()))
-
-    out: dict[str, Any] = {
-        "ok": True,
-        "src": src,
-        "dst": dst,
-        "index_purged": purged,
-        "mtime": _mtime(dst_full),
-    }
-    if not purged:
-        out["warning"] = "purge not queued — watcher may retain stale chunks"
-    return _attach_watcher_tip(out)
 
 
 @mcp.tool(annotations=_MUTATE)
@@ -838,7 +428,12 @@ async def move_note(
 ) -> dict:
     """Atomic rename/move/archive (updates index). Prefer over delete_note or read+write+delete. overwrite=True replaces dst."""
     return await asyncio.to_thread(
-        _move_note_sync, src, dst, overwrite, expected_mtime, vault
+        apo_ops.move_note,
+        src,
+        dst,
+        overwrite=overwrite,
+        expected_mtime=expected_mtime,
+        vault=vault,
     )
 
 
@@ -879,37 +474,15 @@ async def send_note(
     vault: str = "",
 ) -> dict:
     """Copy host .md into the vault without round-tripping the body through the model. Vault-internal moves → move_note."""
-    def run() -> dict:
-        out = apo_ops.send_note(
-            src,
-            dst,
-            overwrite=overwrite,
-            fields=fields,
-            expected_mtime=expected_mtime,
-            vault=vault,
-        )
-        return _attach_watcher_tip(out) if out.get("ok") else out
-
-    return await asyncio.to_thread(run)
-
-
-def _delete_note_sync(path: str, vault: str = "") -> dict:
-    try:
-        v = _vault(vault)
-        full = _safe_resolve(v, path)
-    except (VaultError, ValueError) as e:
-        return _err(path=path, error="bad_path", message=str(e))
-    if not full.exists():
-        return _err(path=path, error="not_found", message="note not found")
-    abs_path = str(full.resolve())
-    purged = _purge_index(v, full)
-    full.unlink()
-    # Flocked dequeue — avoid unlocked discard + full-queue rewrite.
-    v.deferred = index_deferred.dequeue_paths(v.collection, [abs_path])
-    out: dict[str, Any] = {"ok": True, "path": path, "index_purged": purged}
-    if not purged:
-        out["warning"] = "purge not queued — watcher may retain stale chunks"
-    return _attach_watcher_tip(out)
+    return await asyncio.to_thread(
+        apo_ops.send_note,
+        src,
+        dst,
+        overwrite=overwrite,
+        fields=fields,
+        expected_mtime=expected_mtime,
+        vault=vault,
+    )
 
 
 @mcp.tool(
@@ -923,54 +496,12 @@ def _delete_note_sync(path: str, vault: str = "") -> dict:
 )
 async def delete_note(path: str, vault: str = "") -> dict:
     """Irreversible delete + index purge (admin / APO_MCP_LEAN=0). Prefer move_note to archives/."""
-    return await asyncio.to_thread(_delete_note_sync, path, vault)
+    return await asyncio.to_thread(apo_ops.delete_note, path, vault=vault)
 
 
 ###############################################################################
-# Tools — reading & search
+# Tools — reading & search (delegate to ops)
 ###############################################################################
-
-
-def _read_note_sync(
-    path: str,
-    heading: str | None = None,
-    vault: str = "",
-    start_line: int | None = None,
-    end_line: int | None = None,
-    max_chars: int | None = None,
-    raw: bool = False,
-) -> dict:
-    try:
-        v = _vault(vault)
-        full = _safe_resolve(v, path)
-    except (VaultError, ValueError) as e:
-        return _err(path=path, error="bad_path", message=str(e))
-    if not full.exists():
-        return _err(path=path, error="not_found", message=f"note not found: {path}")
-
-    text = full.read_text(encoding="utf-8")
-    out: dict[str, Any] = {"ok": True, "path": path, "mtime": _mtime(full), "size": full.stat().st_size}
-    try:
-        shaped = shape_note_read(
-            text,
-            heading=heading,
-            start_line=start_line,
-            end_line=end_line,
-            max_chars=max_chars,
-            raw_content=raw,
-        )
-    except PatchError as e:
-        return _err(path=path, error=e.code, message=e.message, suggestions=e.suggestions)
-    except ValueError as e:
-        return _err(path=path, error="bad_request", message=str(e))
-    out["frontmatter"] = shaped["frontmatter"]
-    if shaped["heading"]:
-        out["heading"] = shaped["heading"]
-    out["content"] = shaped["content"]
-    out["start_line"] = shaped["start_line"]
-    out["end_line"] = shaped["end_line"]
-    out["truncated"] = shaped["truncated"]
-    return out
 
 
 @mcp.tool(annotations=_RO)
@@ -993,7 +524,14 @@ async def read_note(
 ) -> dict:
     """Read a known path. Returns frontmatter (parsed) + content (body by default). Optional heading=/line range/max_chars; raw=true for byte-exact. Unknown path → search_notes first."""
     return await asyncio.to_thread(
-        _read_note_sync, path, heading, vault, start_line, end_line, max_chars, raw
+        apo_ops.read_note,
+        path,
+        heading=heading,
+        vault=vault,
+        start_line=start_line,
+        end_line=end_line,
+        max_chars=max_chars,
+        raw=raw,
     )
 
 
@@ -1017,97 +555,14 @@ async def search_notes(
 ) -> dict:
     """Hybrid BM25+vector content search (not frontmatter — use filter_notes). Prefer limit= over top_k. folder= scopes. Hits include chunk_hash/heading for append/expand."""
     return await asyncio.to_thread(
-        _search_notes_sync, query, top_k, folder, vault, snippet_chars, limit
+        apo_ops.search,
+        query,
+        top_k=top_k,
+        folder=folder,
+        vault=vault,
+        snippet_chars=snippet_chars,
+        limit=limit,
     )
-
-
-def _search_notes_sync(
-    query: str,
-    top_k: int | None = None,
-    folder: str = "",
-    vault: str = "",
-    snippet_chars: int = _DEFAULT_SEARCH_SNIPPET,
-    limit: int | None = None,
-) -> dict:
-    try:
-        v = _vault(vault)
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-    k, err = resolve_top_k(top_k, limit)
-    if err:
-        return _err(error="bad_request", message=err)
-    folder_clean = folder.replace("\\", "/").strip("/")
-    try:
-        with _bound(v):
-            from apo_engine.mcp_backend import shape_search_hits
-
-            hits = apo_core.search(
-                query,
-                k=k,
-                folder=folder_clean,
-                snippet_chars=snippet_chars,
-            )
-            results = shape_search_hits(hits)
-    except Exception as e:
-        return _err(error="search_failed", message=str(e))
-    return {"ok": True, "results": results, "vault": v.name}
-
-
-def _expand_chunk_sync(
-    chunk_hash: str,
-    vault: str = "",
-    scope: Literal["section", "chunk"] = "section",
-) -> dict:
-    try:
-        v = _vault(vault)
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-
-    need_text = scope == "chunk"
-    chunk = _lookup_chunk(v, chunk_hash, include_text=need_text)
-    if not chunk:
-        return _err(error="anchor_not_found", message=f"chunk_hash {chunk_hash!r} not found in index")
-
-    rel = (chunk.get("path") or "").replace("\\", "/")
-    if not rel:
-        return _err(error="anchor_not_found", message="chunk has no path")
-
-    if scope == "chunk":
-        heading = chunk.get("heading") or ""
-        hlevel = int(chunk.get("heading_level") or 0)
-        return {
-            "ok": True,
-            "path": rel,
-            "heading": f"{'#' * hlevel} {heading}".strip() if heading else "",
-            "start_line": int(chunk.get("start_line") or 1),
-            "end_line": int(chunk.get("end_line") or 1),
-            "content": chunk.get("content") or "",
-            "scope": "chunk",
-        }
-
-    try:
-        source = _safe_resolve(v, rel)
-    except ValueError as e:
-        return _err(error="anchor_not_found", message=str(e))
-    if not source.exists():
-        return _err(error="stale_index", message=f"source file missing: {rel}")
-
-    lines = normalize_lines(source.read_text(encoding="utf-8"))
-    section = section_from_chunk(
-        lines,
-        int(chunk.get("start_line", 1)),
-        int(chunk.get("heading_level", 0)),
-    )
-    start = section.heading_line if section.title else section.body_start
-    return {
-        "ok": True,
-        "path": rel,
-        "heading": f"{'#' * section.level} {section.title}" if section.title else "",
-        "start_line": start + 1,
-        "end_line": section.body_end,
-        "content": "\n".join(lines[start : section.body_end]),
-        "scope": "section",
-    }
 
 
 @mcp.tool(annotations=_RO)
@@ -1116,61 +571,10 @@ async def expand_chunk(
     vault: str = "",
     scope: Literal["section", "chunk"] = "section",
 ) -> dict:
-    """Grow a search_notes hit by chunk_hash only (no path/heading). scope=section (default, disk) or chunk (index body)."""
-    return await asyncio.to_thread(_expand_chunk_sync, chunk_hash, vault, scope)
-
-
-def _filter_notes_sync(
-    where: dict | None = None,
-    folder: str = "",
-    limit: int = 20,
-    vault: str = "",
-    offset: int = 0,
-    filters: dict | None = None,
-    fields: list[str] | None = None,
-) -> dict:
-    try:
-        v = _vault(vault)
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-    where_obj, where_err = resolve_where(where, filters)
-    if where_err:
-        return _err(error="bad_query", message=where_err)
-    assert where_obj is not None
-    if offset < 0:
-        return _err(error="bad_request", message="offset must be >= 0")
-    if limit < 0:
-        return _err(error="bad_request", message="limit must be >= 0")
-    if fields is not None:
-        if not isinstance(fields, list) or any(not isinstance(x, str) for x in fields):
-            return _err(error="bad_request", message="fields must be a list of strings")
-
-    folder_clean = folder.replace("\\", "/").strip("/")
-    # Traversal check only — filter is index-backed and must not require the dir on disk.
-    if folder_clean:
-        try:
-            _safe_resolve(v, folder_clean)
-        except ValueError as e:
-            return _err(error="bad_path", message=str(e))
-
-    with _bound(v):
-        total, matches = apo_core.filter_notes(where_obj, folder_clean, limit, offset)
-    notes = [
-        {
-            "path": path,
-            "modified": datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
-            "frontmatter": project_frontmatter(fm, fields),
-        }
-        for mt, path, fm in matches
-    ]
-    return {
-        "ok": True,
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "notes": notes,
-        "vault": v.name,
-    }
+    """Grow a search_notes hit by chunk_hash only (no path/heading). scope=section (default, disk) or chunk (index body). Returns mtime when the source file exists (chain into expected_mtime)."""
+    return await asyncio.to_thread(
+        apo_ops.expand_chunk, chunk_hash, vault=vault, scope=scope
+    )
 
 
 @mcp.tool(annotations=_RO)
@@ -1179,7 +583,7 @@ async def filter_notes(
         dict | None,
         Field(
             description=(
-                "Frontmatter predicate (canonical). {} = all in folder; "
+                "Frontmatter predicate (canonical). Omit or {} = all in folder; "
                 "else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in}. "
                 'Example: {"status": {"$in": ["active", "waiting"]}}.'
             ),
@@ -1203,51 +607,23 @@ async def filter_notes(
         ),
     ] = None,
 ) -> dict:
-    """Frontmatter catalog (no embeddings). Prefer where=; pass fields= on status sweeps. Newest first."""
+    """Frontmatter catalog (no embeddings). Prefer where=; omit where or pass {} to list. Pass fields= on status sweeps. Newest first."""
     return await asyncio.to_thread(
-        _filter_notes_sync, where, folder, limit, vault, offset, filters, fields
+        apo_ops.filter_notes,
+        where,
+        folder=folder,
+        limit=limit,
+        vault=vault,
+        offset=offset,
+        filters=filters,
+        fields=fields,
     )
-
-
-def _backlinks_sync(path: str, limit: int = 100, vault: str = "") -> dict:
-    try:
-        v = _vault(vault)
-        full = _safe_resolve(v, path)
-    except (VaultError, ValueError) as e:
-        return _err(path=path, error="bad_path", message=str(e))
-
-    rel = str(Path(path.replace("\\", "/"))).removesuffix(".md")
-    targets = {Path(rel).name.lower(), rel.lower()}
-    # Title from cached frontmatter — no vault file read.
-    with _bound(v):
-        title = apo_core.frontmatter_field(path, "title")
-        if isinstance(title, str) and title.strip():
-            targets.add(title.strip().lower())
-
-        exclude_source = ""
-        try:
-            if full.exists():
-                exclude_source = str(full.relative_to(v.root))
-        except ValueError:
-            pass
-        rows = apo_core.list_backlinks(targets, exclude_source, limit)
-    hits = [{"path": src, "line": line, "text": text} for src, line, text in rows]
-    return {"ok": True, "target": path, "total": len(hits), "backlinks": hits, "vault": v.name}
 
 
 @mcp.tool(annotations=_RO)
 async def backlinks(path: str, limit: int = 100, vault: str = "") -> dict:
     """Index-backed inbound [[wiki-links]] to this path/stem/title (target need not exist on disk)."""
-    return await asyncio.to_thread(_backlinks_sync, path, limit, vault)
-
-
-def _history_sync(
-    limit: int = 10,
-    folder: str = "",
-    path: str = "",
-    vault: str = "",
-) -> dict:
-    return apo_ops.history(limit=limit, folder=folder, path=path, vault=vault)
+    return await asyncio.to_thread(apo_ops.backlinks, path, limit=limit, vault=vault)
 
 
 @mcp.tool(annotations=_RO)
@@ -1267,7 +643,9 @@ async def history(
     vault: str = "",
 ) -> dict:
     """Browse newest notes by mtime, or file-level git history when path= is set (git contract). Prefer this over recent_activity."""
-    return await asyncio.to_thread(_history_sync, limit, folder, path, vault)
+    return await asyncio.to_thread(
+        apo_ops.history, limit=limit, folder=folder, path=path, vault=vault
+    )
 
 
 @mcp.tool(annotations=_RO)
@@ -1277,12 +655,14 @@ async def recent_activity(
     path: str = "",
     vault: str = "",
 ) -> dict:
-    """Frozen alias of history for one release — prefer history. Same args/payload."""
-    return await asyncio.to_thread(_history_sync, limit, folder, path, vault)
+    """Frozen alias of history through v0.1.x — prefer history. Same args/payload."""
+    return await asyncio.to_thread(
+        apo_ops.recent_activity, limit=limit, folder=folder, path=path, vault=vault
+    )
 
 
 ###############################################################################
-# Tools — indexing
+# Tools — indexing (admin)
 ###############################################################################
 
 
@@ -1298,8 +678,13 @@ def _reindex_deferred_sync(vault: str = "") -> dict:
         v.deferred = index_deferred.load_index_queue(v.collection)
         queued += len(v.deferred)
 
-    watcher = _watcher_status()
-    out: dict[str, Any] = {"ok": True, "queued": queued, "signaled": True, "watcher_running": watcher["running"]}
+    watcher = apo_ops.watcher_status()
+    out: dict[str, Any] = {
+        "ok": True,
+        "queued": queued,
+        "signaled": True,
+        "watcher_running": watcher["running"],
+    }
     if not watcher["running"]:
         out["warning"] = (
             "no watcher detected — the deferred queue is signaled but nothing will consume it "
@@ -1323,7 +708,7 @@ def _reindex_sync(force: bool = False, vault: str = "") -> dict:
         index_deferred.signal_rebuild(v.collection, force=force)
         v.deferred.clear()
         index_deferred.save_index_queue(v.collection, set())
-        watcher = _watcher_status()
+        watcher = apo_ops.watcher_status()
         out: dict[str, Any] = {
             "ok": True,
             "vault": v.name,

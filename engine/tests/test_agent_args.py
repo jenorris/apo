@@ -47,10 +47,10 @@ class ResolveWhereTest(unittest.TestCase):
         self.assertEqual(w, {"status": "active"})
         self.assertIsNone(err)
 
-    def test_missing(self):
+    def test_missing_defaults_empty(self):
         w, err = resolve_where(None, None)
-        self.assertIsNone(w)
-        self.assertIn("missing where", err or "")
+        self.assertEqual(w, {})
+        self.assertIsNone(err)
 
     def test_conflict(self):
         w, err = resolve_where({"a": 1}, {"a": 2})

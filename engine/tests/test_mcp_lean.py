@@ -85,7 +85,12 @@ class LeanModeTest(unittest.TestCase):
         self.assertIn("recent_activity", names)
         self.assertNotIn("delete_note", names)
         self.assertNotIn("list_directory", names)
-        self.assertEqual(len(names), len(_list_tool_names(lean=False)) - len(_ADMIN))
+        self.assertEqual(len(names), 12)
+
+    def test_full_mode_tool_count(self):
+        names = _list_tool_names(lean=False)
+        self.assertEqual(len(names), 18)
+        self.assertTrue(_ADMIN <= names)
 
     def test_lean_is_default_when_unset(self):
         names = _list_tool_names(lean=None)

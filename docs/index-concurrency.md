@@ -19,8 +19,9 @@ MCP enqueues work under `~/.apo/`:
 | `rebuild-{collection}.json` | Full vault scan signal (`{"force": bool}`) |
 | `wake-{collection}` | Touch file — watcher processes queues immediately |
 
-Call `reindex_deferred()` after batch sweeps to touch `wake-*`; the watcher otherwise picks
-up queues on fsevents or the periodic hash scan (`WATCH_INTERVAL`, default 30s).
+Write enqueue already wakes the watcher (`wake-*`). Lean desk hides `reindex_deferred`
+(admin / `APO_MCP_LEAN=0`); use it only for diagnostics. Otherwise the watcher picks up
+queues on fsevents or the periodic hash scan (`WATCH_INTERVAL`, default 30s).
 
 ## Write transaction shape
 
