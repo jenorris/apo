@@ -97,6 +97,7 @@ Install gets the engine running. **Persistent write habits** should match *your*
 2. **Existing structure:** paste [`onboard-prompt.md`](./onboard-prompt.md) (infer → propose → approve).
 3. **Empty vault / want a preset:** pick an optional contract template under [`contracts/`](./contracts/), scaffold (and any machine-readable YAML under `system/config/`), *then* run the onboard prompt.
 4. Review drafts; approve before anything is written.
+5. Throughput habits (decision tree, `folder=`, `expected_mtime`, metrics): [`agent-throughput.md`](./agent-throughput.md).
 
 ## Troubleshooting
 

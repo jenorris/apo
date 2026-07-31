@@ -6,6 +6,7 @@ Read + write paths for gateways. Index writes stay watcher-owned (deferred enque
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -99,6 +100,76 @@ _WATCHER_TIP = (
     "watcher not running — write is on disk and enqueued, but search won't "
     "update until apo-engine watch is up (just watch-status)"
 )
+
+_FOLDER_TIP = (
+    "pass folder= when the PARA bucket is known — unscoped search is slower and noisier"
+)
+
+_MTIME_TIP = (
+    "pass expected_mtime from the prior read/write for this path to avoid stale_write"
+)
+
+# Process-local: vault:path → last successful write monotonic time (soft mtime tip).
+_recent_writes: dict[str, float] = {}
+_RECENT_WRITE_TTL_S = 300.0
+
+
+def _write_key(vault: str, path: str) -> str:
+    return f"{(vault or '').strip()}:{path.replace(chr(92), '/')}"
+
+
+def _attach_tip(out: dict[str, Any], tip: str) -> dict[str, Any]:
+    """Soft agent habit hint (not a failure). Does not overwrite ``warning``."""
+    if not out.get("ok") or not tip:
+        return out
+    existing = out.get("tip")
+    out["tip"] = f"{existing}; {tip}" if existing else tip
+    return out
+
+
+def _attach_folder_tip(out: dict[str, Any], folder_clean: str) -> dict[str, Any]:
+    if folder_clean:
+        return out
+    return _attach_tip(out, _FOLDER_TIP)
+
+
+def _attach_mtime_tip(
+    out: dict[str, Any],
+    *,
+    vault: str,
+    path: str,
+    expected_mtime: float | None,
+) -> dict[str, Any]:
+    """Tip when a second in-process write to the same path omits ``expected_mtime``."""
+    now = time.monotonic()
+    stale = [k for k, t in _recent_writes.items() if now - t > _RECENT_WRITE_TTL_S]
+    for k in stale:
+        del _recent_writes[k]
+
+    key = _write_key(vault or str(out.get("vault") or ""), path)
+    prior = _recent_writes.get(key)
+    if (
+        expected_mtime is None
+        and prior is not None
+        and (now - prior) <= _RECENT_WRITE_TTL_S
+    ):
+        out = _attach_tip(out, _MTIME_TIP)
+    if out.get("ok"):
+        _recent_writes[key] = now
+    return out
+
+
+def _finalize_write(
+    out: dict[str, Any],
+    *,
+    vault: str,
+    path: str,
+    expected_mtime: float | None,
+) -> dict[str, Any]:
+    out = _attach_mtime_tip(
+        out, vault=vault, path=path, expected_mtime=expected_mtime
+    )
+    return _attach_watcher_tip(out)
 
 
 def watcher_status() -> dict[str, Any]:
@@ -284,7 +355,10 @@ def search(
         return _err(error="search_failed", message=str(e) or "index unavailable")
     except Exception as e:
         return _err(error="search_failed", message=str(e))
-    return {"ok": True, "results": results, "vault": b.name}
+    return _attach_folder_tip(
+        {"ok": True, "results": results, "vault": b.name},
+        folder_clean,
+    )
 
 
 def read_note(
@@ -670,7 +744,9 @@ def write_note(
             f"created new top-level directory {parts[0]!r} — "
             f"existing top-level dirs: {_top_level_dirs(root)}"
         )
-    return _attach_watcher_tip(out)
+    return _finalize_write(
+        out, vault=b.name, path=path, expected_mtime=expected_mtime
+    )
 
 
 def append_note(
@@ -750,16 +826,21 @@ def append_note(
     full.write_text(new_content, encoding="utf-8")
     _enqueue_index(b, full)
 
-    return _attach_watcher_tip({
-        "ok": True,
-        "path": path,
-        "anchor": anchor_label,
-        "detail": detail,
-        "lines_added": max(0, len(merged) - len(lines)),
-        "bytes": full.stat().st_size,
-        "mtime": _mtime(full),
-        "vault": b.name,
-    })
+    return _finalize_write(
+        {
+            "ok": True,
+            "path": path,
+            "anchor": anchor_label,
+            "detail": detail,
+            "lines_added": max(0, len(merged) - len(lines)),
+            "bytes": full.stat().st_size,
+            "mtime": _mtime(full),
+            "vault": b.name,
+        },
+        vault=b.name,
+        path=path,
+        expected_mtime=expected_mtime,
+    )
 
 
 def patch_note(
@@ -863,7 +944,9 @@ def patch_note(
     out.update(okf_meta)
     if verbose:
         out["lines_added"] = result.lines_added
-    return _attach_watcher_tip(out)
+    return _finalize_write(
+        out, vault=b.name, path=path, expected_mtime=expected_mtime
+    )
 
 
 def move_note(
@@ -913,7 +996,9 @@ def move_note(
     }
     if not purged:
         out["warning"] = "purge not queued — watcher may retain stale chunks"
-    return _attach_watcher_tip(out)
+    return _finalize_write(
+        out, vault=b.name, path=dst, expected_mtime=expected_mtime
+    )
 
 
 def send_note(
@@ -1017,7 +1102,9 @@ def send_note(
             f"created new top-level directory {parts[0]!r} — "
             f"existing top-level dirs: {_top_level_dirs(root)}"
         )
-    return _attach_watcher_tip(out)
+    return _finalize_write(
+        out, vault=b.name, path=dst, expected_mtime=expected_mtime
+    )
 
 
 def delete_note(path: str, *, vault: str = "") -> dict[str, Any]:
