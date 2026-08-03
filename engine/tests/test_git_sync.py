@@ -147,6 +147,35 @@ class GitSyncRepoTest(unittest.TestCase):
         self.assertIn("renamed \u2014 note.md", paths)
         self.assertNotIn("note.md", paths)
 
+    def test_on_block_command_fires_once_per_block_episode(self):
+        sentinel = self.tmp / "notified.log"
+        _write_contract(
+            self.vault,
+            enabled=True,
+            extra=f"  on_block_command: 'printf \"%s\\n\" \"$APO_SYNC_ERROR\" >> {sentinel}'\n",
+        )
+
+        git_sync._block(self.vault, "boom: push rejected")
+        self.assertEqual(sentinel.read_text(encoding="utf-8").splitlines(), ["boom: push rejected"])
+
+        # Still blocked → no repeat alert on every later tick.
+        git_sync._block(self.vault, "boom: push rejected")
+        self.assertEqual(sentinel.read_text(encoding="utf-8").splitlines(), ["boom: push rejected"])
+
+        # Cleared, then blocked again → new episode, new alert.
+        git_sync.clear_block(self.vault)
+        git_sync._block(self.vault, "boom: second episode")
+        self.assertEqual(
+            sentinel.read_text(encoding="utf-8").splitlines(),
+            ["boom: push rejected", "boom: second episode"],
+        )
+
+    def test_block_survives_failing_on_block_command(self):
+        _write_contract(self.vault, enabled=True, extra="  on_block_command: 'exit 7'\n")
+        st = git_sync._block(self.vault, "boom")
+        self.assertEqual(st["state"], "blocked")
+        self.assertTrue(git_sync.is_blocked(self.vault))
+
     def test_tool_message_override(self):
         (self.vault / "note.md").write_text("# N\n\nv3\n", encoding="utf-8")
         out = ops.git_sync_op("run", message="agent: batch sync")

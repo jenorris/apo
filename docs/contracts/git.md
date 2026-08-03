@@ -27,7 +27,7 @@ Encode the live contract in the vault (`system/config/git.md` + `system/config/g
 | `backup.expectation` / `cadence_hint` | When humans/agents should expect a push |
 | `lfs` | Whether Git LFS is in play; `.sha256` sidecars in plain git when binaries exist |
 | `never_commit` | Globs that must stay out of the remote |
-| `sync` | Opt-in engine sync (`enabled`, debounce, pull interval, message template) |
+| `sync` | Opt-in engine sync (`enabled`, debounce, pull interval, message template, block hook) |
 | `restore` | Owner + one-line restore drill |
 
 ## Machine contract (encode in the vault)
@@ -59,6 +59,8 @@ Fill `remote` / `host` for *this* vault. Keep `never_commit` aligned with the va
 | MCP/RPC `git_sync` | Contract active; `action=status\|run\|pull\|clear_block` |
 
 On conflict / non-ff / push reject: **stop and surface** — status in `.apo/git-sync-status.json` (`state=blocked`) and tool payload. No force-push, no auto-resolve.
+
+`blocked` is sticky: every later commit and pull returns early until `git_sync action=clear_block`. Nothing else surfaces it, so set `sync.on_block_command` to get told — it fires once per block episode (not per tick) with `$APO_SYNC_ERROR` and `$APO_VAULT_ROOT` exported, and a failing hook never masks the block.
 
 ## Suggested `.gitignore` floor
 
