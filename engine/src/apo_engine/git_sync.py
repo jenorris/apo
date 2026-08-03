@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import subprocess
 import threading
 import time
@@ -20,6 +21,7 @@ from zoneinfo import ZoneInfo
 from apo_engine import git_contract
 
 _GIT_TIMEOUT_S = 120.0
+_NOTIFY_TIMEOUT_S = 20.0
 _STATUS_REL = Path(".apo") / "git-sync-status.json"
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -37,6 +39,7 @@ class SyncSettings:
     default_branch: str = "main"
     never_commit: tuple[str, ...] = ()
     remote: str = ""
+    on_block_command: str = ""
 
 
 def _lock_for(root: Path) -> threading.Lock:
@@ -89,6 +92,7 @@ def sync_settings(vault_root: Path) -> SyncSettings:
         default_branch=branch,
         never_commit=tuple(str(p) for p in never if str(p).strip()),
         remote=remote,
+        on_block_command=str(sync.get("on_block_command") or "").strip(),
     )
 
 
@@ -156,12 +160,45 @@ def clear_block(vault_root: Path) -> dict[str, Any]:
     return write_status(vault_root, st)
 
 
+def _notify_blocked(vault_root: Path, error: str) -> None:
+    """Run the contract's ``sync.on_block_command`` hook, if configured.
+
+    Blocked state otherwise lives only in ``.apo/git-sync-status.json`` and is
+    surfaced nowhere, so a stuck vault looks healthy while backups are off.
+    A failing hook must never mask the block it is reporting.
+    """
+    command = sync_settings(vault_root).on_block_command
+    if not command:
+        return
+    try:
+        subprocess.run(
+            command,
+            shell=True,
+            cwd=str(vault_root),
+            capture_output=True,
+            text=True,
+            timeout=_NOTIFY_TIMEOUT_S,
+            check=False,
+            env={
+                **os.environ,
+                "APO_VAULT_ROOT": str(vault_root),
+                "APO_SYNC_ERROR": error[:800],
+            },
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def _block(vault_root: Path, error: str, *, st: dict[str, Any] | None = None) -> dict[str, Any]:
     status = dict(st or read_status(vault_root))
+    was_blocked = status.get("state") == "blocked"
     status["state"] = "blocked"
     status["error"] = error[:800]
     status["blocked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    return write_status(vault_root, status)
+    written = write_status(vault_root, status)
+    if not was_blocked:
+        _notify_blocked(vault_root, error)
+    return written
 
 
 def unsafe_git_state(vault_root: Path) -> str | None:

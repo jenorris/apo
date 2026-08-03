@@ -27,6 +27,13 @@ sync:
   pull_interval_seconds: 900
   commit_message_template: "apo: sync {iso_local}"
   auto_push: true
+  # Optional shell hook fired once when sync enters `blocked` (not on every tick).
+  # Blocked state is otherwise only in .apo/git-sync-status.json, so a stuck
+  # vault looks healthy while backups are off. $APO_VAULT_ROOT and
+  # $APO_SYNC_ERROR are exported; the hook runs in the vault root and its exit
+  # status is ignored. macOS example:
+  # on_block_command: >-
+  #   osascript -e "display notification \"$APO_SYNC_ERROR\" with title \"Apo sync blocked\""
 restore:
   owner: "jeremy"
   drill: "clone remote → point APO_VAULTS root → just index --vault <id>"
