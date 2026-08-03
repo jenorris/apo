@@ -2,6 +2,12 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [0.3.1] — 2026-08-03
+
+### Fixed
+
+- **MCP / schema copy** — remove desk dual-write (domain + session log) from product wire instructions and `patch_note(items=)` descriptions. Parallel mutators stay same-`vault=`; cross-role writes remain separate MCP calls. Desk dual-write stays in Cursor `mcp-apo.mdc` + Meta vault policy.
+
 ## [0.3.0] — 2026-08-03
 
 Stable release — everything from rc1–rc6 plus the readiness-assessment hardening below.

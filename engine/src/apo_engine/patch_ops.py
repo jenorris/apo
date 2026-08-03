@@ -193,7 +193,7 @@ PATCH_NOTES_ITEMS_DESC = (
     "Each item: path + ops (+ optional expected_mtime). "
     "Max 20 items; duplicate paths rejected. Partial failures continue; check per-item ok. "
     "XOR with path+ops — do not pass both. "
-    "Dual-write (domain + session log) stays parallel append_note + patch_note."
+    "Cross-role parallel writes (e.g. two different notes) stay separate MCP calls."
 )
 
 

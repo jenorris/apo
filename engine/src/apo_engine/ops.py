@@ -1133,7 +1133,8 @@ def patch_notes(
 
     Each item: ``{path, ops, expected_mtime?}``. Cap ``_PATCH_NOTES_MAX_ITEMS``.
     Continues on per-item failure; top-level ``ok`` is true only if every item ok.
-    Dual-write (domain + session log) still uses parallel ``append_note`` + ``patch_note``.
+    Parallel multi-tool writes (different paths / roles) stay as separate MCP calls —
+    do not fold them into this batch.
     """
     try:
         b = _binding(vault)

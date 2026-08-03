@@ -179,7 +179,7 @@ _MCP_INSTRUCTIONS = (
     "(prefer over patch_note append; unsupported on .yaml); "
     "patch_note=frontmatter/YAML fields + MD section mutate — one path (path+ops) or multi-path (items[]); "
     "YAML notes: set_field/delete_field (dotted nested paths); whole file is the catalog row; "
-    "dual-write (domain + daily session log)=parallel append_note+patch_note in one turn; "
+    "parallel mutators in one turn use the same vault=; "
     "place_note=move if src in vault else copy host .md into vault (delete_note is admin-only). "
     "Thread mtime → expected_mtime on follow-up writes. "
     "search_notes=content (prefer limit=; top_k alias); "
