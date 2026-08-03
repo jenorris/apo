@@ -1,6 +1,5 @@
 <div align="center">
-  <img src="docs/assets/apo-mark.png" alt="Apo" width="128" />
-  <h1>Apo</h1>
+  <img src="docs/assets/apo-wordmark.svg" alt="Apo" height="72" />
   <p><strong>Local markdown memory for AI agents</strong></p>
   <p>Hybrid search + MCP writes over <em>your</em> notes.<br />
   Files on disk are the source of truth; the index is rebuildable.</p>
