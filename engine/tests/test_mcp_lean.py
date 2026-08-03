@@ -17,6 +17,7 @@ _ADMIN = frozenset({
     "reindex",
     "delete_note",
     "tool_stats",
+    "git_sync",
 })
 
 
@@ -72,6 +73,8 @@ class LeanModeTest(unittest.TestCase):
         self.assertIn("search_notes", names)
         self.assertIn("append_note", names)
         self.assertIn("delete_note", names)
+        self.assertIn("place_note", names)
+        self.assertIn("git_sync", names)
 
     def test_lean_mode_hides_admin(self):
         names = _list_tool_names(lean=True)
@@ -79,20 +82,24 @@ class LeanModeTest(unittest.TestCase):
         self.assertIn("search_notes", names)
         self.assertIn("filter_notes", names)
         self.assertIn("append_note", names)
-        self.assertIn("move_note", names)
-        self.assertIn("send_note", names)
+        self.assertIn("place_note", names)
         self.assertIn("history", names)
-        self.assertIn("git_sync", names)
-        self.assertIn("patch_notes", names)
+        self.assertIn("patch_note", names)
+        self.assertNotIn("patch_notes", names)
+        self.assertNotIn("move_note", names)
+        self.assertNotIn("send_note", names)
+        self.assertNotIn("git_sync", names)
         self.assertNotIn("recent_activity", names)
         self.assertNotIn("delete_note", names)
-        self.assertNotIn("list_directory", names)
-        self.assertEqual(len(names), 13)
+        self.assertEqual(len(names), 10)
 
     def test_full_mode_tool_count(self):
         names = _list_tool_names(lean=False)
-        self.assertEqual(len(names), 19)
+        self.assertEqual(len(names), 17)
         self.assertTrue(_ADMIN <= names)
+        self.assertNotIn("patch_notes", names)
+        self.assertNotIn("move_note", names)
+        self.assertNotIn("send_note", names)
 
     def test_lean_is_default_when_unset(self):
         names = _list_tool_names(lean=None)

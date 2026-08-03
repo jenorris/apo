@@ -941,6 +941,67 @@ def patch_note(
 _PATCH_NOTES_MAX_ITEMS = 20
 
 
+def patch_entry(
+    *,
+    path: str = "",
+    ops: list[Any] | None = None,
+    items: list[Any] | None = None,
+    strict: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+    expected_mtime: float | None = None,
+    vault: str = "",
+) -> dict[str, Any]:
+    """Dispatch single-path ``patch_note`` or multi-path ``patch_notes`` (XOR)."""
+    raw_items = items
+    if raw_items is not None and hasattr(raw_items, "__iter__") and not isinstance(raw_items, (str, dict)):
+        # Normalize Pydantic models from MCP
+        normalized: list[Any] = []
+        for it in raw_items:
+            if hasattr(it, "model_dump"):
+                normalized.append(it.model_dump(mode="python", exclude_none=True))
+            else:
+                normalized.append(it)
+        raw_items = normalized
+
+    has_items = isinstance(raw_items, list) and len(raw_items) > 0
+    path_s = (path or "").strip()
+    has_single = bool(path_s) and ops is not None
+
+    if has_items and has_single:
+        return _err(
+            error="bad_request",
+            message="pass either path+ops (single) or items[] (multi-path), not both",
+        )
+    if has_items:
+        if expected_mtime is not None:
+            return _err(
+                error="bad_request",
+                message="expected_mtime is per-item when using items[]; omit top-level expected_mtime",
+            )
+        return patch_notes(
+            raw_items,  # type: ignore[arg-type]
+            strict=strict,
+            dry_run=dry_run,
+            verbose=verbose,
+            vault=vault,
+        )
+    if has_single:
+        return patch_note(
+            path_s,
+            ops if isinstance(ops, list) else [],
+            strict=strict,
+            dry_run=dry_run,
+            verbose=verbose,
+            expected_mtime=expected_mtime,
+            vault=vault,
+        )
+    return _err(
+        error="bad_request",
+        message="provide path+ops for one note, or items=[{path, ops, expected_mtime?}] for a batch",
+    )
+
+
 def patch_notes(
     items: list[Any],
     *,
@@ -1083,6 +1144,103 @@ def patch_notes(
             if fail_n
             else "batch failed"
         )
+    return out
+
+
+def place_note(
+    src: str,
+    dst: str,
+    *,
+    overwrite: bool = False,
+    fields: dict[str, Any] | None = None,
+    expected_mtime: float | None = None,
+    vault: str = "",
+) -> dict[str, Any]:
+    """Place a note at ``dst``: move if ``src`` is in the vault, else copy from host.
+
+    - Vault-relative ``src``, or absolute path under the vault root → ``moved``
+      (same as former ``move_note``; ``fields`` not allowed).
+    - Absolute host ``.md`` outside the vault (allow-roots) → ``copied`` / promote
+      (same as former ``send_note``; leaves src; optional ``fields`` merge).
+    """
+    try:
+        b = _binding(vault)
+        root = b.resolved().root.resolve()
+    except OpsError as e:
+        return _err(src=src, dst=dst, error=e.code, message=e.message)
+
+    raw = (src or "").strip()
+    if not raw:
+        return _err(src=src, dst=dst, error="bad_path", message="src required")
+
+    expanded = Path(raw).expanduser()
+    in_vault_rel: str | None = None
+
+    if expanded.is_absolute():
+        try:
+            full = expanded.resolve(strict=True)
+        except FileNotFoundError:
+            return _err(src=src, dst=dst, error="not_found", message=f"source not found: {src}")
+        except OSError as e:
+            return _err(src=src, dst=dst, error="bad_path", message=f"cannot resolve src: {e}")
+        try:
+            in_vault_rel = full.relative_to(root).as_posix()
+        except ValueError:
+            in_vault_rel = None
+        if in_vault_rel is not None:
+            if fields:
+                return _err(
+                    src=src,
+                    dst=dst,
+                    error="bad_request",
+                    message="fields= is only for host→vault copy; omit when moving inside the vault",
+                )
+            out = move_note(
+                in_vault_rel,
+                dst,
+                overwrite=overwrite,
+                expected_mtime=expected_mtime,
+                vault=b.name,
+            )
+            if out.get("ok"):
+                out = dict(out)
+                out["action"] = "moved"
+                out["mode"] = "move"
+            return out
+        # Host copy path
+        out = send_note(
+            str(full),
+            dst,
+            overwrite=overwrite,
+            fields=fields,
+            expected_mtime=expected_mtime,
+            vault=b.name,
+        )
+        if out.get("ok"):
+            out = dict(out)
+            # send_note already sets action created|overwrote
+            out["mode"] = "copy"
+        return out
+
+    # Vault-relative move
+    if fields:
+        return _err(
+            src=src,
+            dst=dst,
+            error="bad_request",
+            message="fields= is only for host→vault copy; omit when moving inside the vault",
+        )
+    out = move_note(
+        raw.replace("\\", "/"),
+        dst,
+        overwrite=overwrite,
+        expected_mtime=expected_mtime,
+        vault=b.name,
+    )
+    if out.get("ok"):
+        out = dict(out)
+        out["action"] = "moved"
+        out["mode"] = "move"
     return out
 
 

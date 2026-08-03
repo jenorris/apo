@@ -172,23 +172,19 @@ def _top_level_dirs(v: Vault) -> list[str]:
 _LEAN_BOOT = _lean_enabled()
 _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown; sqlite-vec hybrid search; files are source of truth. "
-    "Lean desk is default (APO_MCP_LEAN=0 exposes admin + delete_note). "
+    "Lean desk is default (APO_MCP_LEAN=0 exposes admin + delete_note + git_sync). "
     "Routing: write_note=create/overwrite only (no append); "
     "append_note=session log / History / post-search add "
     "(prefer over patch_note append); "
-    "patch_note=frontmatter + section mutate on one path "
-    "(ops use field/value, find/replace — not key/old/new); "
-    "dual-write (domain + daily session log)=parallel append_note/patch_note in one turn "
-    "(or patch_notes for multi-path patch-only batches); "
-    "move_note=rename/archive (delete_note is admin-only); "
-    "send_note=copy host .md into vault (token-cheap promote). "
+    "patch_note=frontmatter + section mutate — one path (path+ops) or multi-path (items[]); "
+    "dual-write (domain + daily session log)=parallel append_note+patch_note in one turn; "
+    "place_note=move if src in vault else copy host .md into vault (delete_note is admin-only). "
     "Thread mtime → expected_mtime on follow-up writes. "
     "search_notes=content (prefer limit=; top_k alias); "
     "filter_notes=frontmatter catalog (prefer where=; filters alias; "
     "omit where or pass where={} to list; "
     "status sweeps pass fields=[status,okf_type,last_checked,title]); "
     "history=browse by mtime (first_line) or file git log when path= + git contract; "
-    "git_sync=status|run|pull|clear_block when git contract sync.enabled; "
     "status sweeps → filter_notes. "
     "Hits expose chunk_hash/heading for append/expand (skip read when possible). "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
@@ -200,7 +196,7 @@ _MCP_INSTRUCTIONS = (
     if _LEAN_BOOT
     else (
         " Admin (APO_MCP_LEAN=0): reload_config, memory_status, reindex_deferred, "
-        "reindex, delete_note, tool_stats."
+        "reindex, delete_note, tool_stats, git_sync."
     )
 )
 mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
@@ -382,8 +378,18 @@ async def append_note(
 
 @mcp.tool(annotations=_MUTATE)
 async def patch_note(
-    path: str,
-    ops: Annotated[list[PatchOp], Field(description=OPS_FIELD_DESC)],
+    path: Annotated[
+        str,
+        Field(description="Vault-relative path for single-path mode. Omit when using items=."),
+    ] = "",
+    ops: Annotated[
+        list[PatchOp] | None,
+        Field(description=OPS_FIELD_DESC),
+    ] = None,
+    items: Annotated[
+        list[PatchNotesItem] | None,
+        Field(description=PATCH_NOTES_ITEMS_DESC),
+    ] = None,
     strict: bool = False,
     dry_run: bool = False,
     verbose: bool = False,
@@ -391,18 +397,19 @@ async def patch_note(
         float | None,
         Field(
             description=(
-                "Optimistic concurrency: pass mtime from a prior read/write for this path. "
-                "On stale_write, re-read and retry."
+                "Single-path only: optimistic concurrency mtime. "
+                "Multi-path: set expected_mtime per items[] entry."
             ),
         ),
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Batch mutate frontmatter/sections. Prefer set_field + replace_text/replace_section. Standalone text add → append_note. Multi-path → patch_notes."""
+    """Mutate frontmatter/sections. Single path: path+ops. Multi-path: items=[{path,ops,…}] (max 20). XOR — not both. Standalone text add → append_note."""
     return await asyncio.to_thread(
-        apo_ops.patch_note,
-        path,
-        ops,
+        apo_ops.patch_entry,
+        path=path,
+        ops=ops,
+        items=items,
         strict=strict,
         dry_run=dry_run,
         verbose=verbose,
@@ -412,79 +419,27 @@ async def patch_note(
 
 
 @mcp.tool(annotations=_MUTATE)
-async def patch_notes(
-    items: Annotated[list[PatchNotesItem], Field(description=PATCH_NOTES_ITEMS_DESC)],
-    strict: bool = False,
-    dry_run: bool = False,
-    verbose: bool = False,
-    vault: str = "",
-) -> dict:
-    """Same-vault multi-path patch_note batch (max 20). Patch ops only — dual-write session log still uses append_note in parallel."""
-    raw_items = [
-        item.model_dump(mode="python", exclude_none=True)
-        if hasattr(item, "model_dump")
-        else item
-        for item in items
-    ]
-    return await asyncio.to_thread(
-        apo_ops.patch_notes,
-        raw_items,
-        strict=strict,
-        dry_run=dry_run,
-        verbose=verbose,
-        vault=vault,
-    )
-
-
-@mcp.tool(annotations=_MUTATE)
-async def move_note(
-    src: str,
-    dst: str,
-    overwrite: bool = False,
-    expected_mtime: Annotated[
-        float | None,
-        Field(
-            description=(
-                "Optimistic concurrency on the source path: pass src mtime from a prior "
-                "read/write. On stale_write, re-read and retry."
-            ),
-        ),
-    ] = None,
-    vault: str = "",
-) -> dict:
-    """Atomic rename/move/archive (updates index). Prefer over delete_note or read+write+delete. overwrite=True replaces dst."""
-    return await asyncio.to_thread(
-        apo_ops.move_note,
-        src,
-        dst,
-        overwrite=overwrite,
-        expected_mtime=expected_mtime,
-        vault=vault,
-    )
-
-
-@mcp.tool(annotations=_WRITE)
-async def send_note(
+async def place_note(
     src: Annotated[
         str,
         Field(
             description=(
-                "Absolute host path to a .md file (or ~/…). Must be outside the vault "
-                "and under APO_SEND_ALLOW_ROOTS (default: home). Leaves src in place."
+                "Source: vault-relative path to move, or absolute ~/…|/… host .md to copy. "
+                "In-vault absolute paths move (not copy)."
             ),
         ),
     ],
     dst: Annotated[
         str,
-        Field(description="Vault-relative destination path (e.g. resources/wiki/example.md)."),
+        Field(description="Vault-relative destination path."),
     ],
     overwrite: bool = False,
     fields: Annotated[
         dict[str, Any] | None,
         Field(
             description=(
-                "Optional frontmatter merge (set_field semantics) before write — "
-                'e.g. {"source":"report","ingested_at":"2026-07-24"}.'
+                "Copy mode only: optional frontmatter merge before write "
+                '(e.g. {"source":"report"}). Forbidden when moving inside the vault.'
             ),
         ),
     ] = None,
@@ -492,16 +447,16 @@ async def send_note(
         float | None,
         Field(
             description=(
-                "Optimistic concurrency on dst if it already exists. "
-                "On stale_write, re-read and retry."
+                "Optimistic concurrency: src mtime when moving; dst mtime when copying "
+                "over an existing note."
             ),
         ),
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Copy host .md into the vault without round-tripping the body through the model. Vault-internal moves → move_note."""
+    """Move if src is in the vault; otherwise copy host .md into the vault (leaves host src). Prefer over delete+rewrite."""
     return await asyncio.to_thread(
-        apo_ops.send_note,
+        apo_ops.place_note,
         src,
         dst,
         overwrite=overwrite,
@@ -521,7 +476,7 @@ async def send_note(
     tags={"admin"},
 )
 async def delete_note(path: str, vault: str = "") -> dict:
-    """Irreversible delete + index purge (admin / APO_MCP_LEAN=0). Prefer move_note to archives/."""
+    """Irreversible delete + index purge (admin / APO_MCP_LEAN=0). Prefer place_note to archives/."""
     return await asyncio.to_thread(apo_ops.delete_note, path, vault=vault)
 
 
@@ -681,6 +636,7 @@ async def history(
         "idempotentHint": False,
         "openWorldHint": True,
     },
+    tags={"admin"},
 )
 async def git_sync(
     action: Annotated[

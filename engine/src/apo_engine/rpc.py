@@ -217,15 +217,21 @@ def _append(body: dict[str, Any]) -> dict[str, Any]:
 
 @_route("POST", "/v1/patch")
 def _patch(body: dict[str, Any]) -> dict[str, Any]:
+    items = body.get("items")
     path = body.get("path")
     patch_ops = body.get("ops")
-    if not isinstance(path, str) or not path.strip():
-        return {"ok": False, "error": "bad_request", "message": "`path` string required"}
-    if not isinstance(patch_ops, list):
+    if items is not None and not isinstance(items, list):
+        return {
+            "ok": False,
+            "error": "bad_request",
+            "message": "`items` must be an array when set",
+        }
+    if patch_ops is not None and not isinstance(patch_ops, list):
         return {"ok": False, "error": "bad_request", "message": "`ops` must be an array"}
-    return ops.patch_note(
-        path,
-        patch_ops,
+    return ops.patch_entry(
+        path=str(path or ""),
+        ops=patch_ops if isinstance(patch_ops, list) else None,
+        items=items if isinstance(items, list) else None,
         strict=bool(body.get("strict")),
         dry_run=bool(body.get("dry_run")),
         verbose=bool(body.get("verbose")),
@@ -236,6 +242,7 @@ def _patch(body: dict[str, Any]) -> dict[str, Any]:
 
 @_route("POST", "/v1/patch_notes")
 def _patch_notes(body: dict[str, Any]) -> dict[str, Any]:
+    """Frozen alias of multi-path ``POST /v1/patch`` with ``items``."""
     items = body.get("items")
     if not isinstance(items, list):
         return {
@@ -243,8 +250,8 @@ def _patch_notes(body: dict[str, Any]) -> dict[str, Any]:
             "error": "bad_request",
             "message": "`items` must be an array of {path, ops, expected_mtime?}",
         }
-    return ops.patch_notes(
-        items,
+    return ops.patch_entry(
+        items=items,
         strict=bool(body.get("strict")),
         dry_run=bool(body.get("dry_run")),
         verbose=bool(body.get("verbose")),
@@ -252,25 +259,7 @@ def _patch_notes(body: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@_route("POST", "/v1/move")
-def _move(body: dict[str, Any]) -> dict[str, Any]:
-    src = body.get("src")
-    dst = body.get("dst")
-    if not isinstance(src, str) or not src.strip():
-        return {"ok": False, "error": "bad_request", "message": "`src` string required"}
-    if not isinstance(dst, str) or not dst.strip():
-        return {"ok": False, "error": "bad_request", "message": "`dst` string required"}
-    return ops.move_note(
-        src,
-        dst,
-        overwrite=bool(body.get("overwrite")),
-        expected_mtime=_opt_float(body, "expected_mtime"),
-        vault=str(body.get("vault") or ""),
-    )
-
-
-@_route("POST", "/v1/send")
-def _send(body: dict[str, Any]) -> dict[str, Any]:
+def _place_body(body: dict[str, Any]) -> dict[str, Any]:
     src = body.get("src")
     dst = body.get("dst")
     if not isinstance(src, str) or not src.strip():
@@ -280,7 +269,7 @@ def _send(body: dict[str, Any]) -> dict[str, Any]:
     fields = body.get("fields")
     if fields is not None and not isinstance(fields, dict):
         return {"ok": False, "error": "bad_request", "message": "`fields` must be an object"}
-    return ops.send_note(
+    return ops.place_note(
         src,
         dst,
         overwrite=bool(body.get("overwrite")),
@@ -288,6 +277,24 @@ def _send(body: dict[str, Any]) -> dict[str, Any]:
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
     )
+
+
+@_route("POST", "/v1/place")
+def _place(body: dict[str, Any]) -> dict[str, Any]:
+    """Move if src is in the vault; otherwise copy host .md into the vault."""
+    return _place_body(body)
+
+
+@_route("POST", "/v1/move")
+def _move(body: dict[str, Any]) -> dict[str, Any]:
+    """Alias of /v1/place (prefer /v1/place)."""
+    return _place_body(body)
+
+
+@_route("POST", "/v1/send")
+def _send(body: dict[str, Any]) -> dict[str, Any]:
+    """Alias of /v1/place for host→vault copy (prefer /v1/place)."""
+    return _place_body(body)
 
 
 @_route("POST", "/v1/delete")

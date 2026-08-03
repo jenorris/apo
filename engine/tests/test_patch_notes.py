@@ -97,10 +97,31 @@ class PatchNotesTest(unittest.TestCase):
         self.assertEqual(out["failed_paths"], 1)
         self.assertEqual(out["results"][1]["error"], "duplicate_path")
 
-    def test_empty_items(self):
-        out = ops.patch_notes([])
+    def test_xor_rejects_both(self):
+        out = ops.patch_entry(
+            path="a.md",
+            ops=[{"op": "set_field", "field": "status", "value": "x"}],
+            items=[
+                {
+                    "path": "b.md",
+                    "ops": [{"op": "set_field", "field": "status", "value": "y"}],
+                }
+            ],
+        )
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"], "bad_request")
+
+    def test_items_via_patch_entry(self):
+        out = ops.patch_entry(
+            items=[
+                {
+                    "path": "a.md",
+                    "ops": [{"op": "set_field", "field": "status", "value": "done"}],
+                },
+            ]
+        )
+        self.assertTrue(out["ok"], msg=out)
+        self.assertEqual(out["applied_paths"], 1)
 
 
 class PatchNotesRpcTest(unittest.TestCase):

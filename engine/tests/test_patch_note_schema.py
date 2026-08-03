@@ -51,7 +51,17 @@ def _patch_note_tool():
 def _ops_schema(tool) -> dict:
     schema = getattr(tool, "parameters", None) or tool.model_dump().get("parameters")
     assert isinstance(schema, dict)
-    return schema["properties"]["ops"]
+    ops = schema["properties"]["ops"]
+    # Optional list → anyOf [null, array] (or similar); unwrap to the array schema.
+    if ops.get("type") == "array" or ops.get("items"):
+        return ops
+    for alt in ops.get("anyOf") or ops.get("oneOf") or []:
+        if isinstance(alt, dict) and (alt.get("type") == "array" or alt.get("items")):
+            # Preserve description from parent when present
+            if ops.get("description") and not alt.get("description"):
+                alt = {**alt, "description": ops["description"]}
+            return alt
+    return ops
 
 
 def _tool_params(tool) -> dict:
@@ -85,17 +95,21 @@ class PatchNoteSchemaTest(unittest.TestCase):
         by_name = {t.name: t for t in tools}
 
         self.assertIn("prefer", (by_name["append_note"].description or "").lower())
-        self.assertIn("archive", (by_name["move_note"].description or "").lower())
+        self.assertIn("place_note", by_name)
+        self.assertIn("move", (by_name["place_note"].description or "").lower())
         self.assertNotIn("delete_note", by_name)
+        self.assertNotIn("move_note", by_name)
+        self.assertNotIn("send_note", by_name)
 
         write_params = _tool_params(by_name["write_note"])
         self.assertNotIn("index", write_params)
         self.assertNotIn("append", write_params)
         self.assertIn("mtime", (write_params["expected_mtime"].get("description") or "").lower())
 
-        move_params = _tool_params(by_name["move_note"])
-        self.assertIn("expected_mtime", move_params)
-        self.assertNotIn("index", move_params)
+        place_params = _tool_params(by_name["place_note"])
+        self.assertIn("expected_mtime", place_params)
+        self.assertIn("fields", place_params)
+        self.assertNotIn("index", place_params)
 
         search_params = _tool_params(by_name["search_notes"])
         self.assertIn("Prefer", search_params["limit"].get("description") or "")

@@ -208,20 +208,21 @@ class TestLocalRpc(unittest.TestCase):
         self.assertTrue(deleted["ok"])
         self.assertFalse((self.vault / "inbox" / "rpc-moved.md").exists())
 
-    def test_send_note_promotes_host_md(self):
+    def test_place_note_promotes_host_md(self):
         host = self.tmp / "host-report.md"
         host.write_text("---\ntitle: Host\n---\n\n# Host\n\npromoted\n", encoding="utf-8")
         with unittest.mock.patch.object(config, "SEND_ALLOW_ROOTS", str(self.tmp.resolve())):
-            status, sent = self._post(
-                "/v1/send",
+            status, placed = self._post(
+                "/v1/place",
                 {
                     "src": str(host),
                     "dst": "resources/wiki/host-report.md",
                     "fields": {"source": "rpc-test"},
                 },
             )
-        self.assertEqual(status, 200, sent)
-        self.assertTrue(sent["ok"], sent)
+        self.assertEqual(status, 200, placed)
+        self.assertTrue(placed["ok"], placed)
+        self.assertEqual(placed.get("mode"), "copy")
         self.assertTrue(host.exists())
         dest = self.vault / "resources" / "wiki" / "host-report.md"
         self.assertTrue(dest.is_file())

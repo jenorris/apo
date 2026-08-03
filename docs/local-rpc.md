@@ -48,8 +48,9 @@ Writes update markdown on disk and **enqueue** reindex for `apo-engine watch` (s
 | POST | `/v1/append` | `{path, text, heading?, chunk_hash?, position?, create?, expected_mtime?, vault?}` | surgical append |
 | POST | `/v1/patch` | `{path, ops, strict?, dry_run?, verbose?, expected_mtime?, vault?}` | batch mutators |
 | POST | `/v1/patch_notes` | `{items, strict?, dry_run?, verbose?, vault?}` | multi-path patch batch (`items: [{path, ops, expected_mtime?}]`, max 20) |
-| POST | `/v1/move` | `{src, dst, overwrite?, expected_mtime?, vault?}` | atomic rename; `expected_mtime` guards **src** |
-| POST | `/v1/send` | `{src, dst, overwrite?, fields?, expected_mtime?, vault?}` | copy host `.md` → vault (`src` absolute; leaves src) |
+| POST | `/v1/place` | `{src, dst, overwrite?, fields?, expected_mtime?, vault?}` | move if src in vault; else copy host `.md` |
+| POST | `/v1/move` | same as `/v1/place` | **alias** — prefer `/v1/place` |
+| POST | `/v1/send` | same as `/v1/place` | **alias** for host→vault copy — prefer `/v1/place` |
 | POST | `/v1/delete` | `{path, vault?}` | delete + purge queue |
 
 All responses are JSON with `ok: true|false`. Error bodies include `error` + `message`. HTTP: `404` not found, `409` stale_write / destination_exists / path_mismatch, `403` forbidden_src / use_move_note / too_large.

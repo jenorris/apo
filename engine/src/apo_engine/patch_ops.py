@@ -164,9 +164,11 @@ OPS_FIELD_DESC = (
 )
 
 PATCH_NOTES_ITEMS_DESC = (
-    "Same-vault multi-path patch batch. Each item: path + ops (+ optional expected_mtime). "
+    "Multi-path mode for patch_note: same-vault batch. "
+    "Each item: path + ops (+ optional expected_mtime). "
     "Max 20 items; duplicate paths rejected. Partial failures continue; check per-item ok. "
-    "Dual-write (domain + session log) stays parallel append_note + patch_note — not this tool."
+    "XOR with path+ops — do not pass both. "
+    "Dual-write (domain + session log) stays parallel append_note + patch_note."
 )
 
 
