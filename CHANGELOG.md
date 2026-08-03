@@ -2,11 +2,17 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [0.3.0rc3] — 2026-08-03
+
+### Added
+
+- **`patch_notes`** — same-vault multi-path patch batch (`items: [{path, ops, expected_mtime?}]`, max 20). Continues on per-item failure (`partial` / `results[]`). MCP + `POST /v1/patch_notes`. Dual-write (domain + session log) still parallel `append_note` + `patch_note`. Lean **13** / full **19**.
+
 ## [0.3.0rc2] — 2026-08-03
 
 ### Removed
 
-- **`recent_activity`** MCP tool and **`POST /v1/recent`** RPC alias — use `history` / `POST /v1/history` only. Lean **12** / full **18** tools (still includes `git_sync`).
+- **`recent_activity`** MCP tool and **`POST /v1/recent`** RPC alias — use `history` / `POST /v1/history` only. Lean was **12** / full **18** after this cut (before `patch_notes`).
 
 ## [0.3.0rc1] — 2026-08-03
 

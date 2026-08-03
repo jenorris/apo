@@ -938,6 +938,154 @@ def patch_note(
     )
 
 
+_PATCH_NOTES_MAX_ITEMS = 20
+
+
+def patch_notes(
+    items: list[Any],
+    *,
+    strict: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+    vault: str = "",
+) -> dict[str, Any]:
+    """Same-vault multi-path ``patch_note`` batch (patch ops only).
+
+    Each item: ``{path, ops, expected_mtime?}``. Cap ``_PATCH_NOTES_MAX_ITEMS``.
+    Continues on per-item failure; top-level ``ok`` is true only if every item ok.
+    Dual-write (domain + session log) still uses parallel ``append_note`` + ``patch_note``.
+    """
+    try:
+        b = _binding(vault)
+    except OpsError as e:
+        return _err(error=e.code, message=e.message)
+
+    if not isinstance(items, list) or not items:
+        return _err(
+            error="bad_request",
+            message="`items` must be a non-empty array of {path, ops, expected_mtime?}",
+            vault=b.name,
+        )
+    if len(items) > _PATCH_NOTES_MAX_ITEMS:
+        return _err(
+            error="bad_request",
+            message=f"`items` exceeds max of {_PATCH_NOTES_MAX_ITEMS}",
+            vault=b.name,
+        )
+
+    seen: set[str] = set()
+    results: list[dict[str, Any]] = []
+    ok_n = 0
+    fail_n = 0
+
+    for i, raw in enumerate(items):
+        if not isinstance(raw, dict):
+            entry = {
+                "ok": False,
+                "error": "bad_item",
+                "message": f"items[{i}] must be an object",
+                "index": i,
+                "vault": b.name,
+            }
+            results.append(entry)
+            fail_n += 1
+            continue
+        path = raw.get("path")
+        ops_list = raw.get("ops")
+        if not isinstance(path, str) or not path.strip():
+            entry = {
+                "ok": False,
+                "error": "bad_request",
+                "message": f"items[{i}].path string required",
+                "index": i,
+                "vault": b.name,
+            }
+            results.append(entry)
+            fail_n += 1
+            continue
+        path = path.strip()
+        if path in seen:
+            entry = {
+                "ok": False,
+                "path": path,
+                "error": "duplicate_path",
+                "message": f"duplicate path in batch: {path!r}",
+                "index": i,
+                "vault": b.name,
+            }
+            results.append(entry)
+            fail_n += 1
+            continue
+        seen.add(path)
+        if not isinstance(ops_list, list):
+            entry = {
+                "ok": False,
+                "path": path,
+                "error": "bad_request",
+                "message": f"items[{i}].ops must be an array",
+                "index": i,
+                "vault": b.name,
+            }
+            results.append(entry)
+            fail_n += 1
+            continue
+
+        em = raw.get("expected_mtime")
+        expected: float | None
+        if em is None:
+            expected = None
+        else:
+            try:
+                expected = float(em)
+            except (TypeError, ValueError):
+                entry = {
+                    "ok": False,
+                    "path": path,
+                    "error": "bad_request",
+                    "message": f"items[{i}].expected_mtime must be a number",
+                    "index": i,
+                    "vault": b.name,
+                }
+                results.append(entry)
+                fail_n += 1
+                continue
+
+        item_out = patch_note(
+            path,
+            ops_list,
+            strict=strict,
+            dry_run=dry_run,
+            verbose=verbose,
+            expected_mtime=expected,
+            vault=b.name,
+        )
+        item_out = dict(item_out)
+        item_out["index"] = i
+        results.append(item_out)
+        if item_out.get("ok"):
+            ok_n += 1
+        else:
+            fail_n += 1
+
+    all_ok = fail_n == 0
+    out: dict[str, Any] = {
+        "ok": all_ok,
+        "partial": bool(ok_n and fail_n),
+        "applied_paths": ok_n,
+        "failed_paths": fail_n,
+        "results": results,
+        "vault": b.name,
+    }
+    if not all_ok:
+        out["error"] = "batch_partial" if ok_n else "batch_failed"
+        out["message"] = (
+            f"{fail_n} of {len(items)} path(s) failed"
+            if fail_n
+            else "batch failed"
+        )
+    return out
+
+
 def move_note(
     src: str,
     dst: str,

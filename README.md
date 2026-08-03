@@ -180,7 +180,7 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 | Lean (**default**) | **12** | search/read/write/catalog + `send_note` + `history` |
 | Full (`APO_MCP_LEAN=0`) | **18** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note`, `tool_stats` |
 
-Core write/read tools: `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note`, `move_note`, `send_note`, `filter_notes`, `backlinks`, `history`, `git_sync` (when contract `sync.enabled`).
+Core write/read tools: `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note`, `patch_notes`, `move_note`, `send_note`, `filter_notes`, `backlinks`, `history`, `git_sync` (when contract `sync.enabled`).
 
 Admin analytics: `tool_stats` / CLI `apo-engine tool-stats` (JSONL under `~/.apo/tool-metrics-*.jsonl`; disable with `APO_TOOL_METRICS=0`).
 

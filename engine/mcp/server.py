@@ -19,7 +19,7 @@ from apo_engine import deferred as index_deferred
 from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
 from apo_engine.mcp_backend import ApoStore
-from apo_engine.patch_ops import OPS_FIELD_DESC, PatchOp
+from apo_engine.patch_ops import OPS_FIELD_DESC, PATCH_NOTES_ITEMS_DESC, PatchNotesItem, PatchOp
 
 # Tool annotation presets
 _RO = {"readOnlyHint": True, "openWorldHint": False}
@@ -179,7 +179,7 @@ _MCP_INSTRUCTIONS = (
     "patch_note=frontmatter + section mutate on one path "
     "(ops use field/value, find/replace — not key/old/new); "
     "dual-write (domain + daily session log)=parallel append_note/patch_note in one turn "
-    "(no multi-path batch tool); "
+    "(or patch_notes for multi-path patch-only batches); "
     "move_note=rename/archive (delete_note is admin-only); "
     "send_note=copy host .md into vault (token-cheap promote). "
     "Thread mtime → expected_mtime on follow-up writes. "
@@ -398,7 +398,7 @@ async def patch_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Batch mutate frontmatter/sections. Prefer set_field + replace_text/replace_section. Standalone text add → append_note."""
+    """Batch mutate frontmatter/sections. Prefer set_field + replace_text/replace_section. Standalone text add → append_note. Multi-path → patch_notes."""
     return await asyncio.to_thread(
         apo_ops.patch_note,
         path,
@@ -407,6 +407,31 @@ async def patch_note(
         dry_run=dry_run,
         verbose=verbose,
         expected_mtime=expected_mtime,
+        vault=vault,
+    )
+
+
+@mcp.tool(annotations=_MUTATE)
+async def patch_notes(
+    items: Annotated[list[PatchNotesItem], Field(description=PATCH_NOTES_ITEMS_DESC)],
+    strict: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+    vault: str = "",
+) -> dict:
+    """Same-vault multi-path patch_note batch (max 20). Patch ops only — dual-write session log still uses append_note in parallel."""
+    raw_items = [
+        item.model_dump(mode="python", exclude_none=True)
+        if hasattr(item, "model_dump")
+        else item
+        for item in items
+    ]
+    return await asyncio.to_thread(
+        apo_ops.patch_notes,
+        raw_items,
+        strict=strict,
+        dry_run=dry_run,
+        verbose=verbose,
         vault=vault,
     )
 

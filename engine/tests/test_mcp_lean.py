@@ -83,14 +83,15 @@ class LeanModeTest(unittest.TestCase):
         self.assertIn("send_note", names)
         self.assertIn("history", names)
         self.assertIn("git_sync", names)
+        self.assertIn("patch_notes", names)
         self.assertNotIn("recent_activity", names)
         self.assertNotIn("delete_note", names)
         self.assertNotIn("list_directory", names)
-        self.assertEqual(len(names), 12)
+        self.assertEqual(len(names), 13)
 
     def test_full_mode_tool_count(self):
         names = _list_tool_names(lean=False)
-        self.assertEqual(len(names), 18)
+        self.assertEqual(len(names), 19)
         self.assertTrue(_ADMIN <= names)
 
     def test_lean_is_default_when_unset(self):

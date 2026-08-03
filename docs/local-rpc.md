@@ -47,6 +47,7 @@ Writes update markdown on disk and **enqueue** reindex for `apo-engine watch` (s
 | POST | `/v1/write` | `{path, content, expected_mtime?, vault?}` | create/overwrite only (`append` key → `append_removed`) |
 | POST | `/v1/append` | `{path, text, heading?, chunk_hash?, position?, create?, expected_mtime?, vault?}` | surgical append |
 | POST | `/v1/patch` | `{path, ops, strict?, dry_run?, verbose?, expected_mtime?, vault?}` | batch mutators |
+| POST | `/v1/patch_notes` | `{items, strict?, dry_run?, verbose?, vault?}` | multi-path patch batch (`items: [{path, ops, expected_mtime?}]`, max 20) |
 | POST | `/v1/move` | `{src, dst, overwrite?, expected_mtime?, vault?}` | atomic rename; `expected_mtime` guards **src** |
 | POST | `/v1/send` | `{src, dst, overwrite?, fields?, expected_mtime?, vault?}` | copy host `.md` → vault (`src` absolute; leaves src) |
 | POST | `/v1/delete` | `{path, vault?}` | delete + purge queue |

@@ -234,6 +234,24 @@ def _patch(body: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+@_route("POST", "/v1/patch_notes")
+def _patch_notes(body: dict[str, Any]) -> dict[str, Any]:
+    items = body.get("items")
+    if not isinstance(items, list):
+        return {
+            "ok": False,
+            "error": "bad_request",
+            "message": "`items` must be an array of {path, ops, expected_mtime?}",
+        }
+    return ops.patch_notes(
+        items,
+        strict=bool(body.get("strict")),
+        dry_run=bool(body.get("dry_run")),
+        verbose=bool(body.get("verbose")),
+        vault=str(body.get("vault") or ""),
+    )
+
+
 @_route("POST", "/v1/move")
 def _move(body: dict[str, Any]) -> dict[str, Any]:
     src = body.get("src")

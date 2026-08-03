@@ -16,7 +16,8 @@ new aliases without an agent-success regression and a docs bump.
 | Append text *while* batching other ops | `patch_note` `append` / `prepend` / `append_eof` |
 | Create / full overwrite | `write_note` — **no** `append` param (use `append_note`) |
 | Promote host `.md` into vault | **`send_note(src, dst, fields=?)`** — absolute host path; leaves src |
-| Dual-write (domain + daily) | **Parallel** `append_note` / `patch_note` in one turn — no multi-path batch tool |
+| Dual-write (domain + daily) | **Parallel** `append_note` / `patch_note` in one turn |
+| Multi-path patch-only (N≥2) | **`patch_notes`** (`items: [{path, ops, expected_mtime?}]`, max 20) |
 | Status / frontmatter sweeps | `filter_notes(where=…, fields=["status","okf_type","last_checked","title"])` |
 | Browse by mtime / file git log | `history` (`path=` + git contract → commits) — status sweeps still use `filter_notes` |
 

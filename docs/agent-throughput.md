@@ -10,6 +10,7 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 4. **Need more than a snippet** → `expand_chunk(chunk_hash)` (not full-file `read_note`)
 5. **Append/edit from a hit** → use `chunk_hash` / `heading` — do **not** `read_note` only to obtain an anchor
 6. **Dual-write** → parallel tools in one turn, same `vault=`
+7. **Multi-path patch** → `patch_notes` (not session log)
 
 ## Hard defaults
 

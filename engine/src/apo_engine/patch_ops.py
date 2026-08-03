@@ -163,6 +163,28 @@ OPS_FIELD_DESC = (
     "Aliases frozen: target≡heading; replace_text heading≡scope.heading."
 )
 
+PATCH_NOTES_ITEMS_DESC = (
+    "Same-vault multi-path patch batch. Each item: path + ops (+ optional expected_mtime). "
+    "Max 20 items; duplicate paths rejected. Partial failures continue; check per-item ok. "
+    "Dual-write (domain + session log) stays parallel append_note + patch_note — not this tool."
+)
+
+
+class PatchNotesItem(BaseModel):
+    """One path in a ``patch_notes`` batch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    ops: Annotated[list[PatchOp], Field(description=OPS_FIELD_DESC)]
+    expected_mtime: float | None = Field(
+        default=None,
+        description=(
+            "Optimistic concurrency for this path: pass mtime from a prior read/write. "
+            "On stale_write, re-read and retry that item."
+        ),
+    )
+
 
 def normalize_op_dict(data: dict[str, Any]) -> dict[str, Any]:
     """Normalize aliases for the markdown apply path (dict or model dump).
