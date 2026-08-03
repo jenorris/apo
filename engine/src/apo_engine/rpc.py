@@ -174,10 +174,13 @@ def _opt_float(body: dict[str, Any], key: str) -> float | None:
 def _write(body: dict[str, Any]) -> dict[str, Any]:
     path = body.get("path")
     content = body.get("content")
+    text = body.get("text")
     if not isinstance(path, str) or not path.strip():
         return {"ok": False, "error": "bad_request", "message": "`path` string required"}
-    if not isinstance(content, str):
-        return {"ok": False, "error": "bad_request", "message": "`content` string required"}
+    if content is not None and not isinstance(content, str):
+        return {"ok": False, "error": "bad_request", "message": "`content` must be a string"}
+    if text is not None and not isinstance(text, str):
+        return {"ok": False, "error": "bad_request", "message": "`text` must be a string"}
     if "append" in body:
         return {
             "ok": False,
@@ -189,7 +192,8 @@ def _write(body: dict[str, Any]) -> dict[str, Any]:
         }
     return ops.write_note(
         path,
-        content,
+        content if isinstance(content, str) else None,
+        text=text if isinstance(text, str) else None,
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
     )
@@ -199,6 +203,7 @@ def _write(body: dict[str, Any]) -> dict[str, Any]:
 def _append(body: dict[str, Any]) -> dict[str, Any]:
     path = body.get("path")
     text = body.get("text")
+    content = body.get("content")
     chunk_hash = body.get("chunk_hash")
     path_s = path.strip() if isinstance(path, str) else ""
     ch_s = chunk_hash.strip() if isinstance(chunk_hash, str) else ""
@@ -208,8 +213,10 @@ def _append(body: dict[str, Any]) -> dict[str, Any]:
             "error": "bad_request",
             "message": "`path` or `chunk_hash` required",
         }
-    if not isinstance(text, str):
-        return {"ok": False, "error": "bad_request", "message": "`text` string required"}
+    if text is not None and not isinstance(text, str):
+        return {"ok": False, "error": "bad_request", "message": "`text` must be a string"}
+    if content is not None and not isinstance(content, str):
+        return {"ok": False, "error": "bad_request", "message": "`content` must be a string"}
     position = str(body.get("position") or "end")
     if position not in ("end", "start"):
         return {"ok": False, "error": "bad_request", "message": "`position` must be end|start"}
@@ -220,7 +227,8 @@ def _append(body: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "bad_request", "message": "`chunk_hash` must be a string"}
     return ops.append_note(
         path_s,
-        text,
+        text if isinstance(text, str) else None,
+        content=content if isinstance(content, str) else None,
         heading=heading,
         chunk_hash=ch_s or None,
         position=position,  # type: ignore[arg-type]

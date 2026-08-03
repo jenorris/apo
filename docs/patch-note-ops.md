@@ -4,8 +4,9 @@ Discriminated union on `op`. Files are source of truth; this document is the
 wire contract for MCP / RPC clients.
 
 **Alias freeze:** keep existing aliases (`target`≡`heading`, top-level
-`heading`≡`scope.heading`, `limit`≡`top_k`, `filters`≡`where`). Do **not** add
-new aliases without an agent-success regression and a docs bump.
+`heading`≡`scope.heading`, `limit`≡`top_k`, `filters`≡`where`,
+`content`≡`text` on `append_note`, `text`≡`content` on `write_note`). Do **not**
+add new aliases without an agent-success regression and a docs bump.
 
 ## Write routing (append paths)
 

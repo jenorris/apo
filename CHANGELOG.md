@@ -7,6 +7,7 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 ### Added
 
 - **`history` browse digests** — `since` / `until` (date-only = America/New_York day bounds), `preview=first|last`, optional `heading=` chunk scope (e.g. `Session log`), `exclude=` globs, optional frontmatter `fields=`, and `chunk_hash` on each note for `expand_chunk` / `append_note` without reading session-log bodies. MCP + RPC + docs.
+- **Body-field aliases** — `append_note` accepts `content=` as alias for `text=`; `write_note` accepts `text=` as alias for `content=` (conflict → `bad_request`; soft `tip` when alias used). MCP + RPC + `resolve_body_text`; metrics `used_alias` counts these. Wrong-tool shapes (`write_note`+`heading`/`create`, `expand_chunk`+`path`) still hard-fail with hints.
 
 ## [0.3.1] — 2026-08-03
 

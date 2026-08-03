@@ -174,9 +174,9 @@ _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown + YAML catalog notes; sqlite-vec hybrid search; "
     "files are source of truth. "
     "Lean desk is default (APO_MCP_LEAN=0 exposes admin + delete_note + git_sync). "
-    "Routing: write_note=create/overwrite only (no append); "
+    "Routing: write_note=create/overwrite only (body=content; text alias; no append); "
     "append_note=Markdown session log / History / post-search add "
-    "(prefer over patch_note append; unsupported on .yaml); "
+    "(body=text; content alias; prefer over patch_note append; unsupported on .yaml); "
     "patch_note=frontmatter/YAML fields + MD section mutate — one path (path+ops) or multi-path (items[]); "
     "YAML notes: set_field/delete_field (dotted nested paths); whole file is the catalog row; "
     "parallel mutators in one turn use the same vault=; "
@@ -325,7 +325,14 @@ def _memory_status_sync() -> dict:
 @mcp.tool(annotations=_MUTATE)
 async def write_note(
     path: str,
-    content: str,
+    content: Annotated[
+        str | None,
+        Field(description="Note body (canonical). Alias: text=."),
+    ] = None,
+    text: Annotated[
+        str | None,
+        Field(description="Alias for content. Prefer content=; conflicting values → bad_request."),
+    ] = None,
     expected_mtime: Annotated[
         float | None,
         Field(
@@ -337,11 +344,12 @@ async def write_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Create or overwrite a note. Prefer append_note / patch_note for edits."""
+    """Create or overwrite a note. Body=`content` (alias `text`). Prefer append_note / patch_note for edits."""
     return await asyncio.to_thread(
         apo_ops.write_note,
         path,
         content,
+        text=text,
         expected_mtime=expected_mtime,
         vault=vault,
     )
@@ -349,12 +357,19 @@ async def write_note(
 
 @mcp.tool(annotations=_WRITE)
 async def append_note(
-    text: str,
+    text: Annotated[
+        str | None,
+        Field(description="Body to append (canonical). Alias: content=. Do not repeat the heading."),
+    ] = None,
     path: str = "",
     heading: str | None = None,
     chunk_hash: str | None = None,
     position: Literal["end", "start"] = "end",
     create: bool = False,
+    content: Annotated[
+        str | None,
+        Field(description="Alias for text. Prefer text=; conflicting values → bad_request."),
+    ] = None,
     expected_mtime: Annotated[
         float | None,
         Field(
@@ -366,11 +381,12 @@ async def append_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Preferred add for session log / History / post-search text. Anchor: chunk_hash (path optional) → heading → EOF. Stale hash + path+heading falls back with tip. ``text`` is body only (do not repeat the heading — a leading duplicate of the anchor is stripped). Batch with other mutators → patch_note."""
+    """Preferred add for session log / History / post-search text. Body=`text` (alias `content`). Anchor: chunk_hash (path optional) → heading → EOF. Stale hash + path+heading falls back with tip. ``text`` is body only (do not repeat the heading — a leading duplicate of the anchor is stripped). Batch with other mutators → patch_note."""
     return await asyncio.to_thread(
         apo_ops.append_note,
         path,
         text,
+        content=content,
         heading=heading,
         chunk_hash=chunk_hash,
         position=position,

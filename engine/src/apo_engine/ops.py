@@ -13,7 +13,13 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from apo_engine import __version__, config, core, deferred as index_deferred, git_contract, git_sync, okf as apo_okf, vaults
-from apo_engine.agent_args import resolve_top_k, resolve_where, shape_note_read, project_frontmatter
+from apo_engine.agent_args import (
+    project_frontmatter,
+    resolve_body_text,
+    resolve_top_k,
+    resolve_where,
+    shape_note_read,
+)
 from apo_engine.markdown_patch import (
     PatchError,
     apply_append,
@@ -846,11 +852,18 @@ def history(
 
 def write_note(
     path: str,
-    content: str,
+    content: str | None = None,
     *,
+    text: str | None = None,
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
+    body, used_alias, body_err = resolve_body_text(text, content, prefer="content")
+    if body_err:
+        return _err(path=path, error="bad_request", message=body_err)
+    assert body is not None
+    content = body
+
     try:
         b = _binding(vault)
         root = b.resolved().root
@@ -898,15 +911,21 @@ def write_note(
             f"created new top-level directory {parts[0]!r} — "
             f"existing top-level dirs: {_top_level_dirs(root)}"
         )
-    return _finalize_write(
+    out = _finalize_write(
         out, vault=b.name, path=path, expected_mtime=expected_mtime
     )
+    if used_alias:
+        out = _attach_tip(
+            out, "write_note: used text= alias; prefer content="
+        )
+    return out
 
 
 def append_note(
     path: str = "",
-    text: str = "",
+    text: str | None = None,
     *,
+    content: str | None = None,
     heading: str | None = None,
     chunk_hash: str | None = None,
     position: Literal["end", "start"] = "end",
@@ -914,6 +933,16 @@ def append_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
+    body, used_alias, body_err = resolve_body_text(text, content, prefer="text")
+    if body_err:
+        return _err(
+            path=(path or "").replace("\\", "/").strip() or None,
+            error="bad_request",
+            message=body_err,
+        )
+    assert body is not None
+    text = body
+
     path = (path or "").replace("\\", "/").strip()
     ch = (chunk_hash or "").strip() or None
     heading = (heading or "").strip() or None
@@ -1021,6 +1050,10 @@ def append_note(
     )
     if tip:
         out = _attach_tip(out, tip)
+    if used_alias:
+        out = _attach_tip(
+            out, "append_note: used content= alias; prefer text="
+        )
     return out
 
 
