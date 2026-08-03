@@ -115,6 +115,38 @@ class GitSyncRepoTest(unittest.TestCase):
         self.assertIn("note.md", log.stdout)
         self.assertNotIn("secret.db", log.stdout)
 
+    def test_commits_paths_git_would_quote_or_glob(self):
+        # core.quotePath C-escapes non-ASCII names in porcelain output, and
+        # glob metacharacters are pathspec patterns unless passed literally.
+        # Either one previously failed `git add` and blocked the whole vault.
+        awkward = [
+            "tasks/Open Items Triage \u2014 2026-04-28.md",
+            "tasks/report [2026] draft.md",
+            "tasks/caf\u00e9 notes.md",
+        ]
+        (self.vault / "tasks").mkdir()
+        for rel in awkward:
+            (self.vault / rel).write_text("x\n", encoding="utf-8")
+        (self.vault / "note.md").write_text("# N\n\nv4\n", encoding="utf-8")
+
+        out = git_sync.commit_and_push(self.vault)
+        self.assertTrue(out["ok"], msg=out)
+        self.assertTrue(out["committed"], msg=out)
+        for rel in awkward:
+            self.assertIn(rel, out["paths"])
+
+        tracked = _git(self.vault, "ls-files", "-z").stdout.split("\0")
+        dirty = _git(self.vault, "status", "--porcelain", "-z", "-u").stdout
+        for rel in awkward:
+            self.assertIn(rel, tracked)
+            self.assertNotIn(rel, dirty)
+
+    def test_stages_renames_without_consuming_origin_as_entry(self):
+        _git(self.vault, "mv", "note.md", "renamed \u2014 note.md")
+        paths = git_sync.list_stageable_paths(self.vault, ())
+        self.assertIn("renamed \u2014 note.md", paths)
+        self.assertNotIn("note.md", paths)
+
     def test_tool_message_override(self):
         (self.vault / "note.md").write_text("# N\n\nv3\n", encoding="utf-8")
         out = ops.git_sync_op("run", message="agent: batch sync")
