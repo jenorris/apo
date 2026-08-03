@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import fnmatch
 import json
-import re
 import subprocess
 import threading
 import time
@@ -53,6 +52,7 @@ def _run_git(
     *args: str,
     check: bool = False,
     timeout: float = _GIT_TIMEOUT_S,
+    stdin_data: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(root), *args],
@@ -60,6 +60,7 @@ def _run_git(
         text=True,
         timeout=timeout,
         check=check,
+        input=stdin_data,
     )
 
 
@@ -218,27 +219,39 @@ def path_never_commit(rel: str, patterns: tuple[str, ...] | list[str]) -> bool:
     return False
 
 
-_PORCELAIN_RE = re.compile(r"^(..)\s+(.*)$")
+def _parse_porcelain_z(out: str) -> list[str]:
+    """Paths from ``git status --porcelain -z`` records.
+
+    ``-z`` is required: the newline format applies C-style quoting to any path
+    that is not plain ASCII (``core.quotePath``), so a name like ``a — b.md``
+    arrives as ``"a \\342\\200\\224 b.md"`` and will not match as a pathspec.
+    Rename/copy records carry the origin path in a second NUL-terminated field.
+    """
+    fields = (out or "").split("\0")
+    paths: list[str] = []
+    i = 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        # Record is "XY PATH": two status columns (either may be a space),
+        # one separator space, then the raw path.
+        if len(entry) < 4:
+            continue
+        xy, rel = entry[:2], entry[3:]
+        if "R" in xy or "C" in xy:
+            i += 1  # consume origin path
+        if rel:
+            paths.append(rel)
+    return paths
 
 
 def list_stageable_paths(vault_root: Path, never_commit: tuple[str, ...] | list[str]) -> list[str]:
     """Dirty tracked + untracked paths eligible for commit (respects .gitignore via git)."""
-    proc = _run_git(vault_root, "status", "--porcelain", "-u", "--ignore-submodules=dirty")
+    proc = _run_git(vault_root, "status", "--porcelain", "-z", "-u", "--ignore-submodules=dirty")
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "git status failed").strip()[:500])
     paths: list[str] = []
-    for line in (proc.stdout or "").splitlines():
-        if not line.strip():
-            continue
-        # Rename: "R  old -> new" or "RM old -> new"
-        if " -> " in line:
-            rel = line.split(" -> ", 1)[1].strip().strip('"')
-        else:
-            m = _PORCELAIN_RE.match(line)
-            if not m:
-                continue
-            rel = m.group(2).strip().strip('"')
-        rel = rel.replace("\\", "/")
+    for rel in _parse_porcelain_z(proc.stdout):
         if path_never_commit(rel, never_commit):
             continue
         paths.append(rel)
@@ -298,18 +311,35 @@ def commit_and_push(
         write_status(vault_root, st)
         return {"ok": True, "committed": False, "pushed": False, "paths": [], "status": read_status(vault_root)}
 
-    add = _run_git(vault_root, "add", "--", *paths)
+    # Paths go over stdin (no ARG_MAX ceiling) and literally (a name containing
+    # glob or pathspec-magic characters must not be reinterpreted as a pattern).
+    add = _run_git(
+        vault_root,
+        "--literal-pathspecs",
+        "add",
+        "--pathspec-from-file=-",
+        "--pathspec-file-nul",
+        stdin_data="\0".join(paths),
+    )
     if add.returncode != 0:
         err = (add.stderr or add.stdout or "git add failed").strip()
         _block(vault_root, err, st=st)
         return {"ok": False, "error": "add_failed", "message": err[:500], "status": read_status(vault_root)}
 
     # Refuse if never_commit somehow staged
-    cached = _run_git(vault_root, "diff", "--cached", "--name-only")
-    staged = [p.strip() for p in (cached.stdout or "").splitlines() if p.strip()]
+    cached = _run_git(vault_root, "diff", "--cached", "--name-only", "-z")
+    staged = [p for p in (cached.stdout or "").split("\0") if p]
     bad = [p for p in staged if path_never_commit(p, settings.never_commit)]
     if bad:
-        _run_git(vault_root, "reset", "HEAD", "--", *bad)
+        _run_git(
+            vault_root,
+            "--literal-pathspecs",
+            "reset",
+            "HEAD",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+            stdin_data="\0".join(bad),
+        )
         _block(vault_root, f"refused never_commit paths: {bad[:5]}", st=st)
         return {
             "ok": False,
