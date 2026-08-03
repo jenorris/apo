@@ -170,6 +170,43 @@ class TestLocalRpc(unittest.TestCase):
         self.assertEqual(status, 200, appended)
         self.assertTrue(appended["ok"])
 
+        status, appended_alias = self._post(
+            "/v1/append",
+            {
+                "path": "inbox/rpc-write.md",
+                "content": "- via content alias\n",
+                "heading": "Head",
+            },
+        )
+        self.assertEqual(status, 200, appended_alias)
+        self.assertTrue(appended_alias["ok"])
+        self.assertIn("content=", appended_alias.get("tip") or "")
+
+        status, written_alias = self._post(
+            "/v1/write",
+            {
+                "path": "inbox/rpc-write-alias.md",
+                "text": "---\ntitle: Alias Write\n---\n\n# Head\n\nbody\n",
+            },
+        )
+        self.assertEqual(status, 200, written_alias)
+        self.assertTrue(written_alias["ok"])
+        self.assertIn("text=", written_alias.get("tip") or "")
+
+        status, conflict = self._post(
+            "/v1/append",
+            {
+                "path": "inbox/rpc-write.md",
+                "text": "a\n",
+                "content": "b\n",
+                "heading": "Head",
+            },
+        )
+        self.assertEqual(status, 400, conflict)
+        self.assertFalse(conflict["ok"])
+        self.assertEqual(conflict["error"], "bad_request")
+        self.assertIn("conflicting", conflict.get("message") or "")
+
         status, patched = self._post(
             "/v1/patch",
             {

@@ -74,7 +74,7 @@ class ToolMetricsMiddleware(Middleware):
             return await call_next(context)
 
         args = _tool_arguments(context)
-        flags = tool_metrics.extract_arg_flags(args)
+        flags = tool_metrics.extract_arg_flags(args, tool=tool)
         req_bytes = tool_metrics.estimate_bytes(args)
         t0 = time.perf_counter()
         try:

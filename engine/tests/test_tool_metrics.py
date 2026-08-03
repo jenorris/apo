@@ -81,6 +81,24 @@ class ToolMetricsTest(unittest.TestCase):
         self.assertNotIn("path", flags)
         self.assertNotIn("text", flags)
 
+    def test_extract_arg_flags_body_aliases(self):
+        append_flags = tool_metrics.extract_arg_flags(
+            {"path": "a.md", "content": "body"},
+            tool="append_note",
+        )
+        self.assertTrue(append_flags["used_alias"])
+        write_flags = tool_metrics.extract_arg_flags(
+            {"path": "a.md", "text": "body"},
+            tool="write_note",
+        )
+        self.assertTrue(write_flags["used_alias"])
+        # Canonical-only append should not count as alias.
+        canonical = tool_metrics.extract_arg_flags(
+            {"path": "a.md", "text": "body"},
+            tool="append_note",
+        )
+        self.assertNotIn("used_alias", canonical)
+
     def test_days_filter(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "m.jsonl"

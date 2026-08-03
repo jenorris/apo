@@ -44,8 +44,8 @@ Writes update markdown on disk and **enqueue** reindex for `apo-engine watch` (s
 
 | Method | Path | Body | Notes |
 |--------|------|------|-------|
-| POST | `/v1/write` | `{path, content, expected_mtime?, vault?}` | create/overwrite only (`append` key → `append_removed`) |
-| POST | `/v1/append` | `{text, path?, heading?, chunk_hash?, position?, create?, expected_mtime?, vault?}` | surgical append (`path` or `chunk_hash` required) |
+| POST | `/v1/write` | `{path, content?, text?, expected_mtime?, vault?}` | create/overwrite only (`content` canonical; `text` alias; `append` key → `append_removed`) |
+| POST | `/v1/append` | `{text?, content?, path?, heading?, chunk_hash?, position?, create?, expected_mtime?, vault?}` | surgical append (`text` canonical; `content` alias; `path` or `chunk_hash` required) |
 | POST | `/v1/patch` | `{path, ops, strict?, dry_run?, verbose?, expected_mtime?, vault?}` | batch mutators |
 | POST | `/v1/patch_notes` | `{items, strict?, dry_run?, verbose?, vault?}` | multi-path patch batch (`items: [{path, ops, expected_mtime?}]`, max 20) |
 | POST | `/v1/place` | `{src, dst, overwrite?, fields?, expected_mtime?, vault?}` | move if src in vault; else copy host `.md` |

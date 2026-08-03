@@ -42,13 +42,23 @@ def _estimate_bytes(value: Any) -> int:
         return 0
 
 
-def extract_arg_flags(arguments: dict[str, Any] | None) -> dict[str, Any]:
+def extract_arg_flags(
+    arguments: dict[str, Any] | None,
+    *,
+    tool: str | None = None,
+) -> dict[str, Any]:
     """Privacy-safe arg fingerprints for rollups (no path/text/content)."""
     args = arguments if isinstance(arguments, dict) else {}
     flags: dict[str, Any] = {}
     if args.get("top_k") is not None:
         flags["used_alias"] = True
     if args.get("filters") is not None:
+        flags["used_alias"] = True
+    name = (tool or "").strip()
+    # Body-field aliases: content≡text on append; text≡content on write.
+    if name == "append_note" and args.get("content") is not None:
+        flags["used_alias"] = True
+    if name == "write_note" and args.get("text") is not None:
         flags["used_alias"] = True
     if args.get("folder"):
         flags["folder_set"] = True

@@ -41,16 +41,24 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "snippet_chars": "expand_chunk has no snippet_chars — pass chunk_hash (+ optional scope=section|chunk).",
     },
     "write_note": {
-        "text": "write_note uses content= (not text). For append under a heading use append_note(path, text, heading=…).",
+        "text": "write_note uses content= (not text). Alias text= is accepted when content= is omitted. For append under a heading use append_note(path, text, heading=…).",
         "ops": "write_note has no ops — use patch_note for surgical edits.",
         "append": (
             "write_note append is removed — use append_note(path, text, heading=… "
             "or chunk_hash=…)."
         ),
         "index": "write_note has no index= — writes always enqueue for apo-engine watch.",
+        "heading": (
+            "write_note has no heading= — it overwrites the whole note. "
+            "To add under a section use append_note(path, text, heading=…)."
+        ),
+        "create": (
+            "write_note has no create= — it always creates or overwrites. "
+            "create= belongs on append_note."
+        ),
     },
     "append_note": {
-        "content": "append_note uses text= (not content). For full overwrite use write_note(path, content).",
+        "content": "append_note uses text= (canonical); content= is an accepted alias. For full overwrite use write_note(path, content).",
         "ops": "append_note has no ops — use patch_note for mutators, or append_note(path, text, heading=…).",
         "index": "append_note has no index= — writes always enqueue for apo-engine watch.",
         "path": (
@@ -173,6 +181,37 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
                     "expand_chunk requires chunk_hash from search_notes. "
                     "For a section by path+heading use read_note(path=…, heading=…)."
                 )
+                continue
+            if name == "append_note" and loc_tail == "text":
+                # Dual-error case: content= present → prefer alias hint over generic missing.
+                for peer in errors:
+                    keys = _input_keys(peer)
+                    if "content" in keys or (
+                        peer.get("type") == "unexpected_keyword_argument"
+                        and _loc_tail(peer) == "content"
+                    ):
+                        hints.append(_TOOL_PARAM_HINTS["append_note"]["content"])
+                        break
+                else:
+                    hints.append(
+                        "append_note missing required argument 'text' "
+                        "(alias content= also accepted)."
+                    )
+                continue
+            if name == "write_note" and loc_tail == "content":
+                for peer in errors:
+                    keys = _input_keys(peer)
+                    if "text" in keys or (
+                        peer.get("type") == "unexpected_keyword_argument"
+                        and _loc_tail(peer) == "text"
+                    ):
+                        hints.append(_TOOL_PARAM_HINTS["write_note"]["text"])
+                        break
+                else:
+                    hints.append(
+                        "write_note missing required argument 'content' "
+                        "(alias text= also accepted)."
+                    )
                 continue
             if name == "patch_note" and loc_tail == "ops":
                 hints.append(f"patch_note requires ops=[…]. {_OPS_HINT}")

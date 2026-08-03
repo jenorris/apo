@@ -90,6 +90,86 @@ class FormatToolValidationErrorTest(unittest.TestCase):
         self.assertIn("read_note", msg)
         self.assertNotIn("Unexpected keyword argument", msg)
 
+    def test_append_note_content_dual_error(self):
+        class Fake(Exception):
+            def errors(self, include_url: bool = True):
+                return [
+                    {
+                        "type": "missing_argument",
+                        "loc": ("text",),
+                        "msg": "Missing required argument",
+                        "input": {
+                            "path": "a.md",
+                            "content": "body",
+                            "heading": "Session log",
+                        },
+                    },
+                    {
+                        "type": "unexpected_keyword_argument",
+                        "loc": ("content",),
+                        "msg": "Unexpected keyword argument",
+                        "input": "body",
+                    },
+                ]
+
+        exc = Exception("boom")
+        exc.__cause__ = Fake()
+        msg = format_tool_validation_error("append_note", exc)
+        self.assertIn("text=", msg)
+        self.assertIn("content=", msg)
+        self.assertNotIn("missing required argument 'text'", msg.lower())
+        # Deduped — one actionable line, not generic + alias.
+        self.assertEqual(msg.count("append_note uses text="), 1)
+
+    def test_write_note_text_dual_error(self):
+        class Fake(Exception):
+            def errors(self, include_url: bool = True):
+                return [
+                    {
+                        "type": "missing_argument",
+                        "loc": ("content",),
+                        "msg": "Missing required argument",
+                        "input": {"path": "a.md", "text": "body"},
+                    },
+                    {
+                        "type": "unexpected_keyword_argument",
+                        "loc": ("text",),
+                        "msg": "Unexpected keyword argument",
+                        "input": "body",
+                    },
+                ]
+
+        exc = Exception("boom")
+        exc.__cause__ = Fake()
+        msg = format_tool_validation_error("write_note", exc)
+        self.assertIn("content=", msg)
+        self.assertIn("text=", msg)
+        self.assertEqual(msg.count("write_note uses content="), 1)
+
+    def test_write_note_heading_create_redirect(self):
+        class Fake(Exception):
+            def errors(self, include_url: bool = True):
+                return [
+                    {
+                        "type": "unexpected_keyword_argument",
+                        "loc": ("heading",),
+                        "msg": "Unexpected keyword argument",
+                        "input": "History",
+                    },
+                    {
+                        "type": "unexpected_keyword_argument",
+                        "loc": ("create",),
+                        "msg": "Unexpected keyword argument",
+                        "input": True,
+                    },
+                ]
+
+        exc = Exception("boom")
+        exc.__cause__ = Fake()
+        msg = format_tool_validation_error("write_note", exc)
+        self.assertIn("append_note", msg)
+        self.assertIn("heading=", msg)
+
     def test_fallback_strips_pydantic_url(self):
         class Fake(Exception):
             def errors(self, include_url: bool = True):
