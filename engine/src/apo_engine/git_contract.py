@@ -1,9 +1,10 @@
 """Git contract loader + file-level history.
 
-Active when ``system/config/git-contract.schema.yaml`` exists under the vault
-root **and** the vault is inside a git work tree (own ``.git`` or a parent
-checkout). Used by ``history`` for path mode and by ``git_sync`` when
-``sync.enabled`` is set (see ``apo_engine.git_sync``).
+Active when ``system/contracts/git-contract.schema.yaml`` (or legacy
+``system/config/git-contract.schema.yaml``) exists under the vault root **and**
+the vault is inside a git work tree (own ``.git`` or a parent checkout). Used by
+``history`` for path mode and by ``git_sync`` when ``sync.enabled`` is set
+(see ``apo_engine.git_sync``).
 """
 
 from __future__ import annotations
@@ -15,7 +16,11 @@ from typing import Any
 
 import yaml
 
-GIT_CONTRACT_REL = Path("system") / "config" / "git-contract.schema.yaml"
+GIT_CONTRACT_CANDIDATES = (
+    Path("system") / "contracts" / "git-contract.schema.yaml",
+    Path("system") / "config" / "git-contract.schema.yaml",
+)
+GIT_CONTRACT_REL = GIT_CONTRACT_CANDIDATES[0]  # preferred path for docs/tests
 _GIT_LOG_TIMEOUT_S = 15.0
 # NUL-separated fields; RS separates commits
 _LOG_FORMAT = "%H%x00%an%x00%aI%x00%s%x1e"
@@ -27,8 +32,11 @@ def resolve_git_contract_path(vault_root: Path, explicit: str | None = None) -> 
     if explicit:
         p = Path(explicit).expanduser()
         return p if p.is_file() else None
-    candidate = vault_root / GIT_CONTRACT_REL
-    return candidate if candidate.is_file() else None
+    for rel in GIT_CONTRACT_CANDIDATES:
+        candidate = vault_root / rel
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def load_git_contract(vault_root: Path, explicit: str | None = None) -> dict[str, Any] | None:

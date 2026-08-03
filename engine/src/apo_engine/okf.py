@@ -1,8 +1,8 @@
 """OKF write-path stamp / validate — vault-contract-driven, optional.
 
 When no contract is configured or found, writes pass through unchanged (engine
-stays convention-agnostic). Meta vault ships ``system/config/okf-contract.schema.yaml``
-(legacy ``okf-profile.schema.yaml`` still accepted).
+stays convention-agnostic). Meta vault ships ``system/contracts/okf-contract.schema.yaml``
+(legacy ``system/config/`` and ``okf-profile.schema.yaml`` still accepted).
 
 See Meta ``system/config/apo-okf-write-contract.md`` and Apo ``docs/contracts/okf-bundle.md``.
 """
@@ -98,11 +98,12 @@ def resolve_contract_path(vault_root: Path, explicit: str | None = None) -> Path
     if explicit:
         p = Path(explicit).expanduser()
         return p if p.is_file() else None
-    cfg = vault_root / "system" / "config"
-    for name in ("okf-contract.schema.yaml", "okf-profile.schema.yaml"):
-        candidate = cfg / name
-        if candidate.is_file():
-            return candidate
+    names = ("okf-contract.schema.yaml", "okf-profile.schema.yaml")
+    for base in (vault_root / "system" / "contracts", vault_root / "system" / "config"):
+        for name in names:
+            candidate = base / name
+            if candidate.is_file():
+                return candidate
     return None
 
 

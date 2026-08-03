@@ -18,6 +18,10 @@ MARKDOWN_SUFFIXES = frozenset({".md"})
 
 # Default ignore extras so machine contracts are not catalog noise.
 DEFAULT_YAML_IGNORE = (
+    "system/contracts/*-contract.schema.yaml",
+    "system/contracts/*-contract.schema.yml",
+    "system/contracts/*.schema.yaml",
+    "system/contracts/*.schema.yml",
     "system/config/*-contract.schema.yaml",
     "system/config/*-contract.schema.yml",
     "system/config/okf-profile.schema.yaml",

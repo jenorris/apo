@@ -168,9 +168,84 @@ class VaultOpTest(unittest.TestCase):
         )
 
     def test_bad_action(self):
-        out = ops.vault_op("merge")
+        out = ops.vault_op("project")
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"], "bad_action")
+
+    def test_merge_with_desk_file(self):
+        desk = self.tmp / "desk.yaml"
+        desk.write_text(
+            "desk_version: '0.1'\n"
+            "cross_pollinate_contracts: false\n"
+            "citations: absolute_markdown\n"
+            "dual_write:\n"
+            "  session_vault: sessions\n"
+            "vault_roles:\n"
+            "  alpha: pkb\n"
+            "  beta: employer\n",
+            encoding="utf-8",
+        )
+        with unittest.mock.patch.dict(os.environ, {"APO_DESK_CONFIG": str(desk)}):
+            out = ops.vault_op("merge")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["action"], "merge")
+        self.assertEqual(out["desk"]["citations"], "absolute_markdown")
+        self.assertFalse(out["merge_rules"]["cross_pollinate_contracts"])
+        self.assertEqual(out["vaults"]["alpha"]["role"], "pkb")
+        self.assertEqual(out["vaults"]["beta"]["role"], "employer")
+        self.assertIn("usage-contract", out["vaults"]["alpha"]["contract_ids"])
+        self.assertEqual(out["desk_meta"]["source"], "file")
+
+    def test_merge_defaults_without_desk(self):
+        missing = self.tmp / "no-such-desk.yaml"
+        with unittest.mock.patch.dict(os.environ, {"APO_DESK_CONFIG": str(missing)}):
+            # resolve_desk_path returns None when explicit path missing
+            with unittest.mock.patch(
+                "apo_engine.vault_desk.resolve_desk_path", return_value=None
+            ):
+                out = ops.vault_op("merge")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["desk_meta"]["source"], "defaults")
+        self.assertEqual(out["desk"]["dual_write"]["session_vault"], "sessions")
+        self.assertNotIn("role", out["vaults"]["alpha"])
+
+
+class PreferContractsDirTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="apo-prefer-contracts-"))
+        self.vault = self.tmp / "vault"
+        self.vault.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_okf_and_git_prefer_contracts_dir(self):
+        from apo_engine import git_contract, okf
+
+        legacy = self.vault / "system" / "config"
+        preferred = self.vault / "system" / "contracts"
+        legacy.mkdir(parents=True)
+        preferred.mkdir(parents=True)
+        (legacy / "okf-contract.schema.yaml").write_text(
+            "okf_version: '0.1'\nfrom: legacy\n", encoding="utf-8"
+        )
+        (preferred / "okf-contract.schema.yaml").write_text(
+            "okf_version: '0.1'\nfrom: contracts\n", encoding="utf-8"
+        )
+        (legacy / "git-contract.schema.yaml").write_text(
+            "git_contract_version: '0.1'\nremote: legacy\n", encoding="utf-8"
+        )
+        (preferred / "git-contract.schema.yaml").write_text(
+            "git_contract_version: '0.1'\nremote: contracts\n", encoding="utf-8"
+        )
+        self.assertEqual(
+            okf.resolve_contract_path(self.vault),
+            preferred / "okf-contract.schema.yaml",
+        )
+        self.assertEqual(
+            git_contract.resolve_git_contract_path(self.vault),
+            preferred / "git-contract.schema.yaml",
+        )
 
 
 class VaultRpcTest(unittest.TestCase):

@@ -1,6 +1,7 @@
 # Apo git contract — template / example
-# Copy to <vault>/system/config/git-contract.schema.yaml and fill remote/host.
+# Copy to <vault>/system/contracts/git-contract.schema.yaml and fill remote/host.
 # Prose twin: system/config/git.md (from docs/contracts/git.md)
+# Legacy path system/config/git-contract.schema.yaml still loaded.
 # Runtime: history(path=) gate + optional sync (commit/push/pull) when sync.enabled.
 
 git_contract_version: "0.1"

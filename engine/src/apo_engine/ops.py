@@ -21,6 +21,7 @@ from apo_engine import (
     git_sync,
     okf as apo_okf,
     vault_contracts,
+    vault_desk,
     vaults,
 )
 from apo_engine.agent_args import resolve_top_k, resolve_where, shape_note_read, project_frontmatter
@@ -1703,16 +1704,17 @@ def _vault_row(b: vaults.VaultBinding, *, default_name: str) -> dict[str, Any]:
 
 
 def vault_op(action: str = "list", *, vault: str = "") -> dict[str, Any]:
-    """Vault management: list | contracts | describe.
+    """Vault management: list | contracts | describe | merge.
 
     Read-only. Live IR preferred under ``system/contracts/``; legacy
     ``system/config/*-contract.schema.yaml`` still discovered.
+    ``merge`` unions the registry with per-vault contracts and ``~/.apo/desk.yaml``.
     """
     act = (action or "list").strip().lower()
-    if act not in ("list", "contracts", "describe"):
+    if act not in ("list", "contracts", "describe", "merge"):
         return _err(
             error="bad_action",
-            message="action must be list|contracts|describe",
+            message="action must be list|contracts|describe|merge",
         )
 
     try:
@@ -1759,6 +1761,45 @@ def vault_op(action: str = "list", *, vault: str = "") -> dict[str, Any]:
             "vault": b.name,
             "root": str(root),
             "contracts": vault_contracts.discover_contracts(root),
+        }
+
+    if act == "merge":
+        desk = vault_desk.load_desk()
+        roles = desk.get("vault_roles") if isinstance(desk.get("vault_roles"), dict) else {}
+        merged_vaults: dict[str, Any] = {}
+        for name, b in sorted(bindings.items()):
+            root = b.resolved().root
+            row: dict[str, Any] = {
+                "root": str(root),
+                "collection": b.collection,
+                "ingest_dir": config.INGEST_DIR,
+                "default": name == default_name,
+                "top_level_dirs": _top_level_dirs(root),
+                "contract_ids": vault_contracts.contract_ids(root),
+                "contracts": vault_contracts.discover_contracts(root),
+            }
+            if name in roles:
+                row["role"] = roles[name]
+            merged_vaults[name] = row
+        desk_meta = {
+            "source": desk.get("_source"),
+            "path": desk.get("_path"),
+        }
+        if desk.get("_error"):
+            desk_meta["error"] = desk["_error"]
+        return {
+            "ok": True,
+            "action": "merge",
+            "default_vault": default_name,
+            "desk": vault_desk.public_desk(desk),
+            "desk_meta": desk_meta,
+            "merge_rules": {
+                "cross_pollinate_contracts": bool(
+                    desk.get("cross_pollinate_contracts", False)
+                ),
+                "desk_overlay_keys": ["dual_write", "citations", "vault_roles"],
+            },
+            "vaults": merged_vaults,
         }
 
     # describe — single vault (default when vault empty)

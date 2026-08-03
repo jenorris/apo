@@ -11,7 +11,7 @@ Standalone `.yaml` / `.yml` files are first-class Apo notes alongside Markdown.
 | `.md` | YAML frontmatter fence | Heading chunks + hybrid search | `append_note`, heading patch, `set_field` |
 | `.yaml` / `.yml` | **Whole file** (must be a mapping) | Embeds `title` / `description` / `okf_type` / `status` / `resource` | `write_note`, `patch_note` `set_field` / `delete_field` (dotted paths) |
 
-Machine contracts (`system/config/*-contract.schema.yaml`, `okf-profile.schema.yaml`) are **ignored** by the indexer by default.
+Machine contracts (`system/contracts/*-contract.schema.yaml`, legacy `system/config/`) are **ignored** by the indexer by default.
 
 ## Agent habits
 

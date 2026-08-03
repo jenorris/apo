@@ -1,6 +1,7 @@
 """Git contract sync — debounce commit/push after Apo writes; idle pull.
 
-Opt-in via ``sync.enabled`` in ``system/config/git-contract.schema.yaml``.
+Opt-in via ``sync.enabled`` in ``system/contracts/git-contract.schema.yaml``
+(legacy ``system/config/`` still loaded).
 Conflicts / non-ff / push reject → block and surface (no auto-resolve).
 """
 

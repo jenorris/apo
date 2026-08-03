@@ -49,7 +49,8 @@ VAULTS_CONFIG: str = os.environ.get("APO_VAULTS", "").strip()
 INGEST_DIR: str = os.environ.get("APO_INGEST_DIR", "resources/wiki")
 
 # OKF write-path vault contract (optional). Empty → look for
-# <vault>/system/config/okf-contract.schema.yaml (then legacy okf-profile.schema.yaml).
+# <vault>/system/contracts/okf-contract.schema.yaml (then legacy
+# system/config/ and okf-profile.schema.yaml).
 # APO_OKF_ENFORCEMENT=off|soft|hard overrides contract default / per-rule soft|hard.
 # APO_OKF_CONTRACT preferred; APO_OKF_PROFILE is a legacy alias.
 OKF_CONTRACT: str = (

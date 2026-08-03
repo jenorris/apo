@@ -4,7 +4,7 @@
 
 Use when the vault is (or should be) a **git checkout** with an off-machine remote. Markdown on disk remains the source of truth for agents; the remote is the durable off-machine copy. The Apo **index is rebuildable** — never treat `index.db` as backup.
 
-Encode the live contract in the vault (`system/config/git.md` + `system/config/git-contract.schema.yaml`). This file is a **template** to copy — not live Apo config.
+Encode the live contract in the vault (`system/config/git.md` prose + `system/contracts/git-contract.schema.yaml`). This file is a **template** to copy — not live Apo config.
 
 **Runtime:** Apo loads the YAML to (1) gate `history(path=…)` file-level git log and (2) optionally run **git sync** when `sync.enabled: true` (write-debounce commit+push; idle scheduled `pull --ff-only`; MCP/RPC `git_sync`). Gateway `GitRemote` stays out of scope.
 
@@ -35,7 +35,7 @@ Encode the live contract in the vault (`system/config/git.md` + `system/config/g
 Copy or adapt:
 
 - Prose: `system/config/git.md` (behaviors + pointers)
-- YAML: `system/config/git-contract.schema.yaml` — starter: [git-contract.schema.yaml](./git-contract.schema.yaml)
+- YAML: `system/contracts/git-contract.schema.yaml` — starter: [git-contract.schema.yaml](./git-contract.schema.yaml)
 
 Fill `remote` / `host` for *this* vault. Keep `never_commit` aligned with the vault root `.gitignore`.
 

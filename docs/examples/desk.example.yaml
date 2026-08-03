@@ -1,0 +1,24 @@
+# Apo desk overlay — host-level multi-vault policy (not vault content).
+# Copy to ~/.apo/desk.yaml (or set APO_DESK_CONFIG). Consumed by vault(action=merge).
+# Per-vault machine contracts stay in each vault's system/contracts/.
+
+desk_version: "0.1"
+
+# Never copy OKF/layout/frontmatter rules from one vault into another.
+cross_pollinate_contracts: false
+
+# How agents should cite vault notes in chat (Cursor cannot resolve [[wiki-links]]).
+citations: absolute_markdown  # absolute_markdown | wiki
+
+dual_write:
+  session_vault: sessions
+  session_path_template: "inbox/daily/{date}.md"
+  session_heading: "Session log"
+  # Domain writes stay in the owning vault; session log always goes here.
+
+vault_roles:
+  meta: pkb
+  norris: household
+  work: employer
+  sessions: audit
+  contracts: silo
