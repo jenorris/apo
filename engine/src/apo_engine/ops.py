@@ -12,7 +12,17 @@ from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from apo_engine import __version__, config, core, deferred as index_deferred, git_contract, git_sync, okf as apo_okf, vaults
+from apo_engine import (
+    __version__,
+    config,
+    core,
+    deferred as index_deferred,
+    git_contract,
+    git_sync,
+    okf as apo_okf,
+    vault_contracts,
+    vaults,
+)
 from apo_engine.agent_args import resolve_top_k, resolve_where, shape_note_read, project_frontmatter
 from apo_engine.markdown_patch import (
     PatchError,
@@ -1678,3 +1688,95 @@ def git_sync_op(
     )
     out.setdefault("vault", b.name)
     return out
+
+
+def _vault_row(b: vaults.VaultBinding, *, default_name: str) -> dict[str, Any]:
+    root = b.resolved().root
+    return {
+        "root": str(root),
+        "collection": b.collection,
+        "ingest_dir": config.INGEST_DIR,
+        "default": b.name == default_name,
+        "top_level_dirs": _top_level_dirs(root),
+        "contracts": vault_contracts.contracts_summary(root),
+    }
+
+
+def vault_op(action: str = "list", *, vault: str = "") -> dict[str, Any]:
+    """Vault management: list | contracts | describe.
+
+    Read-only. Live IR preferred under ``system/contracts/``; legacy
+    ``system/config/*-contract.schema.yaml`` still discovered.
+    """
+    act = (action or "list").strip().lower()
+    if act not in ("list", "contracts", "describe"):
+        return _err(
+            error="bad_action",
+            message="action must be list|contracts|describe",
+        )
+
+    try:
+        default_name, bindings = vaults.load_bindings()
+    except Exception as e:
+        return _err(error="bad_vault", message=str(e))
+
+    if act == "list":
+        return {
+            "ok": True,
+            "action": "list",
+            "default_vault": default_name,
+            "vaults": {
+                name: _vault_row(b, default_name=default_name)
+                for name, b in sorted(bindings.items())
+            },
+        }
+
+    if act == "contracts":
+        key = (vault or "").strip()
+        if not key:
+            # All vaults — harness extract path.
+            out_vaults: dict[str, Any] = {}
+            for name, b in sorted(bindings.items()):
+                root = b.resolved().root
+                out_vaults[name] = {
+                    "root": str(root),
+                    "contracts": vault_contracts.discover_contracts(root),
+                }
+            return {
+                "ok": True,
+                "action": "contracts",
+                "default_vault": default_name,
+                "vaults": out_vaults,
+            }
+        try:
+            b = _binding(key)
+        except OpsError as e:
+            return _err(error=e.code, message=e.message)
+        root = b.resolved().root
+        return {
+            "ok": True,
+            "action": "contracts",
+            "vault": b.name,
+            "root": str(root),
+            "contracts": vault_contracts.discover_contracts(root),
+        }
+
+    # describe — single vault (default when vault empty)
+    try:
+        b = _binding(vault)
+    except OpsError as e:
+        return _err(error=e.code, message=e.message)
+    root = b.resolved().root
+    contracts = vault_contracts.discover_contracts(root)
+    return {
+        "ok": True,
+        "action": "describe",
+        "vault": b.name,
+        "root": str(root),
+        "collection": b.collection,
+        "ingest_dir": config.INGEST_DIR,
+        "default": b.name == default_name,
+        "top_level_dirs": _top_level_dirs(root),
+        "contract_ids": list(contracts),
+        "contracts": contracts,
+    }

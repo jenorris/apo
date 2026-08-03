@@ -5,10 +5,12 @@
 | Layer | Where | Role |
 |-------|-------|------|
 | **Runtime** | Apo engine | Interprets contracts; search + mutate |
-| **Live contract** | Inside the vault (e.g. `system/config/okf-contract.schema.yaml`) | Adjusts Apo for *this* knowledge base |
+| **Live contract** | Vault `system/contracts/` (preferred); legacy `system/config/*-contract.schema.yaml` | Adjusts Apo for *this* knowledge base |
 | **Contract template** | This folder (`docs/contracts/`) | Copy-paste starters — not live config |
 
 Do **not** confuse templates here with a setting in MCP config. Opt-in means: put the machine-readable (and/or agent-facing) contract **in the vault**, then point agents at it.
+
+**Agent discovery:** MCP/RPC `vault(action=list|contracts|describe)` — lean-visible, read-only. Prefer new YAML under `system/contracts/`; discovery still finds legacy `system/config/` copies until vaults migrate.
 
 ## Shipped templates
 

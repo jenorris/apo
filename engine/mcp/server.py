@@ -174,6 +174,8 @@ _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown + YAML catalog notes; sqlite-vec hybrid search; "
     "files are source of truth. "
     "Lean desk is default (APO_MCP_LEAN=0 exposes admin + delete_note + git_sync). "
+    "vault(action=list|contracts|describe): registry + system/contracts/ (legacy "
+    "system/config/*-contract.schema.yaml still discovered). "
     "Routing: write_note=create/overwrite only (no append); "
     "append_note=Markdown session log / History / post-search add "
     "(prefer over patch_note append; unsupported on .yaml); "
@@ -680,6 +682,26 @@ async def history(
         exclude=exclude,
         fields=fields,
     )
+
+
+@mcp.tool(annotations=_RO)
+async def vault(
+    action: Annotated[
+        str,
+        Field(description="list | contracts | describe"),
+    ] = "list",
+    vault: Annotated[
+        str,
+        Field(
+            description=(
+                "Vault name from APO_VAULTS. Empty: list=all; contracts=all; "
+                "describe=default vault."
+            ),
+        ),
+    ] = "",
+) -> dict:
+    """Vault registry + contract discovery (system/contracts/; legacy system/config/). Read-only."""
+    return await asyncio.to_thread(apo_ops.vault_op, action, vault=vault)
 
 
 @mcp.tool(

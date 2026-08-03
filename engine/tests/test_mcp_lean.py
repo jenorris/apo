@@ -91,11 +91,13 @@ class LeanModeTest(unittest.TestCase):
         self.assertNotIn("git_sync", names)
         self.assertNotIn("recent_activity", names)
         self.assertNotIn("delete_note", names)
-        self.assertEqual(len(names), 10)
+        self.assertIn("vault", names)
+        self.assertEqual(len(names), 11)
 
     def test_full_mode_tool_count(self):
         names = _list_tool_names(lean=False)
-        self.assertEqual(len(names), 17)
+        self.assertEqual(len(names), 18)
+        self.assertIn("vault", names)
         self.assertTrue(_ADMIN <= names)
         self.assertNotIn("patch_notes", names)
         self.assertNotIn("move_note", names)

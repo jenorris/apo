@@ -6,6 +6,7 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ### Added
 
+- **`vault` tool** — lean-visible `list` / `contracts` / `describe` for registry + contract discovery. Preferred live IR: `<vault>/system/contracts/`; legacy `system/config/*-contract.schema.yaml` (and `okf-profile.schema.yaml`) still discovered. MCP + RPC `GET|POST /v1/vault`.
 - **`history` browse digests** — `since` / `until` (date-only = America/New_York day bounds), `preview=first|last`, optional `heading=` chunk scope (e.g. `Session log`), `exclude=` globs, optional frontmatter `fields=`, and `chunk_hash` on each note for `expand_chunk` / `append_note` without reading session-log bodies. MCP + RPC + docs.
 
 ## [0.3.1] — 2026-08-03

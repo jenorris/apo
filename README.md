@@ -75,7 +75,7 @@ No separate issue tracker required for “show me open X in folder Y.” Prefer 
 |--|--|
 | **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown (+ YAML title/description fields) |
 | **Frontmatter catalogs** | `filter_notes` on any YAML property (`okf_type`, `status`, tags, …) — MD frontmatter or whole-file YAML notes |
-| **MCP surface** | 17 tools (10 lean default) for Cursor and Claude Code |
+| **MCP surface** | 18 tools (11 lean default) for Cursor and Claude Code |
 | **Surgical writes** | `append_note` / `patch_note` with heading / `chunk_hash` anchors and `expected_mtime` |
 | **Index-backed graphs** | `backlinks` + `history` (mtime browse; file git log when git contract active) hit sqlite / git — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
@@ -180,8 +180,8 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 | Mode | Count | Includes |
 |------|------:|----------|
-| Lean (**default**) | **10** | `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note` (optional `items[]`), `place_note` (move / host promote), `filter_notes`, `backlinks`, `history` |
-| Full (`APO_MCP_LEAN=0`) | **17** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note`, `tool_stats`, `git_sync` |
+| Lean (**default**) | **11** | `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note` (optional `items[]`), `place_note` (move / host promote), `filter_notes`, `backlinks`, `history`, `vault` (`list` / `contracts` / `describe`) |
+| Full (`APO_MCP_LEAN=0`) | **18** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note`, `tool_stats`, `git_sync` |
 
 Counts are contract-tested (`engine/tests/test_mcp_lean.py`) — if this table drifts from the code, CI fails.
 

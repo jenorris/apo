@@ -335,6 +335,15 @@ def _git_sync(body: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+@_route("GET", "/v1/vault")
+@_route("POST", "/v1/vault")
+def _vault(body: dict[str, Any]) -> dict[str, Any]:
+    action = body.get("action", "list")
+    if not isinstance(action, str) or not action.strip():
+        return {"ok": False, "error": "bad_request", "message": "`action` string required"}
+    return ops.vault_op(action.strip(), vault=str(body.get("vault") or ""))
+
+
 def _json_bytes(payload: dict[str, Any], status: int) -> tuple[bytes, int]:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8"), status
 
