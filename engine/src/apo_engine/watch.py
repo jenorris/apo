@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from . import config, core, deferred, git_sync
+from .note_format import is_note_path
 
 
 class PathDebouncer:
@@ -65,7 +66,7 @@ def _note_path(root: Path, raw: str) -> Path | None:
         p.relative_to(root.resolve())
     except ValueError:
         return None
-    if p.suffix != ".md":
+    if not is_note_path(p):
         return None
     # Deleted notes still need indexing (purge); keep non-files for deletions.
     if p.is_file() or not p.exists():
@@ -85,7 +86,7 @@ def _event_path_noise(raw: str, root: Path, ignore_res: list) -> bool:
         return True
     norm = str(raw).replace("\\", "/")
     base = norm.rsplit("/", 1)[-1]
-    if base and not base.endswith(".md"):
+    if base and not is_note_path(base):
         return True
     root_s = str(root).replace("\\", "/")
     if not root_s.endswith("/"):
@@ -280,7 +281,7 @@ def _watch_one(
                             try:
                                 cand = Path(raw).resolve()
                                 cand.relative_to(root)
-                                p = cand if cand.suffix == ".md" else None
+                                p = cand if is_note_path(cand) else None
                             except (OSError, ValueError):
                                 p = None
                         if p is not None:

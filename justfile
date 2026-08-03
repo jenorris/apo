@@ -11,13 +11,18 @@ default:
     @just --list
 
 
-# One-time setup: engine venv (editable + MCP).
+# One-time setup: engine venv (editable + MCP + test deps).
 setup:
-    cd engine && python3 -m venv .venv && .venv/bin/pip install -U pip && .venv/bin/pip install -e '.[mcp]'
+    cd engine && python3 -m venv .venv && .venv/bin/pip install -U pip && .venv/bin/pip install -e '.[mcp,dev]'
     @echo "ready — run 'just ollama' then 'just index' then 'just mcp'"
 
+# Engine test suite (hermetic — never touches ~/.apo or your vault).
+test *ARGS:
+    cd engine && .venv/bin/python -m pytest tests {{ARGS}}
+
 ollama:
-    @curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && echo "ollama already up" || (OLLAMA_KEEP_ALIVE=0 /opt/homebrew/opt/ollama/bin/ollama serve &)
+    @command -v ollama >/dev/null 2>&1 || { echo "ollama not found on PATH — install it first (e.g. brew install ollama)"; exit 1; }
+    @curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && echo "ollama already up" || (OLLAMA_KEEP_ALIVE=0 ollama serve &)
     @sleep 1 && ollama list | head -5 || true
 
 index *ARGS:
@@ -28,6 +33,10 @@ reindex:
 
 search *ARGS:
     {{eng}} search {{ARGS}}
+
+# Labeled search-quality eval (hit@k / MRR). File format: docs/examples/search-eval.example.yaml
+search-eval *ARGS:
+    {{eng}} search-eval {{ARGS}}
 
 stats:
     {{eng}} stats

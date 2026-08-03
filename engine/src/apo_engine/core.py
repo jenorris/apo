@@ -18,6 +18,7 @@ import urllib.error
 import urllib.request
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from itertools import islice
 from pathlib import Path
@@ -28,6 +29,7 @@ import sqlite_vec
 import yaml
 
 from . import config
+from . import rerank
 from . import vaults
 
 # Query-embedding LRU (identical agent searches within TTL skip Ollama).
@@ -258,6 +260,20 @@ def embed(texts: list[str], verbose: bool = False) -> list[list[float] | None]:
     return _embed_fastembed(texts)
 
 
+_search_degraded: ContextVar[str | None] = ContextVar("apo_search_degraded", default=None)
+_search_rerank: ContextVar[dict | None] = ContextVar("apo_search_rerank", default=None)
+
+
+def last_search_degraded() -> str | None:
+    """Reason the most recent search() in this context ran degraded, or None."""
+    return _search_degraded.get()
+
+
+def last_search_rerank() -> dict | None:
+    """Rerank status for the most recent search() in this context, or None."""
+    return _search_rerank.get()
+
+
 def _normalize_query(query: str) -> str:
     return " ".join(query.split())
 
@@ -343,11 +359,36 @@ def _parse_frontmatter(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def note_frontmatter(text: str) -> dict | None:
-    """Parsed YAML frontmatter, or ``None`` when the note has no ``---`` block."""
+def note_frontmatter(text: str, path: str | Path | None = None) -> dict | None:
+    """Catalog fields for a note.
+
+    Markdown: fenced YAML frontmatter, or ``None`` when absent.
+    YAML note (``path`` ends in ``.yaml``/``.yml``): whole-file mapping.
+    """
+    if path is not None:
+        from apo_engine.note_format import is_yaml_note, parse_yaml_document
+
+        if is_yaml_note(path):
+            return parse_yaml_document(text)
     if not _FRONTMATTER_YAML.match(text):
         return None
     return _parse_frontmatter(text)
+
+
+def note_catalog_json(text: str, rel: str) -> str | None:
+    """JSON for ``files.frontmatter``. Empty mapping stores ``{}`` (not NULL)."""
+    from apo_engine.note_format import is_yaml_note, parse_yaml_document
+
+    if is_yaml_note(rel):
+        fm = parse_yaml_document(text)
+        if fm is None:
+            return None
+        return json.dumps(fm, default=str)
+    if not _FRONTMATTER_YAML.match(text):
+        return None
+    fm = _parse_frontmatter(text)
+    # Include empty fenced frontmatter so filter_notes can see the note.
+    return json.dumps(fm, default=str)
 
 
 def _extract_wikilinks(text: str) -> list[tuple[int, str, str, str]]:
@@ -798,7 +839,9 @@ def _ensure_vec_table(db: sqlite3.Connection, dim: int) -> None:
 
 
 def _load_ignore() -> list[str]:
-    patterns = [".git/*", ".obsidian/*", "*.excalidraw.md"]
+    from apo_engine.note_format import DEFAULT_YAML_IGNORE
+
+    patterns = [".git/*", ".obsidian/*", "*.excalidraw.md", *DEFAULT_YAML_IGNORE]
     # Engine-level ignore file (APO_IGNORE) plus a vault-root .indexignore, if present.
     for ignore_file in (config.IGNORE_FILE, vaults.notes_root() / ".indexignore"):
         if ignore_file.exists():
@@ -830,13 +873,15 @@ def _prune_dir_names(ignore: list[str]) -> set[str]:
 
 def _iter_notes(root: Path, ignore: list[str]) -> Iterator[Path]:
     """Yield note paths, pruning ignored directories so we never descend into ``.obsidian`` etc."""
+    from apo_engine.note_format import is_note_path
+
     ignore_res = _compile_ignore(ignore)
     prune = _prune_dir_names(ignore)
     root = root.resolve()
     for dirpath, dirnames, filenames in os.walk(root, topdown=True):
         dirnames[:] = [d for d in dirnames if d not in prune]
         for name in filenames:
-            if not name.endswith(".md"):
+            if not is_note_path(name):
                 continue
             p = Path(dirpath) / name
             rel = p.relative_to(root).as_posix()
@@ -1018,28 +1063,35 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
             stats.changed += 1
         else:
             stats.added += 1
-        for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
-            chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)
-        ):
+        from apo_engine.note_format import chunk_yaml_note, is_yaml_note, parse_yaml_document
+
+        if is_yaml_note(rel):
+            fm = parse_yaml_document(text) or {}
+            chunk_iter = chunk_yaml_note(text, rel, fm)
+            id_prefix = f"yaml:{rel}"
+            fm_json = json.dumps(fm, default=str)
+            wikilinks: list = []
+        else:
+            chunk_iter = chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)
+            id_prefix = f"markdown:{rel}"
+            fm_json = note_catalog_json(text, rel)
+            wikilinks = _extract_wikilinks(text)
+        for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(chunk_iter):
             chash = _content_hash(ctext)
             chunk_id = compute_chunk_id(
-                f"markdown:{rel}",
+                id_prefix,
                 start_line,
                 end_line,
                 chash,
                 config.MODEL_NAME,
             )
             pending.append((rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, chash))
-        fm = _parse_frontmatter(text)
-        wikilinks = _extract_wikilinks(text)
         if wikilinks:
             db.executemany(
                 "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
                 [(rel, tk, ts, ln, tx) for ln, tk, ts, tx in wikilinks],
             )
-        file_stamps.append(
-            (rel, st.st_mtime, h, json.dumps(fm, default=str) if fm else None)
-        )
+        file_stamps.append((rel, st.st_mtime, h, fm_json))
 
     if limit is None:
         for rel in list(known):
@@ -1316,19 +1368,27 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         plan = _FilePlan(
             rel=rel, full_path=full_path, mtime=st_mtime, file_hash=file_hash, text=text
         )
-        for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
-            chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)
-        ):
+        from apo_engine.note_format import chunk_yaml_note, is_yaml_note, parse_yaml_document
+
+        if is_yaml_note(rel):
+            fm = parse_yaml_document(text) or {}
+            chunk_iter = chunk_yaml_note(text, rel, fm)
+            id_prefix = f"yaml:{plan.rel}"
+            plan.frontmatter_json = json.dumps(fm, default=str)
+            plan.wikilinks = []
+        else:
+            chunk_iter = chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)
+            id_prefix = f"markdown:{plan.rel}"
+            plan.frontmatter_json = note_catalog_json(text, rel)
+            plan.wikilinks = _extract_wikilinks(text)
+        for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(chunk_iter):
             body_hash = _content_hash(ctext)
             chunk_id = compute_chunk_id(
-                f"markdown:{plan.rel}", start_line, end_line, body_hash, config.MODEL_NAME
+                id_prefix, start_line, end_line, body_hash, config.MODEL_NAME
             )
             plan.pending.append(
                 (plan.rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, body_hash)
             )
-        fm = _parse_frontmatter(text)
-        plan.frontmatter_json = json.dumps(fm, default=str) if fm else None
-        plan.wikilinks = _extract_wikilinks(text)
         plans.append(plan)
 
     active = plans
@@ -1488,6 +1548,8 @@ def search(
     Folder scopes use path-constrained FTS + exact distance over ``chunks.embedding``
     (no global vec0 scan). Exclude-only widens the KNN pool modestly, not to corpus size.
     """
+    _search_degraded.set(None)
+    _search_rerank.set(None)
     db = reader_connect()
     if db.execute("SELECT value FROM meta WHERE key='dim'").fetchone() is None:
         raise SystemExit("Index is empty — run `apo-engine index` first.")
@@ -1528,10 +1590,17 @@ def search(
                 except sqlite3.OperationalError:
                     frows = []
     qvec = embed_fut.result()
+    vrows: list[tuple] = []
     if qvec is None:
-        return []
-
-    if folder_prefix:
+        # Embed backend down (e.g. Ollama not running) — degrade to keyword-only
+        # instead of silently returning nothing.
+        _search_degraded.set(
+            f"query embedding failed (backend={config.EMBED_BACKEND!r}, "
+            f"model={config.MODEL_NAME!r})"
+        )
+        if not frows:
+            return []
+    elif folder_prefix:
         prefer = [r[0] for r in frows] if frows else None
         vrows = _scoped_vector_hits(db, qvec, folder_prefix, n, prefer_ids=prefer)
     else:
@@ -1550,12 +1619,15 @@ def search(
     top = max(fused.values())
 
     ranked = sorted(fused, key=lambda i: fused[i], reverse=True)
+    # Reranking rescores a wider fused pool before the cut to k.
+    rerank_on = config.RERANK and k > 0
+    collect_n = max(k, config.RERANK_POOL) if rerank_on else k
     # Folder already constrained retrieval. Exclude may drop hits — when exclude is set,
     # fetch all fused candidates so we don't under-fill k after filtering.
     if exclude:
         fetch_n = len(ranked)
     else:
-        fetch_n = min(len(ranked), max(k * 2, k + 8))
+        fetch_n = min(len(ranked), max(collect_n * 2, collect_n + 8))
     ids = ranked[:fetch_n]
     by_id: dict[int, tuple] = {}
     if ids:
@@ -1570,6 +1642,7 @@ def search(
             by_id[row[0]] = row[1:]
 
     hits: list[Hit] = []
+    full_texts: list[str] = []  # non-snippet bodies for the reranker
     for rid in ranked:
         row = by_id.get(rid)
         if row is None:
@@ -1595,8 +1668,12 @@ def search(
                 mtime=float(mtime or 0.0),
             )
         )
-        if len(hits) >= k:
+        full_texts.append(text)
+        if len(hits) >= collect_n:
             break
+    if rerank_on and hits:
+        hits, status = rerank.rerank_hits(query, hits, k, texts=full_texts)
+        _search_rerank.set(status)
     return hits
 
 
@@ -1785,12 +1862,12 @@ def recent_notes_preview(
 
 def frontmatter_field(rel_path: str, field: str) -> Any:
     """Read one cached frontmatter field for a vault-relative path (index only)."""
-    rel = rel_path.replace("\\", "/")
-    if not rel.endswith(".md"):
-        rel = rel + ".md"
+    from apo_engine.note_format import ensure_indexed_path
+
+    rel = ensure_indexed_path(rel_path)
     db = reader_connect()
     row = db.execute("SELECT frontmatter FROM files WHERE path=?", (rel,)).fetchone()
-    if not row or not row[0]:
+    if not row or row[0] is None:
         return None
     try:
         fm = json.loads(row[0])

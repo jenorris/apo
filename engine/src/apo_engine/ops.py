@@ -22,6 +22,8 @@ from apo_engine.markdown_patch import (
     normalize_lines,
     section_from_chunk,
 )
+from apo_engine.note_format import ensure_indexed_path, is_yaml_note
+from apo_engine.yaml_patch import apply_yaml_patch
 from apo_engine.chunk_anchor import materialize_ops_chunk_hashes, resolve_chunk_anchor
 from apo_engine.mcp_backend import shape_search_hits
 from apo_engine.patch_ops import ops_to_dicts
@@ -299,6 +301,27 @@ def _resolve_send_src(src: str, vault_root: Path) -> Path:
     return full
 
 
+def _missing_folder_warning(root: Path, folder_clean: str, vault_name: str) -> str | None:
+    """Non-fatal warning when a folder= scope does not exist on disk.
+
+    A typo'd folder (or the right folder in the wrong vault) otherwise returns
+    a silent empty result set that agents read as \"no knowledge here\".
+    """
+    if not folder_clean:
+        return None
+    try:
+        full = _safe_resolve(root, folder_clean)
+    except ValueError:
+        return None  # traversal is rejected by callers before this point
+    if full.is_dir():
+        return None
+    return (
+        f"folder {folder_clean!r} does not exist in vault {vault_name!r} — "
+        "results are empty by construction; check spelling or pass vault=. "
+        f"Top-level dirs: {_top_level_dirs(root)}"
+    )
+
+
 def health() -> dict[str, Any]:
     default, bindings = vaults.load_bindings()
     return {
@@ -341,6 +364,17 @@ def search(
     if err:
         return _err(error="bad_request", message=err)
     folder_clean = folder.replace("\\", "/").strip("/")
+    if folder_clean:
+        try:
+            _safe_resolve(b.resolved().root, folder_clean)
+        except ValueError as e:
+            return _err(error="bad_path", message=str(e))
+    # Unscoped searches inherit APO_SEARCH_EXCLUDE (noise folders like session
+    # logs); folder-scoped or caller-provided exclude= always wins.
+    default_exclude: list[str] | None = None
+    if not exclude and not folder_clean and config.SEARCH_EXCLUDE_DEFAULT:
+        default_exclude = list(config.SEARCH_EXCLUDE_DEFAULT)
+        exclude = default_exclude
     try:
         with vaults.bind(b):
             hits = core.search(
@@ -356,10 +390,36 @@ def search(
         return _err(error="search_failed", message=str(e) or "index unavailable")
     except Exception as e:
         return _err(error="search_failed", message=str(e))
-    return _attach_folder_tip(
-        {"ok": True, "results": results, "vault": b.name},
-        folder_clean,
-    )
+    out: dict[str, Any] = {"ok": True, "results": results, "vault": b.name}
+    if default_exclude:
+        out["default_exclude"] = default_exclude
+    warnings: list[str] = []
+    rr = core.last_search_rerank()
+    if rr is not None:
+        if rr.get("applied"):
+            out["reranked"] = True
+        elif rr.get("detail"):
+            warnings.append(f"rerank unavailable ({rr['detail']}) — fused order returned")
+    degraded = core.last_search_degraded()
+    if degraded:
+        if config.EMBED_BACKEND == "ollama":
+            fix = (
+                "results are keyword-only (BM25) until the embed backend is back — "
+                f"check the Ollama daemon (`just ollama`, APO_OLLAMA_URL={config.OLLAMA_URL}) "
+                f"and that the model is pulled (`ollama pull {config.MODEL_NAME}`)"
+            )
+        else:
+            fix = (
+                "results are keyword-only (BM25) until the embed backend is back — "
+                "check the fastembed install (pip install -e '.[cpu]') and APO_MODEL"
+            )
+        warnings.append(f"{degraded}; {fix}")
+    missing = _missing_folder_warning(b.resolved().root, folder_clean, b.name)
+    if missing:
+        warnings.append(missing)
+    if warnings:
+        out["warning"] = "; ".join(warnings)
+    return _attach_folder_tip(out, folder_clean)
 
 
 def read_note(
@@ -394,6 +454,7 @@ def read_note(
     try:
         shaped = shape_note_read(
             text,
+            path=path,
             heading=heading,
             start_line=start_line,
             end_line=end_line,
@@ -463,7 +524,7 @@ def filter_notes(
         }
         for mt, path, fm in matches
     ]
-    return {
+    out: dict[str, Any] = {
         "ok": True,
         "total": total,
         "offset": offset,
@@ -471,6 +532,10 @@ def filter_notes(
         "notes": notes,
         "vault": b.name,
     }
+    missing = _missing_folder_warning(root, folder_clean, b.name)
+    if missing:
+        out["warning"] = missing
+    return out
 
 
 def expand_chunk(
@@ -624,7 +689,7 @@ def history(
         # No git contract: mtime + optional index first-line preview.
         modified = datetime.fromtimestamp(full.stat().st_mtime).isoformat(timespec="seconds")
         preview = ""
-        index_path = rel_path if rel_path.endswith(".md") else f"{rel_path}.md"
+        index_path = ensure_indexed_path(rel_path)
         with vaults.bind(b):
             try:
                 db = core.reader_connect()
@@ -792,6 +857,16 @@ def append_note(
     except ValueError as e:
         return _err(path=path, error="bad_path", message=str(e))
 
+    if is_yaml_note(path):
+        return _err(
+            path=path,
+            error="unsupported_format",
+            message=(
+                "append_note is Markdown-only; YAML catalog notes use "
+                "write_note / patch_note(set_field|delete_field)"
+            ),
+        )
+
     if (guard := _check_mtime(full, expected_mtime, path)):
         return guard
 
@@ -888,8 +963,18 @@ def patch_note(
     hash_tips: list[str] = list(materialized.get("tips") or [])
 
     try:
-        result = apply_patch(content, dict_ops, strict=strict)
-    except TypeError as e:
+        if is_yaml_note(path):
+            result = apply_yaml_patch(content, dict_ops, strict=strict)
+        else:
+            result = apply_patch(content, dict_ops, strict=strict)
+    except (TypeError, PatchError) as e:
+        if isinstance(e, PatchError):
+            return _err(
+                path=path,
+                error=e.code,
+                message=e.message,
+                suggestions=e.suggestions,
+            )
         return _err(path=path, error="bad_request", message=str(e))
 
     if dry_run:

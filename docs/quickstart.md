@@ -20,7 +20,7 @@ Edit `.env`:
 | Variable | Set to |
 |----------|--------|
 | `APO_NOTES_ROOT` | Absolute path to **your** markdown vault |
-| `APO_INDEX` | e.g. `/ABSOLUTE/PATH/TO/apo/engine/index.db` (local to this clone) |
+| `APO_INDEX` | Recommend `$HOME/.apo/index.db` — survives clean checkouts; multi-vault indexes default there. To relocate later: move the file, update `APO_INDEX` everywhere it's set (`.env` + MCP config), restart the watcher — or just `just reindex` at the new path |
 | `OLLAMA_KEEP_ALIVE` | `5m` while working; `0` to unload the model when idle |
 
 ```bash
@@ -43,7 +43,7 @@ Add an `apo` block to `~/.cursor/mcp.json` (merge into existing `mcpServers`):
   "cwd": "/ABSOLUTE/PATH/TO/apo/engine/mcp",
   "env": {
     "APO_NOTES_ROOT": "/ABSOLUTE/PATH/TO/YOUR/VAULT",
-    "APO_INDEX": "/ABSOLUTE/PATH/TO/apo/engine/index.db",
+    "APO_INDEX": "/ABSOLUTE/PATH/TO/HOME/.apo/index.db",
     "APO_EMBED_BACKEND": "ollama",
     "APO_MODEL": "bge-m3",
     "APO_OLLAMA_URL": "http://127.0.0.1:11434",
@@ -112,7 +112,7 @@ Health one-liner (adjust `APO_INDEX` if you set a custom path):
 
 ```bash
 curl -sf http://127.0.0.1:11434/api/tags | grep -q bge-m3 && \
-  test -f "${APO_INDEX:-$HOME/Code/apo/engine/index.db}" && echo "Apo OK"
+  test -f "${APO_INDEX:-$HOME/.apo/index.db}" && echo "Apo OK"
 ```
 
 ## What Apo is (one paragraph)

@@ -39,26 +39,28 @@
 
 ## Why Apo
 
-Most “AI memory” stacks ask you to trust a second database. Apo indexes a folder of Markdown you already own:
+Most “AI memory” stacks ask you to trust a second database. Apo indexes a folder of Markdown (and optional YAML catalog records) you already own:
 
 | Approach | Source of truth | What agents edit | Ops |
 |----------|-----------------|------------------|-----|
 | Cloud memory APIs | Vendor store | Opaque records | Account, network, retention policy |
 | Vector DB + sync job | Vectors (+ maybe files) | Often the DB, not the note | Schema, embeddings pipeline |
-| **Apo** | **Your `.md` files** | **The same files you open in an editor** | One machine, one vault, optional watcher |
+| **Apo** | **Your `.md` / `.yaml` files** | **The same files you open in an editor** | One machine, one vault, optional watcher |
 
 You keep Obsidian / git / plain-text workflows. Agents search and surgically update notes through MCP. Delete `index.db` anytime — rebuild with `just reindex`.
 
 ## Structured notes (OKF and friends)
 
-Apo indexes **arbitrary YAML frontmatter** into sqlite. `filter_notes` queries those fields without a vault walk — so typed concept systems (OKF-style `okf_type`, `status`, `resource`, …) and lightweight project management fall out of the same files you already edit:
+Apo indexes **arbitrary YAML frontmatter** (Markdown) and **standalone YAML catalog notes** into sqlite. `filter_notes` queries those fields without a vault walk — so typed concept systems (OKF-style `okf_type`, `status`, `resource`, …) and lightweight project management fall out of the same files you already edit:
 
 ```bash
-# examples — any key you put in frontmatter is fair game
+# examples — any key you put in frontmatter / YAML notes is fair game
 filter_notes({"okf_type": "EvidenceRequest", "status": "open"}, folder="projects/…")
 filter_notes({"status": {"$in": ["blocked", "in-progress"]}}, folder="projects/")
 filter_notes({"okf_type": "Project"}, limit=50)
 ```
+
+**Substrate split:** use **Markdown** for prose, History, session logs, wiki (`append_note`, headings). Use **`.yaml` / `.yml`** for structure-first atoms (queues, inventories, thin OKF records) — whole file is the catalog row; patch with `set_field` / `delete_field` (dotted paths for nesting). Machine contracts under `system/config/*-contract.schema.yaml` stay out of the catalog by default.
 
 No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall.
 
@@ -71,26 +73,27 @@ No separate issue tracker required for “show me open X in folder Y.” Prefer 
 
 | | |
 |--|--|
-| **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown |
-| **Frontmatter catalogs** | `filter_notes` on any YAML property (`okf_type`, `status`, tags, …) |
-| **MCP surface** | 18 tools (12 lean default) for Cursor and Claude Code |
+| **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown (+ YAML title/description fields) |
+| **Frontmatter catalogs** | `filter_notes` on any YAML property (`okf_type`, `status`, tags, …) — MD frontmatter or whole-file YAML notes |
+| **MCP surface** | 17 tools (10 lean default) for Cursor and Claude Code |
 | **Surgical writes** | `append_note` / `patch_note` with heading / `chunk_hash` anchors and `expected_mtime` |
 | **Index-backed graphs** | `backlinks` + `history` (mtime browse; file git log when git contract active) hit sqlite / git — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
-| **Convention-agnostic** | Paths + YAML frontmatter only; PARA / wiki / OKF presets are optional |
+| **Measurable quality** | Labeled search eval (`just search-eval`, hit@k / MRR) + optional local cross-encoder reranker |
+| **Convention-agnostic** | Paths + YAML (frontmatter or catalog notes); PARA / wiki / OKF presets are optional |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
   Agent["Cursor / Claude Code"]
-  Gateway["Laravel gateway"]
+  Gateway["RPC client (optional, out of repo)"]
   MCP["stdio MCP"]
   RPC["apo-engine serve RPC"]
   Queue["Deferred queue"]
   Watch["apo-engine watch"]
   Index["index.db"]
-  Vault["Markdown vault"]
+  Vault["Markdown + YAML vault"]
   Embed["Ollama bge-m3"]
 
   Agent -->|"search · read · write"| MCP
@@ -177,10 +180,10 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 | Mode | Count | Includes |
 |------|------:|----------|
-| Lean (**default**) | **12** | search/read/write/catalog + `send_note` + `history` |
-| Full (`APO_MCP_LEAN=0`) | **18** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note`, `tool_stats` |
+| Lean (**default**) | **10** | `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note` (optional `items[]`), `place_note` (move / host promote), `filter_notes`, `backlinks`, `history` |
+| Full (`APO_MCP_LEAN=0`) | **17** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note`, `tool_stats`, `git_sync` |
 
-Core write/read tools: `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note` (optional `items[]`), `place_note`, `filter_notes`, `backlinks`, `history`. Admin: `git_sync`, `send`/`move` via `place_note` on lean, delete/reindex/…
+Counts are contract-tested (`engine/tests/test_mcp_lean.py`) — if this table drifts from the code, CI fails.
 
 Admin analytics: `tool_stats` / CLI `apo-engine tool-stats` (JSONL under `~/.apo/tool-metrics-*.jsonl`; disable with `APO_TOOL_METRICS=0`).
 
@@ -194,12 +197,17 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `APO_NOTES_ROOT` | (required) | Absolute path to the vault root |
-| `APO_INDEX` | `engine/index.db` | sqlite-vec database path |
+| `APO_INDEX` | `engine/index.db` | sqlite-vec database path — recommend `~/.apo/index.db` (survives clean checkouts; multi-vault defaults there) |
 | `APO_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace |
+| `APO_DEFERRED_DIR` | `~/.apo` | Runtime dir for queues + tool metrics (tests/sandboxes override) |
 | `APO_TOOL_METRICS` | `1` | Append MCP tool-use JSONL under `~/.apo/` (`0` disables) |
+| `APO_SEARCH_EXCLUDE` | (empty) | Default exclude globs for unscoped searches, e.g. `inbox/daily/* archives/*` (measured +8pts hit@5 on a noisy PARA vault) |
+| `APO_RERANK` | `0` | Opt-in local cross-encoder reranker (`pip install -e '.[rerank]'`) |
+| `APO_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder id |
+| `APO_RERANK_POOL` | `24` | Fused candidates rescored before the cut to `k` |
 | `APO_INGEST_DIR` | `resources/wiki` | Advisory convention for wiki ingest paths |
-| `APO_SEND_ALLOW_ROOTS` | `$HOME` | Colon-separated host roots allowed for `send_note` |
-| `APO_SEND_MAX_BYTES` | `5242880` | Max size for `send_note` source files |
+| `APO_SEND_ALLOW_ROOTS` | `$HOME` | Colon-separated host roots `place_note` may copy from |
+| `APO_SEND_MAX_BYTES` | `5242880` | Max size for `place_note` host-source files |
 | `APO_EMBED_BACKEND` | `ollama` | `ollama` or `fastembed` (ONNX) |
 | `APO_MODEL` | `bge-m3` | Ollama model, or a FastEmbed id when backend is `fastembed` |
 | `OLLAMA_KEEP_ALIVE` | `5m` | Keep embed model warm; `0` = unload when idle |
@@ -216,11 +224,14 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 
 | Doc | For |
 |-----|-----|
-| [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC for Laravel / gateways |
 | [docs/quickstart.md](docs/quickstart.md) | Install, MCP registration, verify, troubleshoot |
 | [docs/onboard-prompt.md](docs/onboard-prompt.md) | Infer vault rules → propose persistent agent instructions |
+| [docs/agent-throughput.md](docs/agent-throughput.md) | Agent habits that make Apo fast (`folder=`, `fields=`, anchors, `expected_mtime`) |
+| [docs/patch-note-ops.md](docs/patch-note-ops.md) | `patch_note` wire contract (typed ops, aliases, error codes) |
+| [docs/search-quality.md](docs/search-quality.md) | Eval harness, measured hit@k / MRR, reranker guidance |
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
 | [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_VAULTS`) |
+| [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC for local gateways (out-of-repo clients) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |
 

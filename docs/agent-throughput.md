@@ -4,13 +4,14 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 
 ## Decision tree (before any Apo call)
 
-1. **Catalog / status / `okf_type`** → `filter_notes` + `fields=` (+ `folder=`)
+1. **Catalog / status / `okf_type`** → `filter_notes` + `fields=` (+ `folder=`) — works for MD frontmatter **and** `.yaml` / `.yml` catalog notes
 2. **Known path** → `read_note` / `append_note` / `patch_note` / `write_note` (skip search)
 3. **Meaning recall** → `search_notes` with **`folder=`** when PARA bucket is known
 4. **Need more than a snippet** → `expand_chunk(chunk_hash)` (not full-file `read_note`)
 5. **Append/edit from a hit** → `append_note(chunk_hash=…)` (path optional) or `patch_note` op with `chunk_hash` — do **not** `read_note` only to obtain an anchor
 6. **Dual-write** → parallel tools in one turn, same `vault=`
 7. **Multi-path patch** → `patch_note(items=…)` (not session log)
+8. **Structure-only atom** → prefer `write_note` / `patch_note(set_field)` on a `.yaml` path (no `append_note` / headings)
 
 ## Hard defaults
 
@@ -23,8 +24,9 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 ## Fast path (cheat card)
 
 ```
-filter(+fields) → search(+folder) → expand_chunk → append(chunk_hash)  # path optional
-                                              ↘ patch(…, chunk_hash|heading) + expected_mtime
+filter(+fields) → search(+folder) → expand_chunk → append(chunk_hash)  # path optional (MD)
+                                              ↘ patch(set_field|…, chunk_hash|heading) + expected_mtime
+YAML atoms: filter(+fields) → patch(set_field dotted path) + expected_mtime
 ```
 
 ## Soft engine tips

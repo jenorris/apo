@@ -7,10 +7,18 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 from pathlib import Path
 from typing import Callable, Iterable
 
-DEFERRED_DIR = Path.home() / ".apo"
+
+def _runtime_dir() -> Path:
+    """Queue directory — ~/.apo by default; APO_DEFERRED_DIR overrides (tests, sandboxes)."""
+    raw = os.environ.get("APO_DEFERRED_DIR", "").strip()
+    return Path(raw).expanduser() if raw else Path.home() / ".apo"
+
+
+DEFERRED_DIR = _runtime_dir()
 
 
 def _queue_path(collection: str, kind: str) -> Path:

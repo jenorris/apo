@@ -234,61 +234,52 @@ class OkfStampTests(unittest.TestCase):
 
 
 class OkfWriteNoteIntegration(unittest.TestCase):
-    """Exercise MCP write_note sync path with a temp vault + contract."""
+    """Exercise the shared ops.write_note path (MCP + RPC façade) with a temp vault + contract."""
 
     def setUp(self):
         okf.clear_contract_cache()
         self._env = {}
-        for key in ("APO_OKF_CONTRACT", "APO_OKF_ENFORCEMENT", "APO_NOTES_ROOT", "APO_COLLECTION", "APO_INDEX"):
+        for key in (
+            "APO_OKF_CONTRACT",
+            "APO_OKF_ENFORCEMENT",
+            "APO_NOTES_ROOT",
+            "APO_COLLECTION",
+            "APO_INDEX",
+            "APO_VAULTS",
+        ):
             self._env[key] = os.environ.pop(key, None)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         profile = self.root / "system" / "config" / "okf-contract.schema.yaml"
         profile.parent.mkdir(parents=True)
         profile.write_text(_MINI_CONTRACT, encoding="utf-8")
-        os.environ["APO_NOTES_ROOT"] = str(self.root)
-        os.environ["APO_COLLECTION"] = "okf_test"
-        os.environ["APO_INDEX"] = str(self.root / "index.db")
 
-        import importlib.util
-        import sys
-
-        engine = Path(__file__).resolve().parents[1]
-        server_path = engine / "mcp" / "server.py"
-        # Ensure apo_engine is importable from src/
-        src = str(engine / "src")
-        if src not in sys.path:
-            sys.path.insert(0, src)
-        # Refresh config paths picked up at import
         from apo_engine import config as apo_config
+        from apo_engine import ops
 
+        self._cfg = {
+            k: getattr(apo_config, k) for k in ("NOTES_ROOT", "INDEX_PATH", "COLLECTION")
+        }
         apo_config.NOTES_ROOT = self.root.resolve()
         apo_config.INDEX_PATH = (self.root / "index.db").resolve()
         apo_config.COLLECTION = "okf_test"
-
-        spec = importlib.util.spec_from_file_location("apo_mcp_okf_test", server_path)
-        assert spec and spec.loader
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        mod.VAULTS.clear()
-        mod._load_vaults()
-        self.server = mod
+        self.ops = ops
 
     def tearDown(self):
         okf.clear_contract_cache()
+        from apo_engine import config as apo_config
+
+        for k, val in self._cfg.items():
+            setattr(apo_config, k, val)
         self.tmp.cleanup()
         for key, val in self._env.items():
             if val is None:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = val
-        try:
-            self.server.VAULTS.clear()
-        except Exception:
-            pass
 
     def test_write_note_stamps_thread(self):
-        out = self.server._write_note_sync(
+        out = self.ops.write_note(
             "areas/threads/bar.md",
             "# Bar\n\nhello\n",
         )
@@ -299,7 +290,7 @@ class OkfWriteNoteIntegration(unittest.TestCase):
         self.assertIn("okf_type: Thread", written)
 
     def test_write_note_hard_fail_reserved_fm(self):
-        out = self.server._write_note_sync(
+        out = self.ops.write_note(
             "projects/x/index.md",
             "---\ntitle: bad\n---\n\n# Index\n",
         )

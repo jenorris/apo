@@ -108,7 +108,7 @@ Optional but high-leverage: a daily note under `inbox/daily/YYYY-MM-DD.md` with 
 - New note → `write_note`
 - Log / History / additive → `append_note` (`heading`, `position`)
 - Frontmatter or targeted replace → `patch_note`
-- Rename / archive → `move_note` (never read→write→delete)
+- Rename / archive → `place_note` (never read→write→delete)
 - After a batch of index-deferred writes → `reindex_deferred`
 
 Always check tool `ok`.
@@ -119,7 +119,7 @@ Inbox is temporary. Flag or triage items older than ~7 days. Don’t treat `inbo
 
 ### 5. Archives are moves
 
-Completed projects and dead areas → `archives/` via `move_note`, preserving history.
+Completed projects and dead areas → `archives/` via `place_note`, preserving history.
 
 ## Apo wiring
 

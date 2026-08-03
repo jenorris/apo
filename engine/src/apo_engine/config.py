@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 _ENGINE_ROOT = Path(__file__).resolve().parents[2]  # <repo>/engine
@@ -89,6 +90,22 @@ SCOPED_VECTOR_FULL_SCAN_MAX: int = int(os.environ.get("APO_SCOPED_VECTOR_FULL_SC
 # Cache identical query embeddings (seconds TTL; 0 disables).
 QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "120"))
 QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "64"))
+
+# Default exclude globs for *unscoped* searches (no folder=, no caller exclude=).
+# Space/comma separated. Session logs and archives crowd out canonical notes in
+# recall — measured +8pts hit@5 on a noisy PARA vault with:
+#   APO_SEARCH_EXCLUDE="inbox/daily/* archives/*"
+SEARCH_EXCLUDE_DEFAULT: list[str] = [
+    g for g in re.split(r"[,\s]+", os.environ.get("APO_SEARCH_EXCLUDE", "").strip()) if g
+]
+
+# Optional local cross-encoder reranker over fused hybrid candidates (opt-in).
+# Requires the `rerank` extra (fastembed ONNX). First use downloads the model
+# to the local HF cache; scoring is CPU-only and never leaves the machine.
+RERANK: bool = os.environ.get("APO_RERANK", "0").strip().lower() in ("1", "true", "yes", "on")
+RERANK_MODEL: str = os.environ.get("APO_RERANK_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2")
+# Fused candidates scored by the reranker before cutting to k.
+RERANK_POOL: int = int(os.environ.get("APO_RERANK_POOL", "24"))
 
 # Local RPC (apo-engine serve) — loopback HTTP for Laravel / other gateways.
 RPC_HOST: str = os.environ.get("APO_RPC_HOST", "127.0.0.1")

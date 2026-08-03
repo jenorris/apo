@@ -25,6 +25,8 @@ from apo_engine.markdown_patch import (
     join_lines,
     normalize_lines,
 )
+from apo_engine.note_format import is_yaml_note, parse_yaml_document
+from apo_engine.yaml_patch import set_yaml_fields
 
 _H1_RE = re.compile(r"(?m)^#\s+(.+)$")
 _FM_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
@@ -111,7 +113,17 @@ def enforcement_override() -> str | None:
     return None
 
 
-def _parse_scalars(text: str) -> dict[str, str]:
+def _parse_scalars(text: str, rel_path: str = "") -> dict[str, str]:
+    if is_yaml_note(rel_path):
+        data = parse_yaml_document(text)
+        if not data:
+            return {}
+        out: dict[str, str] = {}
+        for key, val in data.items():
+            if isinstance(val, (dict, list)):
+                continue
+            out[str(key)] = "" if val is None else str(val)
+        return out
     m = _FM_RE.match(text)
     if not m:
         return {}
@@ -129,13 +141,17 @@ def _parse_scalars(text: str) -> dict[str, str]:
     return scalars
 
 
-def _first_h1(text: str) -> str | None:
+def _first_h1(text: str, rel_path: str = "") -> str | None:
+    if is_yaml_note(rel_path):
+        return None
     body = _FM_RE.sub("", text, count=1) if _FM_RE.match(text) else text
     m = _H1_RE.search(body)
     return m.group(1).strip() if m else None
 
 
-def _has_frontmatter(text: str) -> bool:
+def _has_frontmatter(text: str, rel_path: str = "") -> bool:
+    if is_yaml_note(rel_path):
+        return parse_yaml_document(text) is not None
     return bool(_FM_RE.match(text))
 
 
@@ -261,9 +277,11 @@ def _infer_okf_type(contract: OkfContract, rel_path: str, scalars: dict[str, str
     return contract.default_okf_type
 
 
-def _set_fields(content: str, updates: dict[str, str]) -> str:
+def _set_fields(content: str, updates: dict[str, str], *, rel_path: str = "") -> str:
     if not updates:
         return content
+    if is_yaml_note(rel_path):
+        return set_yaml_fields(content, updates)
     had_nl = content.endswith("\n")
     lines = normalize_lines(content)
     for key, val in updates.items():
@@ -298,7 +316,7 @@ def process_concept(
     if enf == "reserved":
         warnings: list[str] = []
         violations: list[dict[str, str]] = []
-        if _has_frontmatter(content):
+        if _has_frontmatter(content, rel):
             msg = f"reserved path {rel!r} must not have concept frontmatter"
             warnings.append(msg)
             violations.append({"field": "frontmatter", "expected": "absent"})
@@ -316,24 +334,24 @@ def process_concept(
     if enf == "exempt":
         stamped: list[str] = []
         new_content = content
-        scalars = _parse_scalars(content)
+        scalars = _parse_scalars(content, rel)
         # May stamp timestamp only
         if "timestamp" not in scalars or not scalars["timestamp"].strip():
-            new_content = _set_fields(new_content, {"timestamp": utc_now()})
+            new_content = _set_fields(new_content, {"timestamp": utc_now()}, rel_path=rel)
             stamped.append("timestamp")
         elif bump_timestamp:
-            new_content = _set_fields(new_content, {"timestamp": utc_now()})
+            new_content = _set_fields(new_content, {"timestamp": utc_now()}, rel_path=rel)
             stamped.append("timestamp")
-        okf = _infer_okf_type(contract, rel, _parse_scalars(new_content), rule)
+        okf = _infer_okf_type(contract, rel, _parse_scalars(new_content, rel), rule)
         return OkfResult(
             content=new_content,
             stamped=stamped,
-            okf_type=okf if _has_frontmatter(new_content) else None,
+            okf_type=okf if _has_frontmatter(new_content, rel) else None,
             enforcement="exempt",
         )
 
     # soft / hard
-    scalars = _parse_scalars(content)
+    scalars = _parse_scalars(content, rel)
     updates: dict[str, str] = {}
     stamped = []
     warnings = []
@@ -344,7 +362,7 @@ def process_concept(
         updates[type_field] = inferred
         stamped.append(type_field)
 
-    h1 = _first_h1(content)
+    h1 = _first_h1(content, rel)
     stem = Path(rel).stem
 
     if not (scalars.get("description") or "").strip():
@@ -377,8 +395,8 @@ def process_concept(
 
     # Never overwrite existing non-empty okf_type / resource — only set if missing (above)
 
-    new_content = _set_fields(content, updates)
-    final_scalars = _parse_scalars(new_content)
+    new_content = _set_fields(content, updates, rel_path=rel)
+    final_scalars = _parse_scalars(new_content, rel)
     okf_type = (final_scalars.get(type_field) or inferred).strip() or None
 
     required = list(contract.core_required)

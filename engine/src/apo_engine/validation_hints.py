@@ -55,7 +55,8 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "index": "append_note has no index= — writes always enqueue for apo-engine watch.",
         "path": (
             "append_note path= is optional when chunk_hash= is set (path derived from index). "
-            "Pass both as a guard, or path+heading to fall back if the hash is stale."
+            "Pass both as a guard, or path+heading to fall back if the hash is stale. "
+            "YAML (.yaml/.yml) notes reject append_note — use write_note / patch_note set_field."
         ),
     },
     "patch_note": {
@@ -67,15 +68,15 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "key": _OPS_HINT,
         "index": "patch_note has no index= — writes always enqueue for apo-engine watch.",
     },
-    "move_note": {
-        "index": "move_note has no index= — moves always enqueue purge/reindex for apo-engine watch.",
-        "path": "move_note uses src= and dst= (not path=). Both must be vault-relative.",
-    },
-    "send_note": {
-        "path": "send_note uses src= (absolute host .md) and dst= (vault-relative).",
-        "content": "send_note copies file bytes — do not pass content=; use fields={} for frontmatter merge.",
-        "text": "send_note copies a host .md file; for in-vault append use append_note.",
-        "heading": "send_note has no heading — promote whole files; edit after with append_note/patch_note.",
+    "place_note": {
+        "path": (
+            "place_note uses src= and dst= (not path=). src: vault-relative note to move, "
+            "or absolute host .md to copy in."
+        ),
+        "content": "place_note moves/copies whole files — no content=; use fields={} for frontmatter merge.",
+        "text": "place_note moves/copies whole notes; for in-vault append use append_note.",
+        "heading": "place_note has no heading — it places whole files; edit after with append_note/patch_note.",
+        "index": "place_note has no index= — moves always enqueue purge/reindex for apo-engine watch.",
     },
     "search_notes": {
         "path": (

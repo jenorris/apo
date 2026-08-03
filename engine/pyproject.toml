@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apo-engine"
-version = "0.3.0rc5"
+version = "0.3.0"
 description = "Apo — local hybrid search over a Markdown vault (sqlite-vec, no Docker)."
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Jeremy Norris" }]
@@ -26,10 +26,13 @@ dependencies = [
 [project.optional-dependencies]
 # Optional ONNX embedder (APO_EMBED_BACKEND=fastembed). Not needed for Ollama desk default.
 cpu = ["fastembed>=0.8.0"]
+# Optional cross-encoder reranker (APO_RERANK=1). Same ONNX runtime as `cpu`.
+rerank = ["fastembed>=0.8.0"]
 mcp = [
     "fastmcp>=2.0.0",
     "httpx>=0.27",
 ]
+dev = ["pytest>=8.0"]
 
 [project.scripts]
 apo-engine = "apo_engine.cli:main"

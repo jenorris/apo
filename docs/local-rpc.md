@@ -63,8 +63,8 @@ All responses are JSON with `ok: true|false`. Error bodies include `error` + `me
 | `APO_RPC_PORT` | `8765` | Bind port |
 | `APO_RPC_SOCKET` | (empty) | If set, Unix socket path (overrides host/port) |
 | `APO_RPC_TOKEN` | (empty) | Optional bearer; empty = no auth |
-| `APO_SEND_ALLOW_ROOTS` | `$HOME` | Colon-separated roots for `send_note` host `src` |
-| `APO_SEND_MAX_BYTES` | `5242880` | Max host file size for `send_note` |
+| `APO_SEND_ALLOW_ROOTS` | `$HOME` | Colon-separated roots `place_note` may copy host `src` from |
+| `APO_SEND_MAX_BYTES` | `5242880` | Max host file size for `place_note` copies |
 
 Vault / index / Ollama settings are the same as the rest of the engine (`APO_NOTES_ROOT`, `APO_INDEX`, …).
 

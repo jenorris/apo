@@ -35,6 +35,13 @@ def _cmd_search(args) -> int:
     cm, b = _bind_cli_vault(getattr(args, "vault", None))
     with cm:
         hits = core.search(args.query, k=args.k, exclude=args.exclude or None, hybrid=not args.no_hybrid)
+        degraded = core.last_search_degraded()
+        if degraded:
+            print(
+                f"WARNING: {degraded} — results are keyword-only (BM25). "
+                "Check the embed backend (`just ollama`; APO_OLLAMA_URL / APO_MODEL).",
+                file=sys.stderr,
+            )
         if args.json:
             print(json.dumps([h.__dict__ for h in hits]))
             return 0
@@ -46,6 +53,22 @@ def _cmd_search(args) -> int:
             print(f"\n{i}. [{h.score:.3f}] {h.path}{crumb}")
             snippet = " ".join(h.text.split())
             print(f"   {snippet[:280]}{'…' if len(snippet) > 280 else ''}")
+    return 0
+
+
+def _cmd_search_eval(args) -> int:
+    from . import search_eval
+
+    report = search_eval.run_eval(
+        args.file,
+        k=args.k,
+        vault=getattr(args, "vault", "") or "",
+        exclude=args.exclude or None,
+    )
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(search_eval.format_report(report, verbose=args.verbose))
     return 0
 
 
@@ -106,6 +129,18 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--no-hybrid", action="store_true", help="vector-only (skip FTS5 BM25 fusion)")
     ps.add_argument("--vault", default="", help="vault name from APO_VAULTS")
     ps.set_defaults(func=_cmd_search)
+
+    pe = sub.add_parser(
+        "search-eval",
+        help="labeled search-quality eval (hit@k / MRR) — file format in docs/examples/",
+    )
+    pe.add_argument("--file", required=True, help="YAML eval file (lives outside the repo)")
+    pe.add_argument("-k", type=int, default=0, help="cutoff (default: file `k` or 5)")
+    pe.add_argument("--vault", default="", help="vault name from APO_VAULTS")
+    pe.add_argument("--exclude", nargs="*", default=[], help="glob(s) applied to every query")
+    pe.add_argument("--json", action="store_true")
+    pe.add_argument("--verbose", action="store_true", help="also list per-query passes")
+    pe.set_defaults(func=_cmd_search_eval)
 
     pt = sub.add_parser("stats", help="index stats")
     pt.add_argument("--vault", default="", help="vault name from APO_VAULTS")

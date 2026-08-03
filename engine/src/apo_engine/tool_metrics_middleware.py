@@ -23,6 +23,17 @@ def _tool_name(context: MiddlewareContext[Any]) -> str:
     return str(getattr(params, "name", "") or "")
 
 
+def _validation_error_shape(exc: BaseException) -> list[str]:
+    """Privacy-safe pydantic fingerprints — 'type:loc.path' only, never input values."""
+    from apo_engine.validation_hints import _pydantic_errors
+
+    out: list[str] = []
+    for err in _pydantic_errors(exc)[:5]:
+        loc = ".".join(str(x) for x in (err.get("loc") or ()))
+        out.append(f"{err.get('type') or '?'}:{loc}")
+    return out
+
+
 def _tool_arguments(context: MiddlewareContext[Any]) -> dict[str, Any]:
     msg = getattr(context, "message", None)
     if msg is None:
@@ -70,6 +81,11 @@ class ToolMetricsMiddleware(Middleware):
             result = await call_next(context)
         except ToolError as e:
             duration_ms = (time.perf_counter() - t0) * 1000.0
+            err_flags = dict(flags)
+            shape = _validation_error_shape(e)
+            if shape:
+                # Which fields/op-shapes agents actually fumble — burn-down signal.
+                err_flags["error_shape"] = shape
             tool_metrics.record_call(
                 collection=self.collection,
                 tool=tool,
@@ -78,7 +94,7 @@ class ToolMetricsMiddleware(Middleware):
                 duration_ms=duration_ms,
                 req_bytes=req_bytes,
                 resp_bytes=tool_metrics.estimate_bytes(str(e)),
-                flags=flags,
+                flags=err_flags,
             )
             raise
         except Exception as e:

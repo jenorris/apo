@@ -537,5 +537,14 @@ def apply_patch(content: str, ops: list[dict[str, Any]], *, strict: bool = False
 
 
 def minimal_note_stub(path_hint: str) -> str:
-    stem = path_hint.rsplit("/", 1)[-1].replace(".md", "").replace("-", " ").title()
-    return f"---\ntitle: \"{stem}\"\n---\n\n"
+    from apo_engine.note_format import dump_yaml_document, is_yaml_note
+
+    stem = path_hint.rsplit("/", 1)[-1]
+    for suf in (".md", ".yaml", ".yml"):
+        if stem.lower().endswith(suf):
+            stem = stem[: -len(suf)]
+            break
+    title = stem.replace("-", " ").title()
+    if is_yaml_note(path_hint):
+        return dump_yaml_document({"title": title})
+    return f"---\ntitle: \"{title}\"\n---\n\n"

@@ -19,8 +19,12 @@ registration flow.
 ## Tests
 
 ```bash
-cd engine && .venv/bin/python -m pytest
+just test            # or: cd engine && .venv/bin/python -m pytest tests
 ```
+
+`just setup` installs pytest via the `dev` extra. Tests are hermetic — they must
+never write to `~/.apo` or a real vault (see `engine/tests/conftest.py`); CI runs
+the suite on Linux and macOS for every push and PR.
 
 Please add or update tests for behavior changes. The MCP tool surface has a
 lean/full contract covered by `engine/tests/test_mcp_lean.py` — keep it green.

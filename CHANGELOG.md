@@ -2,6 +2,27 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [0.3.0] — 2026-08-03
+
+Stable release — everything from rc1–rc6 plus the readiness-assessment hardening below.
+
+### Added
+
+- **YAML catalog notes** (from rc6) — `.yaml` / `.yml` are first-class indexed notes. Whole-file mapping → `files.frontmatter` for `filter_notes`; `read_note` / `write_note` / `patch_note(set_field|delete_field)` with dotted nested paths; OKF stamp/validate format-aware. Hybrid search embeds `title` / `description` / `okf_type` / `status` / `resource`. `append_note` and heading ops stay Markdown-only (`unsupported_format`). Machine contracts under `system/config/*-contract.schema.yaml` are ignored by default.
+- **Search eval harness** — `apo-engine search-eval` / `just search-eval`: labeled YAML query sets (outside the repo) scored as hit@k / MRR@k through the real `ops.search` path. Example: `docs/examples/search-eval.example.yaml`; results + methodology: `docs/search-quality.md`.
+- **Optional cross-encoder reranker** — `APO_RERANK=1` + `pip install -e '.[rerank]'` (fastembed ONNX, local). Rescores the fused pool (`APO_RERANK_POOL`, default 24) before the cut to `k`; responses set `reranked: true`; any failure falls back to fused order with a `warning`. Eval-measured as a marginal lift — see `docs/search-quality.md` before enabling.
+- **`APO_SEARCH_EXCLUDE`** — default exclude globs for *unscoped* searches (e.g. `inbox/daily/* archives/*`; measured +8pts hit@5). Never applied to `folder=`-scoped or caller-`exclude=` searches; responses carry `default_exclude` when active.
+- **CI + dev tooling** — GitHub Actions (Linux + macOS, py3.11/3.12), `just test`, `dev` extra (pytest). `engine/README.md` fixes `uv` editable installs (pyproject no longer reads `../README.md`).
+
+### Changed
+
+- **Embed-backend-down search degrades to BM25** with an actionable `warning` (MCP/RPC field + CLI stderr) instead of silently returning `[]`.
+- **Nonexistent `folder=` warns** on `search_notes` / `filter_notes` (`results are empty by construction` + real top-level dirs) instead of a silent empty result.
+- **Hermetic tests** — `APO_DEFERRED_DIR` overrides the `~/.apo` runtime dir; `tests/conftest.py` isolates queues, tool metrics, and the watcher PID probe per test. The suite never touches `~/.apo` or a real vault.
+- **Tool metrics** — validation failures now record a privacy-safe `error_shape` (pydantic `type:loc` only, never values) for hint burn-downs.
+- **Canonical index location** — docs/examples now recommend `~/.apo/index.db` over `engine/index.db` (multi-vault already defaulted there).
+- **Docs truth pass** — README tool counts corrected to lean **10** / full **17** (contract-tested); `move_note`/`send_note` ghosts replaced by `place_note` in `docs/patch-note-ops.md`, contracts, and validation hints; `justfile` no longer hardcodes the Homebrew Ollama path.
+
 ## [0.3.0rc5] — 2026-08-03
 
 ### Changed

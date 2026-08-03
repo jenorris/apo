@@ -6,6 +6,7 @@ from typing import Any
 
 from apo_engine import core
 from apo_engine.markdown_patch import PatchError, find_section, normalize_lines
+from apo_engine.note_format import is_yaml_note
 
 
 def resolve_top_k(
@@ -125,20 +126,60 @@ def slice_note_content(
 def shape_note_read(
     raw: str,
     *,
+    path: str = "",
     heading: str | None = None,
     start_line: int | None = None,
     end_line: int | None = None,
     max_chars: int | None = None,
     raw_content: bool = False,
 ) -> dict[str, Any]:
-    """Build ``read_note`` content fields from on-disk markdown.
+    """Build ``read_note`` content fields from on-disk note text.
 
-    Always includes parsed ``frontmatter`` (``None`` when no YAML block).
-    Default full-file reads return body-only ``content``; pass ``raw_content=True``
-    for byte-exact file text (or an absolute-line slice of it). Heading / line
-    slices always use absolute file coordinates and keep FM in-range when the
-    slice covers it; note-level ``frontmatter`` is still attached as a sidecar.
+    Always includes parsed ``frontmatter`` (``None`` when absent / unparsable).
+    Markdown: default full-file reads return body-only ``content``.
+    YAML notes: default ``content`` is empty; whole document is ``frontmatter``.
     """
+    # NOTE: use the module-top PatchError import. A function-local re-import
+    # resolves via sys.modules at call time; tests that purge apo_engine.*
+    # would then raise a *different* PatchError class than callers catch.
+    if is_yaml_note(path):
+        frontmatter = core.note_frontmatter(raw, path)
+        if heading:
+            raise PatchError(
+                "unsupported_format",
+                "YAML notes have no headings; omit heading= and use frontmatter, "
+                "or patch_note set_field / write_note",
+            )
+        scoped = start_line is not None or end_line is not None
+        if raw_content or scoped:
+            sliced = slice_note_content(
+                raw,
+                start_line=start_line,
+                end_line=end_line,
+                max_chars=max_chars,
+            )
+            return {
+                "frontmatter": frontmatter,
+                "content": sliced["content"],
+                "heading": "",
+                "start_line": sliced["start_line"],
+                "end_line": sliced["end_line"],
+                "truncated": sliced["truncated"],
+            }
+        content = ""
+        truncated = False
+        if max_chars is not None and max_chars == 0:
+            content = ""
+        lines = normalize_lines(raw)
+        return {
+            "frontmatter": frontmatter,
+            "content": content,
+            "heading": "",
+            "start_line": 1 if lines else 0,
+            "end_line": len(lines),
+            "truncated": truncated,
+        }
+
     frontmatter = core.note_frontmatter(raw)
     scoped = (
         heading is not None

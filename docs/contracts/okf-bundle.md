@@ -4,8 +4,8 @@
 
 Use when the vault is (or should become) an [Open Knowledge Format (OKF) v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) Knowledge Bundle: typed concepts, progressive disclosure via `index.md`, and Apo `filter_notes` on `okf_type`.
 
-**Live contract (Meta reference):** `~/Notes/Meta/system/config/okf-contract.schema.yaml`  
-**OKF conformance prose:** `system/config/okf-profile.md` (OKF “conformance profile” jargon — not an Apo preset)  
+**Live contract (Meta reference):** `~/Notes/Meta/system/config/okf-contract.schema.yaml`
+**OKF conformance prose:** `system/config/okf-profile.md` (OKF “conformance profile” jargon — not an Apo preset)
 **Write-path normative:** `system/config/apo-okf-write-contract.md`
 
 ## Stance
@@ -34,6 +34,19 @@ resource: ""
 status: active
 ---
 ```
+
+**Standalone YAML catalog notes** (same fields, no Markdown body) are also first-class:
+
+```yaml
+# projects/…/records/example.yaml
+title: Human title
+okf_type: Fact
+description: One-line summary
+timestamp: "2026-08-03T05:00:00Z"
+status: open
+```
+
+Prefer YAML for structure-only atoms (queues, inventories, thin trackers). Prefer Markdown when you need headings, `append_note`, History, or wiki-links. `append_note` / heading patch ops reject YAML with `unsupported_format`.
 
 ## Machine contract (encode in the vault)
 

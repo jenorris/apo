@@ -1,0 +1,30 @@
+# Search-quality eval set — copy OUTSIDE the repo (it references your vault paths),
+# e.g. ~/.apo/search-eval.yaml, then run:
+#
+#   just search-eval --file ~/.apo/search-eval.yaml
+#   APO_RERANK=1 just search-eval --file ~/.apo/search-eval.yaml   # A/B the reranker
+#
+# Scoring: hit@k (any expected path in top k) and MRR@k, through the same
+# ops.search path MCP/RPC clients use. Aim for 20-30 queries you actually ask.
+
+vault: ""   # optional APO_VAULTS name; empty = default vault
+k: 5
+
+queries:
+  # Exact note target
+  - query: "quarterly planning ritual"
+    expect: ["areas/planning/quarterly.md"]
+
+  # Any note in a folder counts (prefix ends with /)
+  - query: "kitchen renovation contractor quotes"
+    expect: ["projects/kitchen-reno/"]
+
+  # Folder-scoped query (mirrors agent folder= habit)
+  - query: "API rate limits design"
+    folder: "projects/platform"
+    expect: ["projects/platform/rate-limits.md"]
+
+  # Exclude noisy logs for canonical-doc recall
+  - query: "backup strategy decision"
+    exclude: ["inbox/daily/*"]
+    expect: ["areas/ops/backup-strategy.md"]
