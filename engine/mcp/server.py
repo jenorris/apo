@@ -174,9 +174,9 @@ _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown + YAML catalog notes; sqlite-vec hybrid search; "
     "files are source of truth. "
     "Lean desk is default (APO_MCP_LEAN=0 exposes admin + delete_note + git_sync). "
-    "vault(action=list|contracts|describe|merge): registry + system/contracts/ "
+    "vault(action=list|contracts|describe|merge|project): registry + system/contracts/ "
     "(legacy system/config/*-contract.schema.yaml still discovered; merge adds "
-    "~/.apo/desk.yaml overlay). "
+    "~/.apo/desk.yaml; project emits apo-desk Cursor/Claude artifacts). "
     "Routing: write_note=create/overwrite only (body=content; text alias; no append); "
     "append_note=Markdown session log / History / post-search add "
     "(body=text; content alias; prefer over patch_note append; unsupported on .yaml); "
@@ -701,24 +701,47 @@ async def history(
     )
 
 
-@mcp.tool(annotations=_RO)
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
 async def vault(
     action: Annotated[
         str,
-        Field(description="list | contracts | describe | merge"),
+        Field(description="list | contracts | describe | merge | project"),
     ] = "list",
     vault: Annotated[
         str,
         Field(
             description=(
-                "Vault name from APO_VAULTS. Empty: list/merge=all; contracts=all; "
-                "describe=default vault."
+                "Vault name from APO_VAULTS. Empty: list/merge/project=all; "
+                "contracts=all; describe=default vault."
             ),
         ),
     ] = "",
+    host: Annotated[
+        str,
+        Field(description="project only: cursor | claude | both (default both)"),
+    ] = "both",
+    write: Annotated[
+        bool,
+        Field(
+            description=(
+                "project only: when true, write ~/.cursor/rules/apo-desk.mdc and/or "
+                "~/.claude/skills/apo-desk/SKILL.md (plus ~/.apo/projected/ copies). "
+                "When false, return rendered text in the response."
+            ),
+        ),
+    ] = False,
 ) -> dict:
-    """Vault registry + contract discovery (+ desk merge). Read-only. IR: system/contracts/."""
-    return await asyncio.to_thread(apo_ops.vault_op, action, vault=vault)
+    """Vault registry, contracts, desk merge, and host skill projection."""
+    return await asyncio.to_thread(
+        apo_ops.vault_op, action, vault=vault, host=host, write=write
+    )
 
 
 @mcp.tool(

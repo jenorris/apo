@@ -22,6 +22,7 @@ from apo_engine import (
     okf as apo_okf,
     vault_contracts,
     vault_desk,
+    vault_project,
     vaults,
 )
 from apo_engine.agent_args import (
@@ -1736,18 +1737,26 @@ def _vault_row(b: vaults.VaultBinding, *, default_name: str) -> dict[str, Any]:
     }
 
 
-def vault_op(action: str = "list", *, vault: str = "") -> dict[str, Any]:
-    """Vault management: list | contracts | describe | merge.
+def vault_op(
+    action: str = "list",
+    *,
+    vault: str = "",
+    host: str = "both",
+    write: bool = False,
+) -> dict[str, Any]:
+    """Vault management: list | contracts | describe | merge | project.
 
-    Read-only. Live IR preferred under ``system/contracts/``; legacy
+    Read-only except ``project`` with ``write=True`` (writes host skill/rule files).
+    Live IR preferred under ``system/contracts/``; legacy
     ``system/config/*-contract.schema.yaml`` still discovered.
     ``merge`` unions the registry with per-vault contracts and ``~/.apo/desk.yaml``.
+    ``project`` renders desk Cursor/Claude artifacts from merge IR.
     """
     act = (action or "list").strip().lower()
-    if act not in ("list", "contracts", "describe", "merge"):
+    if act not in ("list", "contracts", "describe", "merge", "project"):
         return _err(
             error="bad_action",
-            message="action must be list|contracts|describe|merge",
+            message="action must be list|contracts|describe|merge|project",
         )
 
     try:
@@ -1796,7 +1805,7 @@ def vault_op(action: str = "list", *, vault: str = "") -> dict[str, Any]:
             "contracts": vault_contracts.discover_contracts(root),
         }
 
-    if act == "merge":
+    def _merge_payload() -> dict[str, Any]:
         desk = vault_desk.load_desk()
         roles = desk.get("vault_roles") if isinstance(desk.get("vault_roles"), dict) else {}
         merged_vaults: dict[str, Any] = {}
@@ -1830,10 +1839,34 @@ def vault_op(action: str = "list", *, vault: str = "") -> dict[str, Any]:
                 "cross_pollinate_contracts": bool(
                     desk.get("cross_pollinate_contracts", False)
                 ),
-                "desk_overlay_keys": ["dual_write", "citations", "vault_roles"],
+                "desk_overlay_keys": [
+                    "dual_write",
+                    "citations",
+                    "vault_roles",
+                    "habits",
+                    "pointers",
+                    "role_notes",
+                    "workspace",
+                ],
             },
             "vaults": merged_vaults,
         }
+
+    if act == "merge":
+        return _merge_payload()
+
+    if act == "project":
+        merge = _merge_payload()
+        if not merge.get("ok"):
+            return merge
+        projected = vault_project.project(
+            merge, host=host or "both", write=bool(write)
+        )
+        if not projected.get("ok"):
+            return projected
+        projected["default_vault"] = merge.get("default_vault")
+        projected["desk_meta"] = merge.get("desk_meta")
+        return projected
 
     # describe — single vault (default when vault empty)
     try:

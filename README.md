@@ -63,7 +63,7 @@ filter_notes({"okf_type": "Project"}, limit=50)
 
 No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall.
 
-**Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard on `write_note` / `patch_note`. Legacy `system/config/` paths still resolve. Templates: [docs/contracts/](docs/contracts/). Override: `APO_OKF_ENFORCEMENT=off|soft|hard`. Discover / merge: `vault(action=list|contracts|describe|merge)` (desk overlay: `~/.apo/desk.yaml`, example [docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
+**Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard. Legacy `system/config/` still resolves. Templates: [docs/contracts/](docs/contracts/). Desk: `vault(action=merge|project)` + `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
 
 **Multi-vault:** set `APO_VAULTS` to a JSON registry (per-root `index` + `collection`). Tools take `vault=`; watch runs one thread per vault. See [docs/multi-vault.md](docs/multi-vault.md).
 
@@ -179,7 +179,7 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 | Mode | Count | Includes |
 |------|------:|----------|
-| Lean (**default**) | **11** | `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note` (optional `items[]`), `place_note` (move / host promote), `filter_notes`, `backlinks`, `history`, `vault` (`list` / `contracts` / `describe` / `merge`) |
+| Lean (**default**) | **11** | `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note` (optional `items[]`), `place_note` (move / host promote), `filter_notes`, `backlinks`, `history`, `vault` (`list` / `contracts` / `describe` / `merge` / `project`) |
 | Full (`APO_MCP_LEAN=0`) | **18** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note`, `tool_stats`, `git_sync` |
 
 Counts are contract-tested (`engine/tests/test_mcp_lean.py`) — if this table drifts from the code, CI fails.

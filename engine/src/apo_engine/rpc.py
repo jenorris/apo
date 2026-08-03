@@ -349,7 +349,18 @@ def _vault(body: dict[str, Any]) -> dict[str, Any]:
     action = body.get("action", "list")
     if not isinstance(action, str) or not action.strip():
         return {"ok": False, "error": "bad_request", "message": "`action` string required"}
-    return ops.vault_op(action.strip(), vault=str(body.get("vault") or ""))
+    host = body.get("host", "both")
+    if host is not None and not isinstance(host, str):
+        return {"ok": False, "error": "bad_request", "message": "`host` must be a string"}
+    write = body.get("write", False)
+    if not isinstance(write, bool):
+        return {"ok": False, "error": "bad_request", "message": "`write` must be a boolean"}
+    return ops.vault_op(
+        action.strip(),
+        vault=str(body.get("vault") or ""),
+        host=str(host or "both"),
+        write=write,
+    )
 
 
 def _json_bytes(payload: dict[str, Any], status: int) -> tuple[bytes, int]:

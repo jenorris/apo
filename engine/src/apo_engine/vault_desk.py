@@ -26,6 +26,15 @@ _DEFAULT_DESK: dict[str, Any] = {
         "session_heading": "Session log",
     },
     "vault_roles": {},
+    "habits": {
+        "end_of_turn_gate": True,
+        "new_durable_facts": True,
+        "prefer_append_patch": True,
+        "filter_okf_type": True,
+    },
+    "pointers": {},
+    "role_notes": {},
+    "workspace": "",
 }
 
 
@@ -66,7 +75,7 @@ def load_desk(explicit: str | None = None) -> dict[str, Any]:
         if key.startswith("_"):
             continue
         if (
-            key in ("dual_write", "vault_roles")
+            key in ("dual_write", "vault_roles", "habits", "pointers", "role_notes")
             and isinstance(val, dict)
             and isinstance(merged.get(key), dict)
         ):

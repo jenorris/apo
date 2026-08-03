@@ -168,9 +168,58 @@ class VaultOpTest(unittest.TestCase):
         )
 
     def test_bad_action(self):
-        out = ops.vault_op("project")
+        out = ops.vault_op("explode")
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"], "bad_action")
+
+    def test_project_dry_and_write(self):
+        desk = self.tmp / "desk.yaml"
+        desk.write_text(
+            "desk_version: '0.1'\n"
+            "citations: absolute_markdown\n"
+            "workspace: '/tmp/desk.code-workspace'\n"
+            "dual_write:\n"
+            "  session_vault: sessions\n"
+            "vault_roles:\n"
+            "  alpha: pkb\n"
+            "  beta: employer\n"
+            "pointers:\n"
+            "  memory_policy: 'alpha:system/config/policy'\n"
+            "habits:\n"
+            "  new_durable_facts: true\n",
+            encoding="utf-8",
+        )
+        out_dir = self.tmp / "projected"
+        cursor_out = out_dir / "apo-desk.mdc"
+        claude_out = out_dir / "claude" / "SKILL.md"
+        with unittest.mock.patch.dict(
+            os.environ,
+            {
+                "APO_DESK_CONFIG": str(desk),
+                "APO_PROJECT_CURSOR": str(cursor_out),
+                "APO_PROJECT_CLAUDE": str(claude_out),
+            },
+        ):
+            dry = ops.vault_op("project", host="cursor", write=False)
+            self.assertTrue(dry["ok"])
+            text = dry["files"]["cursor"]["text"]
+            self.assertIn("alwaysApply: true", text)
+            self.assertIn("`alpha`", text)
+            self.assertIn("pkb", text)
+            self.assertIn("/tmp/desk.code-workspace", text)
+            self.assertIn("Do not hand-edit", text)
+            # pointer expanded using alpha root
+            self.assertIn(str(self.a), text)
+
+            written = ops.vault_op("project", host="both", write=True)
+            self.assertTrue(written["ok"])
+            self.assertTrue(written["files"]["cursor"]["written"])
+            self.assertTrue(written["files"]["claude"]["written"])
+            self.assertTrue(cursor_out.is_file())
+            self.assertTrue(claude_out.is_file())
+            claude_body = claude_out.read_text(encoding="utf-8")
+            self.assertIn("name: apo-desk", claude_body)
+            self.assertNotIn("alwaysApply", claude_body)
 
     def test_merge_with_desk_file(self):
         desk = self.tmp / "desk.yaml"
@@ -195,6 +244,8 @@ class VaultOpTest(unittest.TestCase):
         self.assertEqual(out["vaults"]["beta"]["role"], "employer")
         self.assertIn("usage-contract", out["vaults"]["alpha"]["contract_ids"])
         self.assertEqual(out["desk_meta"]["source"], "file")
+        self.assertIn("habits", out["desk"])
+        self.assertIn("pointers", out["merge_rules"]["desk_overlay_keys"])
 
     def test_merge_defaults_without_desk(self):
         missing = self.tmp / "no-such-desk.yaml"
