@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, core, deferred
+from . import config, core, deferred, git_sync
 
 
 class PathDebouncer:
@@ -187,6 +187,7 @@ def _watch_one(
 
     debouncer = PathDebouncer(debounce_s)
     event_queue: queue.Queue[str] = queue.Queue()
+    sync_ctl = git_sync.VaultSyncController(root, verbose=verbose)
 
     ignore_res = core._compile_ignore(core._load_ignore())
 
@@ -270,8 +271,10 @@ def _watch_one(
             due_poll = observer is None or (now - last_scan) >= reconcile
 
             try:
+                apo_write_batch = False
                 if woke or due_poll:
                     for raw in deferred.consume_index_queue(collection):
+                        apo_write_batch = True
                         p = _note_path(root, raw)
                         if p is None:
                             try:
@@ -282,6 +285,9 @@ def _watch_one(
                                 p = None
                         if p is not None:
                             debouncer.touch(p, now=now)
+
+                    if apo_write_batch:
+                        sync_ctl.note_apo_writes()
 
                     stats = core.process_queues(
                         collection,
@@ -312,6 +318,12 @@ def _watch_one(
                         vs = stats.vault_stats
                         parts.append(f"scan +{vs.added} ~{vs.changed} -{vs.removed}")
                     print(f"  [{label}] indexed: {', '.join(parts)}", flush=True)
+
+                try:
+                    sync_ctl.tick(index_busy=debouncer.waiting() > 0)
+                except Exception as sync_err:
+                    if verbose:
+                        print(f"  [{label}] git-sync tick error: {sync_err}", flush=True)
 
                 if due_poll:
                     last_scan = now

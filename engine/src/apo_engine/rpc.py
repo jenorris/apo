@@ -281,6 +281,21 @@ def _delete(body: dict[str, Any]) -> dict[str, Any]:
     return ops.delete_note(path, vault=str(body.get("vault") or ""))
 
 
+@_route("POST", "/v1/git_sync")
+def _git_sync(body: dict[str, Any]) -> dict[str, Any]:
+    action = body.get("action", "status")
+    if not isinstance(action, str) or not action.strip():
+        return {"ok": False, "error": "bad_request", "message": "`action` string required"}
+    message = body.get("message", "")
+    if message is not None and not isinstance(message, str):
+        return {"ok": False, "error": "bad_request", "message": "`message` must be a string"}
+    return ops.git_sync_op(
+        action.strip(),
+        message=str(message or ""),
+        vault=str(body.get("vault") or ""),
+    )
+
+
 def _json_bytes(payload: dict[str, Any], status: int) -> tuple[bytes, int]:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8"), status
 

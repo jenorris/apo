@@ -17,7 +17,7 @@ Do **not** confuse templates here with a setting in MCP config. Opt-in means: pu
 | [para.md](./para.md) | **Ship** | Life OS / work PKB — projects, areas, inbox |
 | [llm-wiki.md](./llm-wiki.md) | **Ship** | Research corpora — compile raw sources into a maintained wiki |
 | [okf-bundle.md](./okf-bundle.md) | **Ship** | OKF Knowledge Bundle — `okf_type` primary; vault YAML stamp/soft/hard |
-| [git.md](./git.md) | **Ship** | Vault backup / remote + `history(path=)` git log gate — [git-contract.schema.yaml](./git-contract.schema.yaml) |
+| [git.md](./git.md) | **Ship** | Vault backup / remote + `history(path=)` + optional `sync.enabled` commit/pull — [git-contract.schema.yaml](./git-contract.schema.yaml) |
 
 **Existing vault:** [../onboard-prompt.md](../onboard-prompt.md) — infer first; do not force a contract.
 

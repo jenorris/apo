@@ -1,8 +1,9 @@
-"""Git contract telegraph loader + file-level history (no push/pull).
+"""Git contract loader + file-level history.
 
 Active when ``system/config/git-contract.schema.yaml`` exists under the vault
 root **and** the vault is inside a git work tree (own ``.git`` or a parent
-checkout such as Meta under ``jenorris/foam``). Used by ``history`` for path mode.
+checkout). Used by ``history`` for path mode and by ``git_sync`` when
+``sync.enabled`` is set (see ``apo_engine.git_sync``).
 """
 
 from __future__ import annotations

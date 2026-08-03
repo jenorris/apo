@@ -188,6 +188,7 @@ _MCP_INSTRUCTIONS = (
     "omit where or pass where={} to list; "
     "status sweeps pass fields=[status,okf_type,last_checked,title]); "
     "history=browse by mtime (first_line) or file git log when path= + git contract; "
+    "git_sync=status|run|pull|clear_block when git contract sync.enabled; "
     "recent_activity=frozen alias of history through v0.1.x; status sweeps → filter_notes. "
     "Hits expose chunk_hash/heading for append/expand (skip read when possible). "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
@@ -658,6 +659,36 @@ async def recent_activity(
     """Frozen alias of history through v0.1.x — prefer history. Same args/payload."""
     return await asyncio.to_thread(
         apo_ops.recent_activity, limit=limit, folder=folder, path=path, vault=vault
+    )
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def git_sync(
+    action: Annotated[
+        str,
+        Field(description="status | run | pull | clear_block"),
+    ] = "status",
+    message: Annotated[
+        str,
+        Field(
+            description=(
+                "Commit message for action=run. Empty → template from git contract "
+                "(auto path uses template; agents should pass a message)."
+            ),
+        ),
+    ] = "",
+    vault: str = "",
+) -> dict:
+    """Git contract sync: status, commit+push (run), ff-only pull, or clear_block. Opt-in via sync.enabled."""
+    return await asyncio.to_thread(
+        apo_ops.git_sync_op, action, message=message, vault=vault
     )
 
 

@@ -2,11 +2,17 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
-## [Unreleased]
+## [0.3.0rc1] — 2026-08-03
 
 ### Added
 
+- **Git contract sync** — opt-in `sync.enabled` in `git-contract.schema.yaml`: watcher debounce commit+push after Apo writes; idle scheduled `git pull --ff-only`; MCP/RPC `git_sync` (`status` \| `run` \| `pull` \| `clear_block`). Conflicts / non-ff / push reject → `blocked` + `.apo/git-sync-status.json`. Never force-push; enforce `never_commit`. Spec: Meta `projects/apo-git-sync/mvp`.
+- Lean tool count **13** / full **19** (`git_sync`).
 - **Agent habit tips** — successful `search` without `folder=` returns soft `tip` to scope; second in-process write to the same path without `expected_mtime` tips to thread mtime. See `docs/agent-throughput.md`.
+
+### Notes
+
+- Release candidate for **v0.3.0**. `recent_activity` removal still targeted at final 0.3.0.
 
 ## [0.2.0] — 2026-07-29
 

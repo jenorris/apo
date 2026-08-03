@@ -1,12 +1,12 @@
 # Contract template: Git (backup / remote)
 
-**Status:** optional template · **Behaviors + machine telegraph** · pairs with any layout (PARA, FamilyOS, OKF, llm-wiki)
+**Status:** optional template · **Behaviors + machine telegraph + optional sync** · pairs with any layout (PARA, FamilyOS, OKF, llm-wiki)
 
 Use when the vault is (or should be) a **git checkout** with an off-machine remote. Markdown on disk remains the source of truth for agents; the remote is the durable off-machine copy. The Apo **index is rebuildable** — never treat `index.db` as backup.
 
 Encode the live contract in the vault (`system/config/git.md` + `system/config/git-contract.schema.yaml`). This file is a **template** to copy — not live Apo config.
 
-**Runtime today:** mostly telegraph. Apo loads the YAML only to gate `history(path=…)` file-level git log. MCP / engine still do **not** pull, push, or enforce never-commit. Gateway `GitRemote` sync stays out of scope.
+**Runtime:** Apo loads the YAML to (1) gate `history(path=…)` file-level git log and (2) optionally run **git sync** when `sync.enabled: true` (write-debounce commit+push; idle scheduled `pull --ff-only`; MCP/RPC `git_sync`). Gateway `GitRemote` stays out of scope.
 
 ## Stance
 
@@ -15,7 +15,7 @@ Encode the live contract in the vault (`system/config/git.md` + `system/config/g
 | **Git remote** | Off-machine SoT for the markdown tree (clone/restore) |
 | **Vault files** | What humans and agents edit day to day |
 | **Apo index** | Rebuildable search cache — not a backup medium |
-| **This contract** | Declares remote, never-commit, LFS, restore drill for agents/humans |
+| **This contract** | Declares remote, never-commit, LFS, restore, optional sync |
 
 ## What to encode
 
@@ -27,6 +27,7 @@ Encode the live contract in the vault (`system/config/git.md` + `system/config/g
 | `backup.expectation` / `cadence_hint` | When humans/agents should expect a push |
 | `lfs` | Whether Git LFS is in play; `.sha256` sidecars in plain git when binaries exist |
 | `never_commit` | Globs that must stay out of the remote |
+| `sync` | Opt-in engine sync (`enabled`, debounce, pull interval, message template) |
 | `restore` | Owner + one-line restore drill |
 
 ## Machine contract (encode in the vault)
@@ -42,15 +43,22 @@ Fill `remote` / `host` for *this* vault. Keep `never_commit` aligned with the va
 
 1. **Never commit** paths matching `never_commit` (especially `*.db`, `.env`, `.apo/`, Passport keys, `*.sqlite`).
 2. **Do not** force-push the vault’s default branch.
-3. **Do not** treat Apo MCP writes as a git commit — files land on disk; git is a separate human/agent step.
-4. Commit / push only when the human asks, or when a vault runbook explicitly requires it after a consequential batch.
+3. Apo MCP writes update files on disk; with `sync.enabled`, the watcher debounces commit+push. Prefer MCP `git_sync` for status / force run / clear_block.
+4. Tool-triggered `git_sync` `action=run` should pass an agent `message`; auto commits use `sync.commit_message_template` (`{iso_local}` → `YYYY-MM-DD HH:MM ET`).
 5. When binaries are stored: use Git LFS if `lfs.enabled`; keep `.sha256` digest sidecars in **plain** git (not LFS pointers only).
 6. After a bare-metal restore: clone → point `APO_VAULTS` / `APO_NOTES_ROOT` at the checkout → `just index --vault <id>` (or equivalent). Do not copy old `index.db` from backups unless debugging.
-7. **History:** prefer MCP/RPC `history`. Browse mode (no `path`) = index mtime. With `path=` and this contract active (YAML + `.git`), Apo returns **file-level** `git log` commits. `recent_activity` is a frozen alias through **v0.1.x** — remove in **v0.2.0**.
+7. **History:** prefer MCP/RPC `history`. Browse mode (no `path`) = index mtime. With `path=` and this contract active (YAML + `.git`), Apo returns **file-level** `git log` commits. `recent_activity` is a frozen alias through **v0.1.x** — remove in **v0.3.0**.
 
-## Runtime (partial — history only)
+## Runtime
 
-Apo loads `system/config/git-contract.schema.yaml` only to detect “contract active” for `history(path=…)`. Still **no** automated pull/push, and no write-time validation of this YAML.
+| Feature | Gate |
+|---------|------|
+| `history(path=)` git log | Contract YAML + work tree |
+| Auto commit+push | `sync.enabled` + Apo write debounce (watcher) |
+| Auto pull | `sync.enabled` + idle schedule (`git pull --ff-only`) |
+| MCP/RPC `git_sync` | Contract active; `action=status\|run\|pull\|clear_block` |
+
+On conflict / non-ff / push reject: **stop and surface** — status in `.apo/git-sync-status.json` (`state=blocked`) and tool payload. No force-push, no auto-resolve.
 
 ## Suggested `.gitignore` floor
 
@@ -71,9 +79,9 @@ Add vault-specific secrets and local UI state as needed. Match `never_commit` in
 
 ## Out of scope
 
-- Automated `git pull` / `git push` from Apo MCP or `apo-engine`
+- Auto-resolve / stash / reset / rebase pulls
 - Laravel gateway `GitRemote` drivers, webhooks, or ECS git-sync sidecars
-- Engine env vars (`APO_GIT_*`) or write-time validation of this YAML
+- Pull-before-commit on the write path (pull is idle/scheduled only)
 - Choosing a host for you — fill `remote` when the vault has one
 
 ## Mixing

@@ -1,7 +1,7 @@
 # Apo git contract — template / example
 # Copy to <vault>/system/config/git-contract.schema.yaml and fill remote/host.
 # Prose twin: system/config/git.md (from docs/contracts/git.md)
-# Runtime: telegraph only — apo-engine does not load this file yet.
+# Runtime: history(path=) gate + optional sync (commit/push/pull) when sync.enabled.
 
 git_contract_version: "0.1"
 remote: "https://github.com/OWNER/REPO.git"
@@ -20,6 +20,13 @@ never_commit:
   - ".apo/"
   - "**/Passport*.key"
   - "*.sqlite"
+# Opt-in engine sync (apo-engine watch + MCP/RPC git_sync). Default off when omitted.
+sync:
+  enabled: false
+  debounce_seconds: 45
+  pull_interval_seconds: 900
+  commit_message_template: "apo: sync {iso_local}"
+  auto_push: true
 restore:
   owner: "jeremy"
   drill: "clone remote → point APO_VAULTS root → just index --vault <id>"

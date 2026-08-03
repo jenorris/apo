@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from apo_engine import __version__, config, core, deferred as index_deferred, git_contract, okf as apo_okf, vaults
+from apo_engine import __version__, config, core, deferred as index_deferred, git_contract, git_sync, okf as apo_okf, vaults
 from apo_engine.agent_args import resolve_top_k, resolve_where, shape_note_read, project_frontmatter
 from apo_engine.markdown_patch import (
     PatchError,
@@ -1131,3 +1131,36 @@ def delete_note(path: str, *, vault: str = "") -> dict[str, Any]:
     if not purged:
         out["warning"] = "purge not queued — watcher may retain stale chunks"
     return _attach_watcher_tip(out)
+
+
+def git_sync_op(
+    action: str = "status",
+    *,
+    message: str = "",
+    vault: str = "",
+) -> dict[str, Any]:
+    """Git contract sync: status | run | pull | clear_block.
+
+    ``run`` commits all dirty paths except ``never_commit`` / gitignore, then pushes.
+    Auto path uses template message; pass ``message`` to override (tool-triggered).
+    """
+    try:
+        b = _binding(vault)
+        root = b.resolved().root
+    except OpsError as e:
+        return _err(error=e.code, message=e.message)
+
+    act = (action or "status").strip().lower()
+    if act not in ("status", "run", "pull", "clear_block"):
+        return _err(
+            error="bad_action",
+            message="action must be status|run|pull|clear_block",
+            vault=b.name,
+        )
+    out = git_sync.run_action(
+        root,
+        act,  # type: ignore[arg-type]
+        message=(message or "").strip() or None,
+    )
+    out.setdefault("vault", b.name)
+    return out
