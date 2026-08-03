@@ -29,11 +29,15 @@ the same path (including `move_note` on **src**, `send_note` on **dst**).
 
 | Role | Meaning | Ops | Wire keys |
 |------|---------|-----|-----------|
-| **target** | Section identity / append location | `replace_section`, `append`, `prepend` | `heading` (canonical), `target` (alias) |
-| **scope** | Search bound for find/replace | `replace_text` | `scope.heading` (canonical), top-level `heading` (alias) |
+| **target** | Section identity / append location | `replace_section`, `append`, `prepend` | `heading` (canonical), `target` (alias), **`chunk_hash`** (search hit) |
+| **scope** | Search bound for find/replace | `replace_text` | `scope.heading` (canonical), top-level `heading` (alias), **`chunk_hash`** / `scope.chunk_hash` |
 
 Conflicting alias pairs (`heading` vs `scope.heading`, or `target` vs `heading`)
 raise validation / `invalid_op` errors. Prefer canonical keys in new calls.
+
+`chunk_hash` is resolved to a heading before apply. If the hash is missing from
+the index but the op still has `heading` (and the note `path` is known), Apo
+retries by heading and returns a soft `tip` to re-search.
 
 ## Ops (canonical shapes)
 
@@ -41,9 +45,9 @@ raise validation / `invalid_op` errors. Prefer canonical keys in new calls.
 |----|----------|----------|
 | `set_field` | `field` | `value` |
 | `delete_field` | `field` | — |
-| `replace_text` | `find` | `replace`, `count`, `scope.heading` (**or** alias `heading`) |
-| `replace_section` | `heading` (**or** alias `target`) | `text` |
-| `append` / `prepend` | `text` | `heading` (**or** alias `target`), `position` |
+| `replace_text` | `find` | `replace`, `count`, `scope.heading` / `heading`, `chunk_hash` / `scope.chunk_hash` |
+| `replace_section` | `heading` \| `target` \| `chunk_hash` | `text` |
+| `append` / `prepend` | `text` | `heading` \| `target` \| `chunk_hash`, `position` |
 | `append_eof` | `text` | — |
 
 ```json

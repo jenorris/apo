@@ -36,6 +36,7 @@ class DeleteFieldOp(_OpBase):
 
 class ReplaceTextScope(_OpBase):
     heading: str | None = None
+    chunk_hash: str | None = None
 
 
 def _conflict(a: str, b: str, *, left: str, right: str) -> None:
@@ -51,32 +52,45 @@ class ReplaceTextOp(_OpBase):
     scope: ReplaceTextScope | None = None
     # Alias for scope.heading — agents often flatten "heading" to the top level.
     heading: str | None = None
+    # Alias for scope.chunk_hash — search hit → scoped replace without re-read.
+    chunk_hash: str | None = None
 
     @model_validator(mode="before")
     @classmethod
     def _alias_heading_to_scope(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
+        data = dict(data)
         top = data.get("heading")
-        if top is None:
-            return data
+        top_ch = data.get("chunk_hash")
         scope = data.get("scope")
+        if top is None and top_ch is None:
+            return data
         if scope is None:
-            return {**data, "scope": {"heading": top}}
-        if isinstance(scope, dict):
+            scope = {}
+        elif not isinstance(scope, dict):
+            return data
+        scope = dict(scope)
+        if top is not None:
             sh = scope.get("heading")
             if sh is not None:
                 _conflict(str(top), str(sh), left="heading", right="scope.heading")
-            return {**data, "scope": {**scope, "heading": top}}
-        return data
+            scope["heading"] = top
+        if top_ch is not None:
+            sch = scope.get("chunk_hash")
+            if sch is not None:
+                _conflict(str(top_ch), str(sch), left="chunk_hash", right="scope.chunk_hash")
+            scope["chunk_hash"] = top_ch
+        return {**data, "scope": scope}
 
 
 class ReplaceSectionOp(_OpBase):
     op: Literal["replace_section"]
-    heading: str
+    heading: str | None = None
     text: str = ""
     # Alias for heading (target role).
     target: str | None = None
+    chunk_hash: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -91,12 +105,21 @@ class ReplaceSectionOp(_OpBase):
             _conflict(str(target), str(heading), left="target", right="heading")
         return {**data, "heading": target}
 
+    @model_validator(mode="after")
+    def _require_anchor(self) -> ReplaceSectionOp:
+        if not (self.heading or self.chunk_hash):
+            raise ValueError(
+                "replace_section requires heading|target or chunk_hash"
+            )
+        return self
+
 
 class AppendOp(_OpBase):
     op: Literal["append"]
     text: str
     heading: str | None = None
     target: str | None = None
+    chunk_hash: str | None = None
     position: Literal["start", "end"] = "end"
 
     @model_validator(mode="before")
@@ -118,6 +141,7 @@ class PrependOp(_OpBase):
     text: str
     heading: str | None = None
     target: str | None = None
+    chunk_hash: str | None = None
     position: Literal["start", "end"] = "start"
 
     @model_validator(mode="before")
@@ -156,11 +180,12 @@ OPS_FIELD_DESC = (
     "Deterministic mutators; discriminated by op. "
     "Keys: field/find/replace — never key/old/new. "
     "Ops: set_field(field,value); delete_field(field); "
-    "replace_text(find,replace,scope.heading|heading); "
-    "replace_section(heading|target,text); "
-    "append/prepend(text,heading|target); append_eof(text). "
+    "replace_text(find,replace,scope.heading|heading|chunk_hash); "
+    "replace_section(heading|target|chunk_hash,text); "
+    "append/prepend(text,heading|target|chunk_hash); append_eof(text). "
     "Standalone add → append_note. "
-    "Aliases frozen: target≡heading; replace_text heading≡scope.heading."
+    "Aliases frozen: target≡heading; replace_text heading≡scope.heading; "
+    "chunk_hash≡search hit (stale → heading fallback when path+heading known)."
 )
 
 PATCH_NOTES_ITEMS_DESC = (
@@ -191,15 +216,18 @@ class PatchNotesItem(BaseModel):
 def normalize_op_dict(data: dict[str, Any]) -> dict[str, Any]:
     """Normalize aliases for the markdown apply path (dict or model dump).
 
-    - replace_text: top-level ``heading`` → ``scope.heading``
+    - replace_text: top-level ``heading`` → ``scope.heading``;
+      top-level ``chunk_hash`` → ``scope.chunk_hash`` (resolved later in ops)
     - replace_section / append / prepend: ``target`` → ``heading``
     Alias keys are stripped so apply_op sees one canonical shape.
+    ``chunk_hash`` is kept until ``materialize_ops_chunk_hashes``.
     """
     data = dict(data)
     kind = data.get("op")
 
     if kind == "replace_text":
         top = data.pop("heading", None)
+        top_ch = data.pop("chunk_hash", None)
         scope_raw = data.get("scope")
         scope: dict[str, Any] = dict(scope_raw) if isinstance(scope_raw, dict) else {}
         sh = scope.get("heading")
@@ -207,8 +235,18 @@ def normalize_op_dict(data: dict[str, Any]) -> dict[str, Any]:
             _conflict(str(top), str(sh), left="heading", right="scope.heading")
         if top is not None:
             scope["heading"] = top
+        sch = scope.get("chunk_hash")
+        if top_ch is not None and sch is not None:
+            _conflict(str(top_ch), str(sch), left="chunk_hash", right="scope.chunk_hash")
+        if top_ch is not None:
+            scope["chunk_hash"] = top_ch
+        cleaned: dict[str, Any] = {}
         if scope.get("heading") is not None:
-            data["scope"] = {"heading": scope["heading"]}
+            cleaned["heading"] = scope["heading"]
+        if scope.get("chunk_hash") is not None:
+            cleaned["chunk_hash"] = scope["chunk_hash"]
+        if cleaned:
+            data["scope"] = cleaned
         else:
             data.pop("scope", None)
         data.pop("target", None)

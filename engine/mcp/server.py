@@ -186,7 +186,8 @@ _MCP_INSTRUCTIONS = (
     "status sweeps pass fields=[status,okf_type,last_checked,title]); "
     "history=browse by mtime (first_line) or file git log when path= + git contract; "
     "status sweeps → filter_notes. "
-    "Hits expose chunk_hash/heading for append/expand (skip read when possible). "
+    "Hits expose chunk_hash/heading for append/expand (skip read when possible; "
+    "append_note may take chunk_hash alone). "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
     "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
     "index.db writer and wakes on enqueue. Multi-vault: pass vault= "
@@ -345,8 +346,8 @@ async def write_note(
 
 @mcp.tool(annotations=_WRITE)
 async def append_note(
-    path: str,
     text: str,
+    path: str = "",
     heading: str | None = None,
     chunk_hash: str | None = None,
     position: Literal["end", "start"] = "end",
@@ -362,7 +363,7 @@ async def append_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Preferred add for session log / History / post-search text. Anchor: chunk_hash → heading → EOF. ``text`` is body only (do not repeat the heading — a leading duplicate of the anchor is stripped). Batch with other mutators → patch_note."""
+    """Preferred add for session log / History / post-search text. Anchor: chunk_hash (path optional) → heading → EOF. Stale hash + path+heading falls back with tip. ``text`` is body only (do not repeat the heading — a leading duplicate of the anchor is stripped). Batch with other mutators → patch_note."""
     return await asyncio.to_thread(
         apo_ops.append_note,
         path,

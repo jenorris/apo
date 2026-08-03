@@ -22,6 +22,7 @@ from apo_engine.markdown_patch import (
     normalize_lines,
     section_from_chunk,
 )
+from apo_engine.chunk_anchor import materialize_ops_chunk_hashes, resolve_chunk_anchor
 from apo_engine.mcp_backend import shape_search_hits
 from apo_engine.patch_ops import ops_to_dicts
 from apo_engine.validation_hints import flatten_patch_failure_error
@@ -739,8 +740,8 @@ def write_note(
 
 
 def append_note(
-    path: str,
-    text: str,
+    path: str = "",
+    text: str = "",
     *,
     heading: str | None = None,
     chunk_hash: str | None = None,
@@ -749,8 +750,41 @@ def append_note(
     expected_mtime: float | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
+    path = (path or "").replace("\\", "/").strip()
+    ch = (chunk_hash or "").strip() or None
+    heading = (heading or "").strip() or None
+    tip: str | None = None
+    from_hash = False
+    hash_start: int | None = None
+    hash_level: int | None = None
+    resolved_heading: str | None = heading
+
     try:
         b = _binding(vault)
+    except OpsError as e:
+        return _err(path=path or None, error=e.code, message=e.message)
+
+    if ch:
+        resolved = resolve_chunk_anchor(
+            b, ch, path=path or None, heading_fallback=heading
+        )
+        if not resolved.get("ok"):
+            return _err(**{k: v for k, v in resolved.items() if k != "ok"})
+        path = str(resolved["path"])
+        tip = resolved.get("tip")
+        from_hash = bool(resolved.get("from_hash"))
+        if resolved.get("start_line") is not None:
+            hash_start = int(resolved["start_line"])
+        if resolved.get("heading_level") is not None:
+            hash_level = int(resolved["heading_level"])
+        resolved_heading = (resolved.get("heading") or heading or "").strip() or None
+    elif not path:
+        return _err(
+            error="bad_request",
+            message="append_note requires path= or chunk_hash=",
+        )
+
+    try:
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -775,35 +809,16 @@ def append_note(
     lines = normalize_lines(content)
 
     try:
-        section = None
         anchor_label = "EOF"
-        if chunk_hash:
-            with vaults.bind(b):
-                chunk = core.lookup_chunk(chunk_hash, include_text=False)
-            if not chunk:
-                return _err(
-                    path=path,
-                    error="anchor_not_found",
-                    message=f"chunk_hash {chunk_hash!r} not found",
-                )
-            chunk_path = (chunk.get("path") or "").replace("\\", "/")
-            want = path.replace("\\", "/")
-            if chunk_path and chunk_path != want:
-                return _err(
-                    path=path,
-                    error="path_mismatch",
-                    message=f"chunk_hash belongs to {chunk_path!r}, not {path!r}",
-                )
-            section = section_from_chunk(
-                lines,
-                int(chunk.get("start_line", 1)),
-                int(chunk.get("heading_level", 0)),
-            )
-            anchor_label = section.title or chunk_hash
+        if from_hash and hash_start is not None:
+            section = section_from_chunk(lines, hash_start, int(hash_level or 0))
+            anchor_label = section.title or ch or "section"
             merged, detail = apply_append(lines, text, section=section, position=position)
-        elif heading:
-            merged, detail = apply_append(lines, text, heading=heading, position=position)
-            anchor_label = heading
+        elif resolved_heading:
+            merged, detail = apply_append(
+                lines, text, heading=resolved_heading, position=position
+            )
+            anchor_label = resolved_heading
         else:
             merged, detail = apply_append(lines, text, heading=None, position="end")
     except PatchError as e:
@@ -815,7 +830,7 @@ def append_note(
     full.write_text(new_content, encoding="utf-8")
     _enqueue_index(b, full)
 
-    return _finalize_write(
+    out = _finalize_write(
         {
             "ok": True,
             "path": path,
@@ -830,6 +845,9 @@ def append_note(
         path=path,
         expected_mtime=expected_mtime,
     )
+    if tip:
+        out = _attach_tip(out, tip)
+    return out
 
 
 def patch_note(
@@ -859,7 +877,18 @@ def patch_note(
 
     content = full.read_text(encoding="utf-8")
     try:
-        result = apply_patch(content, ops_to_dicts(ops), strict=strict)
+        dict_ops = ops_to_dicts(ops)
+    except (TypeError, ValueError) as e:
+        return _err(path=path, error="bad_request", message=str(e))
+
+    materialized = materialize_ops_chunk_hashes(b, path, dict_ops)
+    if not materialized.get("ok"):
+        return _err(**{k: v for k, v in materialized.items() if k != "ok"})
+    dict_ops = materialized["ops"]
+    hash_tips: list[str] = list(materialized.get("tips") or [])
+
+    try:
+        result = apply_patch(content, dict_ops, strict=strict)
     except TypeError as e:
         return _err(path=path, error="bad_request", message=str(e))
 
@@ -883,6 +912,8 @@ def patch_note(
             )
         elif result.suggestions:
             out_dry["suggestions"] = result.suggestions
+        for t in hash_tips:
+            out_dry = _attach_tip(out_dry, t)
         return out_dry
 
     if not result.ok and (strict or result.applied == 0):
@@ -933,9 +964,12 @@ def patch_note(
     out.update(okf_meta)
     if verbose:
         out["lines_added"] = result.lines_added
-    return _finalize_write(
+    out = _finalize_write(
         out, vault=b.name, path=path, expected_mtime=expected_mtime
     )
+    for t in hash_tips:
+        out = _attach_tip(out, t)
+    return out
 
 
 _PATCH_NOTES_MAX_ITEMS = 20

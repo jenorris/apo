@@ -8,9 +8,9 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 2. **Known path** → `read_note` / `append_note` / `patch_note` / `write_note` (skip search)
 3. **Meaning recall** → `search_notes` with **`folder=`** when PARA bucket is known
 4. **Need more than a snippet** → `expand_chunk(chunk_hash)` (not full-file `read_note`)
-5. **Append/edit from a hit** → use `chunk_hash` / `heading` — do **not** `read_note` only to obtain an anchor
+5. **Append/edit from a hit** → `append_note(chunk_hash=…)` (path optional) or `patch_note` op with `chunk_hash` — do **not** `read_note` only to obtain an anchor
 6. **Dual-write** → parallel tools in one turn, same `vault=`
-7. **Multi-path patch** → `patch_notes` (not session log)
+7. **Multi-path patch** → `patch_note(items=…)` (not session log)
 
 ## Hard defaults
 
@@ -23,8 +23,8 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 ## Fast path (cheat card)
 
 ```
-filter(+fields) → search(+folder) → expand_chunk → append(chunk_hash|heading)
-                                              ↘ patch(set_field…) + expected_mtime
+filter(+fields) → search(+folder) → expand_chunk → append(chunk_hash)  # path optional
+                                              ↘ patch(…, chunk_hash|heading) + expected_mtime
 ```
 
 ## Soft engine tips
@@ -33,6 +33,7 @@ Successful responses may include a non-fatal **`tip`** field:
 
 - `search_notes` without `folder=` → tip to pass `folder=`
 - Second in-process write to the same path without `expected_mtime` → tip to thread mtime
+- Stale `chunk_hash` with path+heading fallback → tip to re-search for a fresh hash
 
 Do not treat `tip` as failure; `warning` remains for watcher / path issues.
 

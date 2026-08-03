@@ -190,24 +190,30 @@ def _write(body: dict[str, Any]) -> dict[str, Any]:
 def _append(body: dict[str, Any]) -> dict[str, Any]:
     path = body.get("path")
     text = body.get("text")
-    if not isinstance(path, str) or not path.strip():
-        return {"ok": False, "error": "bad_request", "message": "`path` string required"}
+    chunk_hash = body.get("chunk_hash")
+    path_s = path.strip() if isinstance(path, str) else ""
+    ch_s = chunk_hash.strip() if isinstance(chunk_hash, str) else ""
+    if not path_s and not ch_s:
+        return {
+            "ok": False,
+            "error": "bad_request",
+            "message": "`path` or `chunk_hash` required",
+        }
     if not isinstance(text, str):
         return {"ok": False, "error": "bad_request", "message": "`text` string required"}
     position = str(body.get("position") or "end")
     if position not in ("end", "start"):
         return {"ok": False, "error": "bad_request", "message": "`position` must be end|start"}
     heading = body.get("heading")
-    chunk_hash = body.get("chunk_hash")
     if heading is not None and not isinstance(heading, str):
         return {"ok": False, "error": "bad_request", "message": "`heading` must be a string"}
     if chunk_hash is not None and not isinstance(chunk_hash, str):
         return {"ok": False, "error": "bad_request", "message": "`chunk_hash` must be a string"}
     return ops.append_note(
-        path,
+        path_s,
         text,
         heading=heading,
-        chunk_hash=chunk_hash,
+        chunk_hash=ch_s or None,
         position=position,  # type: ignore[arg-type]
         create=bool(body.get("create")),
         expected_mtime=_opt_float(body, "expected_mtime"),

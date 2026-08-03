@@ -53,6 +53,10 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "content": "append_note uses text= (not content). For full overwrite use write_note(path, content).",
         "ops": "append_note has no ops — use patch_note for mutators, or append_note(path, text, heading=…).",
         "index": "append_note has no index= — writes always enqueue for apo-engine watch.",
+        "path": (
+            "append_note path= is optional when chunk_hash= is set (path derived from index). "
+            "Pass both as a guard, or path+heading to fall back if the hash is stale."
+        ),
     },
     "patch_note": {
         "text": "patch_note mutates via ops[] — put text on an op (append/replace_section), not top-level.",

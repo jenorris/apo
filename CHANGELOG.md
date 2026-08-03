@@ -2,6 +2,14 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [0.3.0rc5] — 2026-08-03
+
+### Changed
+
+- **`append_note`**: `path` optional when `chunk_hash` is set (path derived from the index; optional path remains a guard).
+- **`patch_note` ops**: `append` / `prepend` / `replace_section` / `replace_text` accept `chunk_hash` (or `scope.chunk_hash`) as target/scope; resolved to the innermost heading covering the chunk span.
+- **Stale-hash fallback**: on `anchor_not_found`, if `path` + `heading` from the search hit are still present, retry by heading and return a soft `tip` to re-search.
+
 ## [0.3.0rc4] — 2026-08-03
 
 ### Changed
