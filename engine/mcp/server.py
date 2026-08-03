@@ -186,7 +186,8 @@ _MCP_INSTRUCTIONS = (
     "filter_notes=frontmatter / YAML-note catalog (prefer where=; filters alias; "
     "omit where or pass where={} to list; "
     "status sweeps pass fields=[status,okf_type,last_checked,title]); "
-    "history=browse by mtime (first_line) or file git log when path= + git contract; "
+    "history=browse by mtime (since/until, preview=first|last, heading=, exclude=, fields=, chunk_hash) "
+    "or file git log when path= + git contract; "
     "status sweeps → filter_notes. "
     "Hits expose chunk_hash/heading for append/expand (skip read when possible; "
     "append_note may take chunk_hash alone). "
@@ -620,15 +621,64 @@ async def history(
             description=(
                 "Vault-relative note path for file-level history. "
                 "When set and the vault has an active git contract + .git, returns commits. "
-                "Empty → browse newest notes by mtime (optional folder=)."
+                "Empty → browse newest notes by mtime (optional folder=/since=/until=/preview=)."
             ),
         ),
     ] = "",
     vault: str = "",
+    since: Annotated[
+        str,
+        Field(description="Browse only: mtime lower bound (YYYY-MM-DD or ISO datetime, ET for date-only)."),
+    ] = "",
+    until: Annotated[
+        str,
+        Field(description="Browse only: mtime upper bound (YYYY-MM-DD = end of that ET day, or ISO datetime)."),
+    ] = "",
+    preview: Annotated[
+        Literal["first", "last"],
+        Field(
+            description=(
+                "Browse only: which chunk feeds first_line/chunk_hash — "
+                "first (default, ord 0) or last (tail; use for session logs)."
+            ),
+        ),
+    ] = "first",
+    heading: Annotated[
+        str,
+        Field(
+            description=(
+                "Browse only: scope chunk pick to this governing heading "
+                "(e.g. Session log) before applying preview=first|last."
+            ),
+        ),
+    ] = "",
+    exclude: Annotated[
+        list[str] | None,
+        Field(description="Browse only: path globs to drop (same rules as search_notes exclude)."),
+    ] = None,
+    fields: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "Browse only: optional frontmatter key projection on each note "
+                "(omit to skip frontmatter; [] = empty object)."
+            ),
+        ),
+    ] = None,
 ) -> dict:
-    """Browse newest notes by mtime, or file-level git history when path= is set (git contract)."""
+    """Browse newest notes by mtime (digest filters), or file-level git history when path= is set."""
     return await asyncio.to_thread(
-        apo_ops.history, limit=limit, folder=folder, path=path, vault=vault
+        apo_ops.history,
+        limit=limit,
+        folder=folder,
+        path=path,
+        vault=vault,
+        since=since,
+        until=until,
+        preview=preview,
+        heading=heading,
+        exclude=exclude,
+        fields=fields,
     )
 
 

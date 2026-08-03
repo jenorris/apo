@@ -19,7 +19,7 @@ new aliases without an agent-success regression and a docs bump.
 | Multi-path patch-only (N≥2) | **`patch_note`** with `items: [{path, ops, expected_mtime?}]` (max 20; XOR with path+ops) |
 | Move / host promote | **`place_note(src, dst, fields=?)`** — move if src in vault; else copy absolute host `.md` (leaves src) |
 | Status / frontmatter sweeps | `filter_notes(where=…, fields=["status","okf_type","last_checked","title"])` |
-| Browse by mtime / file git log | `history` (`path=` + git contract → commits) — status sweeps still use `filter_notes` |
+| Browse by mtime / file git log | `history` (`since`/`until`, `preview=first\|last`, `heading=`, `exclude=`, `fields=`, `chunk_hash`; `path=` + git contract → commits) — status sweeps still use `filter_notes` |
 
 Thread `mtime` from read/write into **`expected_mtime`** on the next mutate for
 the same path (`place_note` guards **src** for in-vault moves, **dst** for host copies).

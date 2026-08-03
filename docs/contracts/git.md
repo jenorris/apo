@@ -47,7 +47,7 @@ Fill `remote` / `host` for *this* vault. Keep `never_commit` aligned with the va
 4. Tool-triggered `git_sync` `action=run` should pass an agent `message`; auto commits use `sync.commit_message_template` (`{iso_local}` → `YYYY-MM-DD HH:MM ET`).
 5. When binaries are stored: use Git LFS if `lfs.enabled`; keep `.sha256` digest sidecars in **plain** git (not LFS pointers only).
 6. After a bare-metal restore: clone → point `APO_VAULTS` / `APO_NOTES_ROOT` at the checkout → `just index --vault <id>` (or equivalent). Do not copy old `index.db` from backups unless debugging.
-7. **History:** prefer MCP/RPC `history`. Browse mode (no `path`) = index mtime. With `path=` and this contract active (YAML + `.git`), Apo returns **file-level** `git log` commits.
+7. **History:** prefer MCP/RPC `history`. Browse mode (no `path`) = index mtime with optional `since`/`until`, `preview=first|last`, `heading=`, `exclude=`, `fields=` (returns `chunk_hash`). With `path=` and this contract active (YAML + `.git`), Apo returns **file-level** `git log` commits.
 
 ## Runtime
 

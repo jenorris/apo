@@ -392,9 +392,10 @@ class TestIndexLifecycle(VaultTestCase):
         core.index_vault(verbose=False)
         rows = core.recent_notes_preview(limit=5)
         self.assertTrue(rows)
-        path, _mt, preview = rows[0]
-        self.assertEqual(path, "t.md")
-        self.assertIn("preview", preview.lower())
+        self.assertEqual(rows[0]["path"], "t.md")
+        self.assertIn("preview", rows[0]["first_line"].lower())
+        self.assertTrue(rows[0].get("chunk_hash"))
+        self.assertEqual(rows[0].get("frontmatter", {}).get("title"), "Hello")
         self.assertEqual(core.frontmatter_field("t.md", "title"), "Hello")
 
     def test_snippet_chars_and_exclude_compile(self):

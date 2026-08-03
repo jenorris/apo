@@ -35,7 +35,7 @@ Arg names match MCP where possible. Prefer **`limit`** / **`where`** (aliases `t
 | POST | `/v1/filter` | `{where, folder?, limit?, offset?, fields?, vault?}` | frontmatter catalog — prefer `where`; `fields` projects FM keys |
 | POST | `/v1/expand` | `{chunk_hash, scope?, vault?}` | section or chunk |
 | POST | `/v1/backlinks` | `{path, limit?, vault?}` | wiki-link backlinks |
-| POST | `/v1/history` | `{limit?, folder?, path?, vault?}` | browse by mtime, or file git log when `path` + git contract |
+| POST | `/v1/history` | `{limit?, folder?, path?, vault?, since?, until?, preview?, heading?, exclude?, fields?}` | browse by mtime (digest filters), or file git log when `path` + git contract |
 | POST | `/v1/git_sync` | `{action, message?, vault?}` | git contract sync: `status` \| `run` \| `pull` \| `clear_block` |
 
 ### Write

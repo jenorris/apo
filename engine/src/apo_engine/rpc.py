@@ -147,11 +147,20 @@ def _backlinks(body: dict[str, Any]) -> dict[str, Any]:
 @_route("POST", "/v1/history")
 def _history(body: dict[str, Any]) -> dict[str, Any]:
     """Browse by mtime or file-level git history when path= is set."""
+    exclude = body.get("exclude")
+    fields = body.get("fields")
+    preview = body.get("preview") or "first"
     return ops.history(
         limit=int(body.get("limit") or 10),
         folder=str(body.get("folder") or ""),
         path=str(body.get("path") or ""),
         vault=str(body.get("vault") or ""),
+        since=str(body.get("since") or ""),
+        until=str(body.get("until") or ""),
+        preview=str(preview),
+        heading=str(body.get("heading") or ""),
+        exclude=exclude if isinstance(exclude, list) else None,
+        fields=fields if isinstance(fields, list) else None,
     )
 
 

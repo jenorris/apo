@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from apo_engine import __version__, config, core, deferred as index_deferred, git_contract, git_sync, okf as apo_okf, vaults
 from apo_engine.agent_args import resolve_top_k, resolve_where, shape_note_read, project_frontmatter
@@ -640,16 +641,55 @@ def backlinks(path: str, *, limit: int = 100, vault: str = "") -> dict[str, Any]
     }
 
 
+_HISTORY_TZ = ZoneInfo("America/New_York")
+
+
+def _parse_history_bound(
+    raw: str | None,
+    *,
+    end_of_day: bool,
+) -> tuple[float | None, str | None]:
+    """Parse ``since`` / ``until`` to unix epoch. Date-only uses America/New_York."""
+    s = (raw or "").strip()
+    if not s:
+        return None, None
+    try:
+        if len(s) == 10 and s[4] == "-" and s[7] == "-":
+            d = datetime.strptime(s, "%Y-%m-%d").date()
+            if end_of_day:
+                dt = datetime.combine(d, dt_time(23, 59, 59, 999999), tzinfo=_HISTORY_TZ)
+            else:
+                dt = datetime.combine(d, dt_time(0, 0, 0), tzinfo=_HISTORY_TZ)
+            return dt.timestamp(), None
+        normalized = s.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_HISTORY_TZ)
+        return dt.timestamp(), None
+    except ValueError:
+        return None, (
+            f"invalid {'until' if end_of_day else 'since'}={raw!r}; "
+            "use YYYY-MM-DD or ISO datetime"
+        )
+
+
 def history(
     *,
     limit: int = 10,
     folder: str = "",
     path: str = "",
     vault: str = "",
+    since: str = "",
+    until: str = "",
+    preview: str = "first",
+    heading: str = "",
+    exclude: list[str] | None = None,
+    fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """Browse by mtime, or file-level git history when ``path`` is set.
 
-    - No ``path``: index-backed recent notes by mtime.
+    - No ``path``: index-backed recent notes by mtime (optional since/until,
+      preview=first|last, heading=, exclude=, fields=).
     - With ``path`` + active git contract: ``source=git`` + commit list.
     - With ``path`` but no git contract / no ``.git``: ``source=mtime`` metadata only.
     """
@@ -688,56 +728,115 @@ def history(
 
         # No git contract: mtime + optional index first-line preview.
         modified = datetime.fromtimestamp(full.stat().st_mtime).isoformat(timespec="seconds")
-        preview = ""
+        preview_text = ""
+        chunk_hash = ""
+        chunk_heading = ""
         index_path = ensure_indexed_path(rel_path)
         with vaults.bind(b):
             try:
                 db = core.reader_connect()
                 db_row = db.execute(
-                    "SELECT f.mtime, COALESCE(substr(c.text, 1, 120), '') "
+                    "SELECT f.mtime, COALESCE(substr(c.text, 1, 120), ''), "
+                    "COALESCE(c.chunk_hash, ''), COALESCE(c.heading, '') "
                     "FROM files f LEFT JOIN chunks c ON c.path = f.path AND c.ord = 0 "
                     "WHERE f.path = ?",
                     (index_path,),
                 ).fetchone()
                 if db_row is None and index_path != rel_path:
                     db_row = db.execute(
-                        "SELECT f.mtime, COALESCE(substr(c.text, 1, 120), '') "
+                        "SELECT f.mtime, COALESCE(substr(c.text, 1, 120), ''), "
+                        "COALESCE(c.chunk_hash, ''), COALESCE(c.heading, '') "
                         "FROM files f LEFT JOIN chunks c ON c.path = f.path AND c.ord = 0 "
                         "WHERE f.path = ?",
                         (rel_path,),
                     ).fetchone()
                 if db_row:
                     modified = datetime.fromtimestamp(db_row[0]).isoformat(timespec="seconds")
-                    preview = (db_row[1] or "").replace("\n", " ").strip()
+                    preview_text = (db_row[1] or "").replace("\n", " ").strip()
+                    chunk_hash = db_row[2] or ""
+                    chunk_heading = db_row[3] or ""
             except Exception:
                 pass
-        return {
+        out_mtime: dict[str, Any] = {
             "ok": True,
             "path": rel_path,
             "source": "mtime",
             "modified": modified,
-            "first_line": preview,
+            "first_line": preview_text,
             "vault": b.name,
         }
+        if chunk_hash:
+            out_mtime["chunk_hash"] = chunk_hash
+        if chunk_heading:
+            out_mtime["heading"] = chunk_heading
+        return out_mtime
 
     # Browse mode
+    since_ts, since_err = _parse_history_bound(since, end_of_day=False)
+    if since_err:
+        return _err(error="bad_request", message=since_err)
+    until_ts, until_err = _parse_history_bound(until, end_of_day=True)
+    if until_err:
+        return _err(error="bad_request", message=until_err)
+    if since_ts is not None and until_ts is not None and since_ts > until_ts:
+        return _err(error="bad_request", message="since must be <= until")
+
+    mode = (preview or "first").strip().lower() or "first"
+    if mode not in ("first", "last"):
+        return _err(error="bad_request", message="preview must be 'first' or 'last'")
+    if fields is not None:
+        if not isinstance(fields, list) or any(not isinstance(x, str) for x in fields):
+            return _err(error="bad_request", message="fields must be a list of strings")
+    if exclude is not None:
+        if not isinstance(exclude, list) or any(not isinstance(x, str) for x in exclude):
+            return _err(error="bad_request", message="exclude must be a list of strings")
+
     try:
         base = _safe_resolve(root, folder) if folder else root
     except ValueError as e:
         return _err(error="bad_path", message=str(e))
     if not base.exists():
         return _err(error="not_found", message=f"folder not found: {folder}")
-    with vaults.bind(b):
-        rows = core.recent_notes_preview(limit, folder)
-    notes = [
-        {
-            "path": p,
-            "modified": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
-            "first_line": first_line.replace("\n", " ").strip(),
+    heading_clean = (heading or "").strip()
+    try:
+        with vaults.bind(b):
+            rows = core.recent_notes_preview(
+                limit,
+                folder,
+                since=since_ts,
+                until=until_ts,
+                preview=mode,
+                heading=heading_clean or None,
+                exclude=exclude,
+            )
+    except ValueError as e:
+        return _err(error="bad_request", message=str(e))
+    notes: list[dict[str, Any]] = []
+    for row in rows:
+        note: dict[str, Any] = {
+            "path": row["path"],
+            "modified": datetime.fromtimestamp(row["mtime"]).isoformat(timespec="seconds"),
+            "first_line": row.get("first_line") or "",
+            "chunk_hash": row.get("chunk_hash") or "",
         }
-        for p, mtime, first_line in rows
-    ]
-    return {"ok": True, "notes": notes, "vault": b.name}
+        ch_heading = row.get("heading") or ""
+        if ch_heading:
+            note["heading"] = ch_heading
+        if fields is not None:
+            note["frontmatter"] = project_frontmatter(row.get("frontmatter"), fields)
+        notes.append(note)
+    out: dict[str, Any] = {"ok": True, "notes": notes, "vault": b.name}
+    if since_ts is not None:
+        out["since"] = datetime.fromtimestamp(since_ts, tz=_HISTORY_TZ).isoformat(timespec="seconds")
+    if until_ts is not None:
+        out["until"] = datetime.fromtimestamp(until_ts, tz=_HISTORY_TZ).isoformat(timespec="seconds")
+    if mode != "first":
+        out["preview"] = mode
+    if heading_clean:
+        out["heading"] = heading_clean
+    if exclude:
+        out["exclude"] = list(exclude)
+    return out
 
 
 ###############################################################################

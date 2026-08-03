@@ -1832,32 +1832,134 @@ def recent_notes(limit: int = 10, folder: str = "") -> list[tuple[str, float]]:
 
 
 def recent_notes_preview(
-    limit: int = 10, folder: str = ""
-) -> list[tuple[str, float, str]]:
-    """(path, mtime, preview) with first-chunk text prefix — no vault file reads.
+    limit: int = 10,
+    folder: str = "",
+    *,
+    since: float | None = None,
+    until: float | None = None,
+    preview: str = "first",
+    heading: str | None = None,
+    exclude: list[str] | None = None,
+    preview_chars: int = 120,
+) -> list[dict[str, Any]]:
+    """Newest indexed notes by mtime with chunk preview — no vault file reads.
 
-    Joins ``chunks`` on ``ord = 0`` instead of a correlated subquery per row.
+    ``preview`` is ``first`` (lowest matching ord; default ord=0) or ``last``
+    (highest matching ord). Optional ``heading`` scopes the chunk pick to that
+    governing heading (case-insensitive exact). ``exclude`` uses the same glob
+    rules as search. Each row includes ``chunk_hash`` for expand/append.
     """
+    limit = max(0, int(limit))
+    if limit == 0:
+        return []
+    mode = (preview or "first").strip().lower()
+    if mode not in ("first", "last"):
+        raise ValueError("preview must be 'first' or 'last'")
+    chars = max(1, min(int(preview_chars), 2000))
+    heading_key = (heading or "").strip() or None
+
     db = reader_connect()
     folder_prefix = folder.replace("\\", "/").strip("/")
+    where: list[str] = []
+    params: list[Any] = []
     if folder_prefix:
-        sql = """
-            SELECT f.path, f.mtime, COALESCE(substr(c.text, 1, 120), '')
-            FROM files f
-            LEFT JOIN chunks c ON c.path = f.path AND c.ord = 0
-            WHERE f.path LIKE ? ESCAPE '\\'
-            ORDER BY f.mtime DESC LIMIT ?
-        """
-        rows = db.execute(sql, (_escape_like(folder_prefix) + "/%", limit)).fetchall()
+        where.append("f.path LIKE ? ESCAPE '\\'")
+        params.append(_escape_like(folder_prefix) + "/%")
+    if since is not None:
+        where.append("f.mtime >= ?")
+        params.append(float(since))
+    if until is not None:
+        where.append("f.mtime <= ?")
+        params.append(float(until))
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    # Chunk pick: default first = ord 0; with heading / last use MIN/MAX subquery.
+    # Heading match is breadcrumb-aware (exact, leaf after " › ", or segment).
+    _heading_match = (
+        "("
+        "lower(c2.heading) = lower(?) OR "
+        "lower(c2.heading) LIKE '% › ' || lower(?) OR "
+        "lower(c2.heading) LIKE lower(?) || ' › %' OR "
+        "lower(c2.heading) LIKE '% › ' || lower(?) || ' › %'"
+        ")"
+    )
+    if heading_key is None and mode == "first":
+        join_sql = "LEFT JOIN chunks c ON c.path = f.path AND c.ord = 0"
+        join_params: list[Any] = []
     else:
-        sql = """
-            SELECT f.path, f.mtime, COALESCE(substr(c.text, 1, 120), '')
-            FROM files f
-            LEFT JOIN chunks c ON c.path = f.path AND c.ord = 0
-            ORDER BY f.mtime DESC LIMIT ?
-        """
-        rows = db.execute(sql, (limit,)).fetchall()
-    return [(p, mt, preview or "") for p, mt, preview in rows]
+        agg = "MIN" if mode == "first" else "MAX"
+        if heading_key is None:
+            join_sql = (
+                "LEFT JOIN chunks c ON c.path = f.path AND c.ord = ("
+                f"SELECT {agg}(c2.ord) FROM chunks c2 WHERE c2.path = f.path)"
+            )
+            join_params = []
+        else:
+            join_sql = (
+                "LEFT JOIN chunks c ON c.path = f.path AND c.ord = ("
+                f"SELECT {agg}(c2.ord) FROM chunks c2 WHERE c2.path = f.path "
+                f"AND {_heading_match})"
+            )
+            join_params = [heading_key, heading_key, heading_key, heading_key]
+
+    excl_prefixes, excl_globs = _compile_excludes(exclude)
+    # Over-fetch when excluding so LIMIT still yields enough survivors.
+    fetch_n = limit
+    if excl_prefixes or excl_globs:
+        fetch_n = min(max(limit * 5, limit + 20), 500)
+
+    # first → leading chars; last → trailing chars (session-log digests).
+    if mode == "last":
+        text_expr = (
+            "COALESCE("
+            "CASE WHEN length(c.text) > ? "
+            "THEN substr(c.text, length(c.text) - ? + 1) "
+            "ELSE c.text END, '')"
+        )
+        text_params: list[Any] = [chars, chars]
+    else:
+        text_expr = "COALESCE(substr(c.text, 1, ?), '')"
+        text_params = [chars]
+
+    sql = f"""
+        SELECT f.path, f.mtime,
+               {text_expr},
+               COALESCE(c.chunk_hash, ''),
+               COALESCE(c.heading, ''),
+               f.frontmatter
+        FROM files f
+        {join_sql}
+        {where_sql}
+        ORDER BY f.mtime DESC
+        LIMIT ?
+    """
+    rows = db.execute(sql, [*text_params, *join_params, *params, fetch_n]).fetchall()
+
+    out: list[dict[str, Any]] = []
+    for path, mtime, text_preview, chunk_hash, chunk_heading, fm_raw in rows:
+        if _path_excluded(path, excl_prefixes, excl_globs):
+            continue
+        fm: dict[str, Any] | None = None
+        if fm_raw:
+            try:
+                parsed = json.loads(fm_raw)
+                if isinstance(parsed, dict):
+                    fm = parsed
+            except json.JSONDecodeError:
+                fm = None
+        out.append(
+            {
+                "path": path,
+                "mtime": float(mtime),
+                "first_line": (text_preview or "").replace("\n", " ").strip(),
+                "chunk_hash": chunk_hash or "",
+                "heading": chunk_heading or "",
+                "frontmatter": fm,
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
 
 
 def frontmatter_field(rel_path: str, field: str) -> Any:

@@ -75,11 +75,82 @@ class TestHistory(unittest.TestCase):
         self.assertIn("path", h["notes"][0])
         self.assertIn("modified", h["notes"][0])
         self.assertIn("first_line", h["notes"][0])
+        self.assertIn("chunk_hash", h["notes"][0])
 
     def test_browse_folder(self):
         h = ops.history(limit=5, folder="inbox")
         self.assertTrue(h["ok"])
         self.assertTrue(all(n["path"].startswith("inbox/") for n in h["notes"]))
+
+    def test_browse_since_until_and_exclude(self):
+        import os
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        old = self.vault / "archives" / "old.md"
+        old.parent.mkdir(parents=True)
+        old.write_text("# Old\n\nold body\n", encoding="utf-8")
+        os.utime(old, (1_700_000_000, 1_700_000_000))
+        core.index_vault(rebuild=True, verbose=False)
+
+        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        h = ops.history(limit=20, since=today, until=today)
+        self.assertTrue(h["ok"], msg=h)
+        self.assertTrue(h.get("since"))
+        self.assertTrue(h.get("until"))
+        # Fresh setUp notes are today; archives/old is 2023 — excluded by window.
+        paths = {n["path"] for n in h["notes"]}
+        self.assertNotIn("archives/old.md", paths)
+        self.assertTrue(paths, msg="expected at least one note mtime'd today")
+
+        h2 = ops.history(limit=20, exclude=["archives/*"])
+        self.assertTrue(h2["ok"])
+        self.assertTrue(all(not n["path"].startswith("archives/") for n in h2["notes"]))
+        self.assertEqual(h2.get("exclude"), ["archives/*"])
+
+    def test_browse_preview_last_heading_and_fields(self):
+        # Oversized preamble so Session log is its own chunk (packer merges small sections).
+        pad = "x" * 1300
+        daily = self.vault / "inbox" / "daily.md"
+        daily.write_text(
+            "---\ntitle: Daily\nstatus: active\n---\n\n"
+            f"# Preamble\n\n{pad}\n\n"
+            "## Session log\n\n"
+            "- first bullet\n\n"
+            "- **latest bullet** — the signal\n",
+            encoding="utf-8",
+        )
+        core.index_vault(rebuild=True, verbose=False)
+
+        first = ops.history(limit=5, folder="inbox", preview="first", heading="Preamble")
+        self.assertTrue(first["ok"])
+        daily_first = next(n for n in first["notes"] if n["path"] == "inbox/daily.md")
+        self.assertIn("xxx", daily_first["first_line"])
+        self.assertNotIn("latest bullet", daily_first["first_line"])
+
+        last = ops.history(
+            limit=5,
+            folder="inbox",
+            preview="last",
+            heading="Session log",
+            fields=["title", "status"],
+        )
+        self.assertTrue(last["ok"], msg=last)
+        self.assertEqual(last.get("preview"), "last")
+        self.assertEqual(last.get("heading"), "Session log")
+        daily_last = next(n for n in last["notes"] if n["path"] == "inbox/daily.md")
+        self.assertIn("latest bullet", daily_last["first_line"])
+        self.assertTrue(daily_last.get("chunk_hash"))
+        self.assertIn("Session log", daily_last.get("heading", ""))
+        self.assertEqual(
+            daily_last.get("frontmatter"),
+            {"title": "Daily", "status": "active"},
+        )
+
+    def test_browse_bad_since(self):
+        h = ops.history(since="not-a-date")
+        self.assertFalse(h["ok"])
+        self.assertEqual(h.get("error"), "bad_request")
 
     def test_file_mtime_fallback_without_git_contract(self):
         out = ops.history(path="note.md", limit=5)
@@ -212,6 +283,26 @@ class TestHistoryRpc(unittest.TestCase):
         self.assertEqual(s1, 200)
         self.assertTrue(h["ok"])
         self.assertGreaterEqual(len(h["notes"]), 1)
+
+    def test_history_digest_params(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        s1, h = self._post(
+            "/v1/history",
+            {
+                "limit": 5,
+                "since": today,
+                "until": today,
+                "preview": "last",
+                "fields": ["title"],
+            },
+        )
+        self.assertEqual(s1, 200)
+        self.assertTrue(h["ok"], msg=h)
+        self.assertEqual(h.get("preview"), "last")
+        self.assertIn("frontmatter", h["notes"][0])
 
 
 if __name__ == "__main__":

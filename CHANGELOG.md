@@ -2,6 +2,12 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [Unreleased]
+
+### Added
+
+- **`history` browse digests** — `since` / `until` (date-only = America/New_York day bounds), `preview=first|last`, optional `heading=` chunk scope (e.g. `Session log`), `exclude=` globs, optional frontmatter `fields=`, and `chunk_hash` on each note for `expand_chunk` / `append_note` without reading session-log bodies. MCP + RPC + docs.
+
 ## [0.3.1] — 2026-08-03
 
 ### Fixed
