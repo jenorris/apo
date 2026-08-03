@@ -189,7 +189,7 @@ _MCP_INSTRUCTIONS = (
     "status sweeps pass fields=[status,okf_type,last_checked,title]); "
     "history=browse by mtime (first_line) or file git log when path= + git contract; "
     "git_sync=status|run|pull|clear_block when git contract sync.enabled; "
-    "recent_activity=frozen alias of history through v0.1.x; status sweeps → filter_notes. "
+    "status sweeps → filter_notes. "
     "Hits expose chunk_hash/heading for append/expand (skip read when possible). "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
     "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
@@ -643,22 +643,9 @@ async def history(
     ] = "",
     vault: str = "",
 ) -> dict:
-    """Browse newest notes by mtime, or file-level git history when path= is set (git contract). Prefer this over recent_activity."""
+    """Browse newest notes by mtime, or file-level git history when path= is set (git contract)."""
     return await asyncio.to_thread(
         apo_ops.history, limit=limit, folder=folder, path=path, vault=vault
-    )
-
-
-@mcp.tool(annotations=_RO)
-async def recent_activity(
-    limit: int = 10,
-    folder: str = "",
-    path: str = "",
-    vault: str = "",
-) -> dict:
-    """Frozen alias of history through v0.1.x — prefer history. Same args/payload."""
-    return await asyncio.to_thread(
-        apo_ops.recent_activity, limit=limit, folder=folder, path=path, vault=vault
     )
 
 

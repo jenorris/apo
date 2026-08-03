@@ -145,9 +145,8 @@ def _backlinks(body: dict[str, Any]) -> dict[str, Any]:
 
 
 @_route("POST", "/v1/history")
-@_route("POST", "/v1/recent")
 def _history(body: dict[str, Any]) -> dict[str, Any]:
-    """Canonical /v1/history; /v1/recent is a one-release frozen alias."""
+    """Browse by mtime or file-level git history when path= is set."""
     return ops.history(
         limit=int(body.get("limit") or 10),
         folder=str(body.get("folder") or ""),

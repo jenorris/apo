@@ -72,7 +72,7 @@ Ensure the same env vars as the Cursor block are visible to that process (`~/.cl
 cd /ABSOLUTE/PATH/TO/apo && just inspect
 ```
 
-Lean default: expect **13** tools. With `APO_MCP_LEAN=0`, expect **19**.
+Lean default: expect **12** tools. With `APO_MCP_LEAN=0`, expect **18**.
 
 In the agent, run a known `search_notes` query — the right note should land near the top.
 

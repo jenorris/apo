@@ -113,7 +113,7 @@ class PatchNoteSchemaTest(unittest.TestCase):
         self.assertIn("fields=", instr)
         self.assertIn("parallel", instr.lower())
         self.assertIn("history", instr)
-        self.assertIn("recent_activity", instr)
+        self.assertNotIn("recent_activity", instr)
 
     def test_ops_items_are_typed_oneof(self):
         tool = _patch_note_tool()

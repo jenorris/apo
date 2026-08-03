@@ -583,7 +583,7 @@ def history(
 ) -> dict[str, Any]:
     """Browse by mtime, or file-level git history when ``path`` is set.
 
-    - No ``path``: index-backed recent notes (same shape as legacy ``recent_activity``).
+    - No ``path``: index-backed recent notes by mtime.
     - With ``path`` + active git contract: ``source=git`` + commit list.
     - With ``path`` but no git contract / no ``.git``: ``source=mtime`` metadata only.
     """
@@ -672,17 +672,6 @@ def history(
         for p, mtime, first_line in rows
     ]
     return {"ok": True, "notes": notes, "vault": b.name}
-
-
-def recent_activity(
-    *,
-    limit: int = 10,
-    folder: str = "",
-    vault: str = "",
-    path: str = "",
-) -> dict[str, Any]:
-    """Frozen alias of :func:`history` through the v0.1.x line — prefer ``history``."""
-    return history(limit=limit, folder=folder, path=path, vault=vault)
 
 
 ###############################################################################

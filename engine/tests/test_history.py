@@ -1,4 +1,4 @@
-"""history / recent_activity alias + git-contract file log."""
+"""history + git-contract file log."""
 
 from __future__ import annotations
 
@@ -68,12 +68,9 @@ class TestHistory(unittest.TestCase):
             p.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_browse_parity_and_alias(self):
+    def test_browse(self):
         h = ops.history(limit=5)
-        a = ops.recent_activity(limit=5)
         self.assertTrue(h["ok"])
-        self.assertTrue(a["ok"])
-        self.assertEqual(h["notes"], a["notes"])
         self.assertGreaterEqual(len(h["notes"]), 1)
         self.assertIn("path", h["notes"][0])
         self.assertIn("modified", h["notes"][0])
@@ -210,13 +207,11 @@ class TestHistoryRpc(unittest.TestCase):
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read().decode())
 
-    def test_history_and_recent_alias(self):
+    def test_history(self):
         s1, h = self._post("/v1/history", {"limit": 3})
-        s2, r = self._post("/v1/recent", {"limit": 3})
         self.assertEqual(s1, 200)
-        self.assertEqual(s2, 200)
         self.assertTrue(h["ok"])
-        self.assertEqual(h["notes"], r["notes"])
+        self.assertGreaterEqual(len(h["notes"]), 1)
 
 
 if __name__ == "__main__":
