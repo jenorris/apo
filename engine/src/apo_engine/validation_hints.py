@@ -104,11 +104,15 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
 
 
 def _pydantic_errors(exc: BaseException) -> list[dict[str, Any]]:
-    """Best-effort extract of pydantic error dicts from ValidationError wrappers."""
-    cause = getattr(exc, "__cause__", None)
-    for candidate in (cause, exc):
-        if candidate is None:
-            continue
+    """Best-effort extract of pydantic error dicts from ValidationError wrappers.
+
+    Walks ``__cause__`` / ``__context__`` so ToolError → FastMCP ValidationError →
+    pydantic.ValidationError still yields shapes (metrics sits outside the rewrite).
+    """
+    seen: set[int] = set()
+    candidate: BaseException | None = exc
+    while candidate is not None and id(candidate) not in seen:
+        seen.add(id(candidate))
         errors_fn = getattr(candidate, "errors", None)
         if callable(errors_fn):
             try:
@@ -120,6 +124,10 @@ def _pydantic_errors(exc: BaseException) -> list[dict[str, Any]]:
                     pass
             except Exception:
                 pass
+        nxt = getattr(candidate, "__cause__", None) or getattr(
+            candidate, "__context__", None
+        )
+        candidate = nxt if isinstance(nxt, BaseException) else None
     return []
 
 

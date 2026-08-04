@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
+
+from apo_engine import tool_metrics
+from apo_engine.agent_validation import AgentValidationMiddleware
+from apo_engine.tool_metrics_middleware import ToolMetricsMiddleware
 
 _ENGINE = Path(__file__).resolve().parents[1]
 _SERVER = _ENGINE / "mcp" / "server.py"
@@ -19,6 +24,7 @@ def _load_server(vault: Path, tmp: Path):
         "APO_NOTES_ROOT": str(vault),
         "APO_INDEX": str(tmp / "index.db"),
         "APO_COLLECTION": "hint_test",
+        "APO_TOOL_METRICS": "1",
     }
     for k, v in env_keys.items():
         os.environ[k] = v
@@ -39,6 +45,25 @@ def sys_modules_apo():
 
 
 class McpValidationHintTest(unittest.TestCase):
+    def test_metrics_middleware_is_outer(self):
+        with tempfile.TemporaryDirectory(prefix="apo-hint-") as tmp_s:
+            tmp = Path(tmp_s)
+            vault = tmp / "vault"
+            vault.mkdir()
+            mod = _load_server(vault, tmp)
+            chain = list(mod.mcp.middleware)
+            # FastMCP may prepend DereferenceRefsMiddleware; among our two,
+            # metrics must be listed before validation (first = outermost).
+            tm_idx = next(
+                i for i, m in enumerate(chain) if isinstance(m, ToolMetricsMiddleware)
+            )
+            av_idx = next(
+                i
+                for i, m in enumerate(chain)
+                if isinstance(m, AgentValidationMiddleware)
+            )
+            self.assertLess(tm_idx, av_idx)
+
     def test_patch_note_missing_op_is_rewritten(self):
         with tempfile.TemporaryDirectory(prefix="apo-hint-") as tmp_s:
             tmp = Path(tmp_s)
@@ -66,6 +91,27 @@ class McpValidationHintTest(unittest.TestCase):
             self.assertIn('missing required "op"', text)
             self.assertIn("replace_text", text)
             self.assertNotIn("union_tag_not_found", text)
+
+            # conftest redirects tool_metrics.DEFERRED_DIR into an isolated tmp.
+            metrics_path = tool_metrics.DEFERRED_DIR / "tool-metrics-hint_test.jsonl"
+            self.assertTrue(metrics_path.is_file(), f"missing metrics at {metrics_path}")
+            rows = [
+                json.loads(line)
+                for line in metrics_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            patch_errs = [
+                r for r in rows if r.get("tool") == "patch_note" and r.get("ok") is False
+            ]
+            self.assertEqual(len(patch_errs), 1)
+            row = patch_errs[0]
+            self.assertEqual(row["error"], "validation_error")
+            self.assertGreater(row.get("resp_bytes", 0), 0)
+            shapes = row.get("error_shape") or []
+            self.assertTrue(
+                any("ops" in str(s) or "op" in str(s) for s in shapes),
+                f"expected ops/op shape in {shapes!r}",
+            )
 
     def test_read_note_snippet_chars_hint(self):
         with tempfile.TemporaryDirectory(prefix="apo-hint-") as tmp_s:
