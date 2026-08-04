@@ -10,7 +10,7 @@
 
 Do **not** confuse templates here with a setting in MCP config. Opt-in means: put the machine-readable (and/or agent-facing) contract **in the vault**, then point agents at it.
 
-**Agent discovery:** MCP/RPC `vault(action=list|contracts|describe|merge|project)` — lean-visible. Prefer YAML under `system/contracts/`. `merge` / `contracts` / `describe` return summaries by default (`full=true` for YAML bodies). `merge` unions the registry with per-vault contracts and `~/.apo/desk.yaml`. `project` emits Cursor `apo-desk.mdc` / Claude `apo-desk` skill (see [../examples/desk.example.yaml](../examples/desk.example.yaml)); re-run via `just desk-project` or the watcher after desk/contract changes.
+**Agent discovery:** MCP/RPC `vault(action=list|contracts|describe|merge|project)` — lean-visible. Prefer YAML under `system/contracts/`. `merge` / `contracts` / `describe` return summaries by default (`full=true` for YAML bodies). `merge` unions the registry with per-vault contracts and `~/.apo/desk.yaml`. `project` emits Cursor `apo-desk.mdc`, Claude `apo-desk` skill, and optionally Hermes (`host=hermes|all`) — see [../examples/desk.example.yaml](../examples/desk.example.yaml) and [../hermes.md](../hermes.md); re-run via `just desk-project` or the watcher after desk/contract changes.
 
 ## Shipped templates
 
@@ -21,6 +21,7 @@ Do **not** confuse templates here with a setting in MCP config. Opt-in means: pu
 | [okf-bundle.md](./okf-bundle.md) | **Ship** | OKF Knowledge Bundle — `okf_type` primary; vault YAML stamp/soft/hard |
 | [yaml-notes.md](./yaml-notes.md) | **Ship** | Standalone `.yaml` / `.yml` catalog notes (filter + field patch) |
 | [git.md](./git.md) | **Ship** | Vault backup / remote + `history(path=)` + optional `sync.enabled` commit/pull — [git-contract.schema.yaml](./git-contract.schema.yaml) |
+| [usage-contract.schema.yaml](./usage-contract.schema.yaml) | **Ship** | Host-neutral vault usage IR for harness / `vault(project)` — **not** interpreted by the engine for search/write |
 
 **Existing vault:** [../onboard-prompt.md](../onboard-prompt.md) — infer first; do not force a contract.
 

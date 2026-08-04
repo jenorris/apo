@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from apo_engine.core import _content_hash
 from . import core
 
 
@@ -40,6 +41,10 @@ def shape_search_hits(
                 "start_line": h.start_line,
                 "end_line": h.end_line,
                 "modified": modified,
+                # Float epoch for expected_mtime on follow-up writes (ISO modified stays).
+                "mtime": float(mtime) if mtime else None,
+                # Region precondition for scoped follow-up writes.
+                "content_hash": _content_hash(h.text) if h.text else None,
             }
         )
     return rows

@@ -227,6 +227,25 @@ class VaultOpTest(unittest.TestCase):
             self.assertIn("name: apo-desk", claude_body)
             self.assertNotIn("alwaysApply", claude_body)
 
+            hermes_out = out_dir / "hermes" / "SKILL.md"
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"APO_PROJECT_HERMES": str(hermes_out)},
+            ):
+                hermes = ops.vault_op("project", host="hermes", write=True)
+            self.assertTrue(hermes["ok"], hermes)
+            self.assertTrue(hermes["files"]["hermes"]["written"])
+            hermes_body = hermes_out.read_text(encoding="utf-8")
+            self.assertIn("name: apo-desk", hermes_body)
+            self.assertIn("Mnemosyne", hermes_body)
+            self.assertNotIn("alwaysApply", hermes_body)
+
+            all_hosts = ops.vault_op("project", host="all", write=False)
+            self.assertTrue(all_hosts["ok"], all_hosts)
+            self.assertEqual(
+                set(all_hosts["files"]), {"cursor", "claude", "hermes"}
+            )
+
     def test_merge_with_desk_file(self):
         desk = self.tmp / "desk.yaml"
         desk.write_text(

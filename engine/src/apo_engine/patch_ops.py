@@ -190,7 +190,7 @@ OPS_FIELD_DESC = (
 
 PATCH_NOTES_ITEMS_DESC = (
     "Multi-path mode for patch_note: same-vault batch. "
-    "Each item: path + ops (+ optional expected_mtime). "
+    "Each item: path + ops (+ optional expected_mtime / region hashes). "
     "Max 20 items; duplicate paths rejected. Partial failures continue; check per-item ok. "
     "XOR with path+ops — do not pass both. "
     "Cross-role parallel writes (e.g. two different notes) stay separate MCP calls."
@@ -208,7 +208,26 @@ class PatchNotesItem(BaseModel):
         default=None,
         description=(
             "Optimistic concurrency for this path: pass mtime from a prior read/write. "
-            "On stale_write, re-read and retry that item."
+            "On stale_write, re-read and retry that item (or pass matching region hashes)."
+        ),
+    )
+    expected_frontmatter_hash: str | None = Field(
+        default=None,
+        description=(
+            "Allow FM-only ops when file mtime advanced but frontmatter bytes match."
+        ),
+    )
+    expected_body_hash: str | None = Field(
+        default=None,
+        description=(
+            "Allow body/section ops when file mtime advanced but body bytes match."
+        ),
+    )
+    expected_content_hash: str | None = Field(
+        default=None,
+        description=(
+            "Allow section/chunk ops when that span's hash still matches "
+            "(from search/expand_chunk content_hash)."
         ),
     )
 

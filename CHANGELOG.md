@@ -4,11 +4,24 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share (cut as **v0.4.0** when ready). **Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads.
+
 ### Added
 
-- **`vault` tool** — lean-visible `list` / `contracts` / `describe` / `merge` / `project` for registry + contract discovery + desk overlay + host skill projection. Preferred live IR: `<vault>/system/contracts/`; legacy `system/config/*-contract.schema.yaml` still discovered. Engine OKF/git loaders prefer `system/contracts/` then legacy. Desk: `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)). `project` writes `~/.cursor/rules/apo-desk.mdc` and/or `~/.claude/skills/apo-desk/SKILL.md`. MCP + RPC `GET|POST /v1/vault`. Contract payloads default to summaries; `full=true` includes YAML bodies. `just desk-project` / `apo-engine desk-project`; watcher auto-reprojects (debounced) when `desk.yaml` or `system/contracts/` change.
-- **`history` browse digests** — `since` / `until` (date-only = America/New_York day bounds), `preview=first|last`, optional `heading=` chunk scope (e.g. `Session log`), `exclude=` globs, optional frontmatter `fields=`, and `chunk_hash` on each note for `expand_chunk` / `append_note` without reading session-log bodies. MCP + RPC + docs.
-- **Body-field aliases** — `append_note` accepts `content=` as alias for `text=`; `write_note` accepts `text=` as alias for `content=` (conflict → `bad_request`; soft `tip` when alias used). MCP + RPC + `resolve_body_text`; metrics `used_alias` counts these. Wrong-tool shapes (`write_note`+`heading`/`create`, `expand_chunk`+`path`) still hard-fail with hints.
+- **Region write preconditions** — `expected_frontmatter_hash` / `expected_body_hash` / `expected_content_hash` on `write_note` / `append_note` / `patch_note` (and per `items[]`). When `expected_mtime` is stale, FM-only or section/chunk writes still proceed if the untouched region matches. Same-process prior `read_note` / `expand_chunk` snapshots enable the FM/body split without extra args. Reads, expands, and search hits return the hashes.
+- **`vault` tool** — lean-visible `list` / `contracts` / `describe` / `merge` / `project` for registry + contract discovery + desk overlay + host skill projection. Preferred live IR: `<vault>/system/contracts/`; legacy `system/config/*-contract.schema.yaml` still discovered. Engine OKF/git loaders prefer `system/contracts/` then legacy. Desk: `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)). `project` writes Cursor `apo-desk.mdc`, Claude `apo-desk` skill, and **Hermes** `~/.apo/projected/hermes/apo-desk/SKILL.md` (`host=hermes|all`; `APO_PROJECT_HERMES`). MCP + RPC `GET|POST /v1/vault`. Contract payloads default to summaries; `full=true` includes YAML bodies. `just desk-project` / watcher auto-reproject.
+- **Usage contract template** — [docs/contracts/usage-contract.schema.yaml](docs/contracts/usage-contract.schema.yaml) (host-neutral vault usage IR; engine discovery/project only — not interpreted for search/write). Hermes guide: [docs/hermes.md](docs/hermes.md).
+- **`history` browse digests** — `since` / `until` (date-only = America/New_York day bounds), `preview=first|last`, optional `heading=` chunk scope, `exclude=` globs, optional frontmatter `fields=`, and `chunk_hash` on each note.
+- **Body-field aliases** — `append_note` accepts `content=` as alias for `text=`; `write_note` accepts `text=` as alias for `content=` (conflict → `bad_request`; soft `tip` when alias used).
+- **Agent habit UX** — `read_note` / `expand_chunk` record path touches so follow-up writes tip literal `expected_mtime=<n>`; unscoped search tips include top-level dirs; search hits include float `mtime` beside ISO `modified`; MCP `search_notes` accepts `exclude=`; `tool_stats` rolls up `by_error_shape`.
+- **`just tool-list`** — pure-Python lean tool count (no Node/`npx`).
+
+### Changed
+
+- Tool counts: lean **11** / full **18** (adds `vault`).
+- `APO_SEARCH_EXCLUDE` documented as recommended desk default (`inbox/daily/* archives/*`); `config.env.example` enables it.
+- `launchd-watch.sh` default embed backend aligned with engine (`ollama`).
+- Share docs: real clone URL, Python 3.11+, Linux `watch-start`, Claude env example, lean health/`0 tools` troubleshooting, `/v1/vault` in local-rpc.
 
 ## [0.3.1] — 2026-08-03
 
@@ -77,7 +90,6 @@ Stable release — everything from rc1–rc6 plus the readiness-assessment harde
 ### Notes
 
 - Release candidate for **v0.3.0**.
-
 ## [0.2.0] — 2026-07-29
 
 ### Changed

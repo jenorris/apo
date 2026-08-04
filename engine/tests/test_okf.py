@@ -203,6 +203,33 @@ class OkfStampTests(unittest.TestCase):
         self.assertEqual(r.enforcement, "off")
         self.assertEqual(r.content, "# Foo\n")
 
+    def test_double_star_glob_matches_nested_paths(self):
+        """``**`` path_rules must work on Py 3.11/3.12 (no PurePath.full_match)."""
+        # Exercise the regex backport even when full_match exists.
+        okf._GLOB_RE_CACHE.clear()
+        cases = [
+            ("areas/threads/foo.md", "areas/threads/**/*.md", True),
+            ("areas/threads/nested/foo.md", "areas/threads/**/*.md", True),
+            ("areas/other/foo.md", "areas/threads/**/*.md", False),
+            ("records/fact.yaml", "records/**/*.yaml", True),
+            ("index.md", "index.md", True),
+            ("projects/foo/index.md", "index.md", False),
+            ("projects/foo/index.md", "**/index.md", True),
+            ("inbox/daily/2026-07-17.md", "inbox/daily/*.md", True),
+            ("inbox/daily/x/y.md", "inbox/daily/*.md", False),
+        ]
+        for rel, pat, want in cases:
+            self.assertEqual(
+                okf._compile_glob(pat).fullmatch(rel) is not None,
+                want,
+                msg=f"regex {rel!r} vs {pat!r}",
+            )
+            self.assertEqual(
+                okf.path_glob_match(rel, pat),
+                want,
+                msg=f"path_glob_match {rel!r} vs {pat!r}",
+            )
+
     def test_resource_from_source_url(self):
         content = (
             "---\n"

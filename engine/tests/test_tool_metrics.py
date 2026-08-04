@@ -44,8 +44,19 @@ class ToolMetricsTest(unittest.TestCase):
                 flags={"expected_mtime_set": True},
                 path=path,
             )
+            tool_metrics.record_call(
+                collection="test",
+                tool="patch_note",
+                ok=False,
+                error="validation_error",
+                duration_ms=2.0,
+                req_bytes=10,
+                resp_bytes=20,
+                flags={"error_shape": ["union_tag_not_found:ops.0", "missing:op"]},
+                path=path,
+            )
             lines = path.read_text(encoding="utf-8").strip().splitlines()
-            self.assertEqual(len(lines), 3)
+            self.assertEqual(len(lines), 4)
             row = json.loads(lines[0])
             self.assertEqual(row["tool"], "search_notes")
             self.assertTrue(row["ok"])
@@ -53,13 +64,20 @@ class ToolMetricsTest(unittest.TestCase):
             self.assertNotIn("content", row)
 
             stats = tool_metrics.tool_stats("test", days=None, path=path)
-            self.assertEqual(stats["calls"], 3)
+            self.assertEqual(stats["calls"], 4)
             self.assertEqual(stats["ok_count"], 2)
-            self.assertEqual(stats["error_count"], 1)
+            self.assertEqual(stats["error_count"], 2)
             self.assertEqual(stats["by_error"]["bad_query"], 1)
+            self.assertEqual(stats["by_error"]["validation_error"], 1)
+            self.assertEqual(stats["by_error_shape"]["union_tag_not_found:ops.0"], 1)
+            self.assertEqual(stats["by_error_shape"]["missing:op"], 1)
             by_tool = {t["tool"]: t for t in stats["by_tool"]}
             self.assertEqual(by_tool["search_notes"]["calls"], 2)
             self.assertEqual(by_tool["filter_notes"]["error"], 1)
+            self.assertEqual(
+                by_tool["patch_note"]["by_error_shape"]["union_tag_not_found:ops.0"],
+                1,
+            )
 
     def test_extract_arg_flags(self):
         flags = tool_metrics.extract_arg_flags(

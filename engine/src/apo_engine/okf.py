@@ -9,7 +9,6 @@ See Meta ``system/config/apo-okf-write-contract.md`` and Apo ``docs/contracts/ok
 
 from __future__ import annotations
 
-import fnmatch
 import os
 import re
 import threading
@@ -34,6 +33,88 @@ _SCALAR_RE = re.compile(r"^([A-Za-z0-9_]+):\s*(.*)$")
 
 _CONTRACT_LOCK = threading.Lock()
 _CONTRACT_CACHE: dict[str, tuple[float | None, "OkfContract | None"]] = {}
+# Compiled glob patterns for path_rules (``**`` support on Py < 3.13).
+_GLOB_RE_CACHE: dict[str, re.Pattern[str]] = {}
+
+
+def _compile_glob(pat: str) -> re.Pattern[str]:
+    """Compile a POSIX path glob with ``**`` (recursive) support."""
+    out: list[str] = ["^"]
+    i = 0
+    n = len(pat)
+    while i < n:
+        if pat.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pat.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pat[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pat[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pat[i] == "[":
+            j = i + 1
+            if j < n and pat[j] == "!":
+                j += 1
+            if j < n and pat[j] == "]":
+                j += 1
+            while j < n and pat[j] != "]":
+                j += 1
+            if j >= n:
+                out.append(re.escape(pat[i]))
+                i += 1
+            else:
+                cls = pat[i : j + 1]
+                if cls.startswith("[!"):
+                    cls = "[^" + cls[2:]
+                out.append(cls)
+                i = j + 1
+        else:
+            out.append(re.escape(pat[i]))
+            i += 1
+    out.append("$")
+    return re.compile("".join(out))
+
+
+def path_glob_match(rel: str, pat: str) -> bool:
+    """Match a vault-relative path against a glob (``**`` works on 3.11+).
+
+    Uses ``PurePath.full_match`` on 3.13+; otherwise a ``**``-aware regex
+    backport. Does not use ``fnmatch`` / ``Path.match`` — those treat ``*`` as
+    crossing ``/`` or as a suffix match, which breaks OKF path_rules on CI.
+    """
+    rel = rel.replace("\\", "/").lstrip("/")
+    pat = pat.replace("\\", "/")
+    if not pat:
+        return False
+    path = PurePosixPath(rel)
+    if hasattr(path, "full_match"):
+        try:
+            return bool(path.full_match(pat))
+        except ValueError:
+            return False
+    compiled = _GLOB_RE_CACHE.get(pat)
+    if compiled is None:
+        compiled = _compile_glob(pat)
+        _GLOB_RE_CACHE[pat] = compiled
+    return compiled.fullmatch(rel) is not None
+
+
+def match_rule(contract: OkfContract, rel_path: str) -> PathRule | None:
+    rel = rel_path.replace("\\", "/").lstrip("/")
+    path = PurePosixPath(rel)
+    for rule in contract.path_rules:
+        if path_glob_match(rel, rule.match):
+            return rule
+    name = path.name
+    if name in contract.reserved_filenames and rel != "index.md":
+        return PathRule(match=name, enforcement="reserved")
+    if rel == "index.md":
+        return PathRule(match="index.md", enforcement="exempt")
+    return None
 
 
 @dataclass
@@ -223,34 +304,6 @@ def get_contract(vault_root: Path) -> OkfContract | None:
 def clear_contract_cache() -> None:
     with _CONTRACT_LOCK:
         _CONTRACT_CACHE.clear()
-
-
-def match_rule(contract: OkfContract, rel_path: str) -> PathRule | None:
-    rel = rel_path.replace("\\", "/").lstrip("/")
-    path = PurePosixPath(rel)
-    for rule in contract.path_rules:
-        pat = rule.match.replace("\\", "/")
-        # Prefer full_match (Py 3.13+) so "index.md" does not match nested paths.
-        matched = False
-        if hasattr(path, "full_match"):
-            try:
-                matched = path.full_match(pat)
-            except ValueError:
-                matched = False
-        if not matched:
-            # Fallback: fnmatch on full relative path only (no basename shortcut).
-            matched = fnmatch.fnmatch(rel, pat)
-        # Path.match treats "index.md" as suffix-ish — avoid it for bare filenames.
-        if not matched and "/" in pat:
-            matched = path.match(pat)
-        if matched:
-            return rule
-    name = path.name
-    if name in contract.reserved_filenames and rel != "index.md":
-        return PathRule(match=name, enforcement="reserved")
-    if rel == "index.md":
-        return PathRule(match="index.md", enforcement="exempt")
-    return None
 
 
 def _effective_enforcement(rule_enforcement: str, contract_default: str) -> str:

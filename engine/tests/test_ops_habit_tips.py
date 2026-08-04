@@ -50,24 +50,35 @@ class HabitTipsTest(unittest.TestCase):
         ]
         for p in self._patches:
             p.start()
-        ops._recent_writes.clear()
+        ops._recent_touches.clear()
         core.index_vault(rebuild=True, verbose=False)
 
     def tearDown(self):
         for p in self._patches:
             p.stop()
-        ops._recent_writes.clear()
+        ops._recent_touches.clear()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_search_tips_when_folder_omitted(self):
         out = ops.search("widget", limit=3, folder="")
         self.assertTrue(out["ok"], out)
-        self.assertIn("folder=", out.get("tip", ""))
+        tip = out.get("tip", "")
+        self.assertIn("folder=", tip)
+        self.assertIn("areas", tip)
 
     def test_search_no_tip_when_folder_set(self):
         out = ops.search("widget", limit=3, folder="areas")
         self.assertTrue(out["ok"], out)
         self.assertNotIn("tip", out)
+
+    def test_search_hits_include_mtime(self):
+        out = ops.search("widget", limit=3, folder="areas")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["results"])
+        hit = out["results"][0]
+        self.assertIn("mtime", hit)
+        self.assertIsInstance(hit["mtime"], float)
+        self.assertIn("modified", hit)
 
     def test_second_write_without_mtime_tips(self):
         path = "areas/note.md"
@@ -77,7 +88,9 @@ class HabitTipsTest(unittest.TestCase):
 
         second = ops.append_note(path, "- two\n")
         self.assertTrue(second["ok"], second)
-        self.assertIn("expected_mtime", second.get("tip", ""))
+        tip = second.get("tip", "")
+        self.assertIn("expected_mtime", tip)
+        self.assertIn(str(first["mtime"]), tip)
 
     def test_second_write_with_mtime_skips_tip(self):
         path = "areas/note.md"
@@ -90,6 +103,16 @@ class HabitTipsTest(unittest.TestCase):
         )
         self.assertTrue(second["ok"], second)
         self.assertNotIn("expected_mtime", second.get("tip", ""))
+
+    def test_read_then_write_without_mtime_tips(self):
+        path = "areas/note.md"
+        read = ops.read_note(path)
+        self.assertTrue(read["ok"], read)
+        write = ops.append_note(path, "- after read\n")
+        self.assertTrue(write["ok"], write)
+        tip = write.get("tip", "")
+        self.assertIn("expected_mtime", tip)
+        self.assertIn(str(read["mtime"]), tip)
 
 
 if __name__ == "__main__":

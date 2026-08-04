@@ -16,14 +16,38 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      # setup-python macOS builds omit SQLite loadable extensions (needed for sqlite-vec).
+      # Homebrew Python links Homebrew SQLite, which enables enable_load_extension.
+      - name: Set up Python (Ubuntu)
+        if: runner.os == 'Linux'
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Set up Python (macOS via Homebrew)
+        if: runner.os == 'macOS'
+        run: |
+          brew install "python@${{ matrix.python-version }}"
+          BREW_PREFIX="$(brew --prefix "python@${{ matrix.python-version }}")"
+          echo "${BREW_PREFIX}/bin" >> "$GITHUB_PATH"
+          echo "PYTHON_BIN=${BREW_PREFIX}/bin/python${{ matrix.python-version }}" >> "$GITHUB_ENV"
+          "${BREW_PREFIX}/bin/python${{ matrix.python-version }}" - <<'PY'
+          import sqlite3
+          c = sqlite3.connect(":memory:")
+          assert hasattr(c, "enable_load_extension"), "Homebrew Python lacks loadable SQLite extensions"
+          print("sqlite", sqlite3.sqlite_version, "ok")
+          PY
+
       - name: Install engine (editable + MCP + dev)
         working-directory: engine
         run: |
-          python -m pip install -U pip
-          pip install -e '.[mcp,dev]'
+          PYTHON="${PYTHON_BIN:-python}"
+          # Homebrew Python is PEP 668 externally-managed — always use a venv.
+          "$PYTHON" -m venv .venv
+          .venv/bin/python -m pip install -U pip
+          .venv/bin/python -m pip install -e '.[mcp,dev]'
+
       - name: Run tests
         working-directory: engine
-        run: python -m pytest tests -q
+        run: .venv/bin/python -m pytest tests -q

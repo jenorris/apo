@@ -47,6 +47,16 @@ from apo_engine.chunk_anchor import materialize_ops_chunk_hashes, resolve_chunk_
 from apo_engine.mcp_backend import shape_search_hits
 from apo_engine.patch_ops import ops_to_dicts
 from apo_engine.validation_hints import flatten_patch_failure_error
+from apo_engine.write_guard import (
+    PathTouch,
+    WriteRegions,
+    attach_region_hashes,
+    check_write_precondition,
+    classify_append_regions,
+    classify_patch_regions,
+    content_hash as region_content_hash,
+    snapshot_from_content,
+)
 
 
 class OpsError(Exception):
@@ -81,6 +91,7 @@ def _mtime(full: Path) -> float:
 
 
 def _check_mtime(full: Path, expected: float | None, path: str) -> dict[str, Any] | None:
+    """Whole-file mtime CAS (place_note / simple paths). Prefer ``_guard_write``."""
     if expected is None or not full.exists():
         return None
     actual = full.stat().st_mtime
@@ -91,8 +102,49 @@ def _check_mtime(full: Path, expected: float | None, path: str) -> dict[str, Any
             message="file modified since expected_mtime; re-read before writing",
             expected_mtime=float(expected),
             actual_mtime=actual,
+            stale_region="whole_file",
         )
     return None
+
+
+def _guard_write(
+    full: Path,
+    path: str,
+    *,
+    vault: str,
+    regions: WriteRegions,
+    expected_mtime: float | None = None,
+    expected_frontmatter_hash: str | None = None,
+    expected_body_hash: str | None = None,
+    expected_content_hash: str | None = None,
+    content: str | None = None,
+    chunk_section: Any = None,
+) -> dict[str, Any] | None:
+    """mtime + FM/body/section precondition. ``None`` means allow."""
+    if (
+        expected_mtime is None
+        and not (expected_frontmatter_hash or "").strip()
+        and not (expected_body_hash or "").strip()
+        and not (expected_content_hash or "").strip()
+    ):
+        return None
+    if not full.exists():
+        return None
+    actual = full.stat().st_mtime
+    touch = _recent_touches.get(_write_key(vault, path))
+    err = check_write_precondition(
+        path=path,
+        actual_mtime=actual,
+        expected_mtime=expected_mtime,
+        content=content,
+        regions=regions,
+        expected_frontmatter_hash=expected_frontmatter_hash,
+        expected_body_hash=expected_body_hash,
+        expected_content_hash=expected_content_hash,
+        touch=touch if isinstance(touch, PathTouch) else None,
+        chunk_section=chunk_section,
+    )
+    return err
 
 
 def _enqueue_index(b: vaults.VaultBinding, full: Path) -> None:
@@ -131,13 +183,52 @@ _MTIME_TIP = (
     "pass expected_mtime from the prior read/write for this path to avoid stale_write"
 )
 
-# Process-local: vault:path → last successful write monotonic time (soft mtime tip).
-_recent_writes: dict[str, float] = {}
-_RECENT_WRITE_TTL_S = 300.0
+# Process-local: vault:path → PathTouch (mtime + region hashes).
+# Touches from read_note / expand_chunk / successful writes drive soft mtime tips
+# and FM/body/section precondition fallbacks when expected_mtime is stale.
+_recent_touches: dict[str, PathTouch] = {}
+_RECENT_TOUCH_TTL_S = 300.0
+# Back-compat alias for tests that clear the habit map.
+_recent_writes = _recent_touches
 
 
 def _write_key(vault: str, path: str) -> str:
     return f"{(vault or '').strip()}:{path.replace(chr(92), '/')}"
+
+
+def _prune_recent_touches(now: float | None = None) -> None:
+    now = time.monotonic() if now is None else now
+    stale = [
+        k for k, touch in _recent_touches.items() if now - touch.mono > _RECENT_TOUCH_TTL_S
+    ]
+    for k in stale:
+        del _recent_touches[k]
+
+
+def _record_path_touch(
+    vault: str,
+    path: str,
+    file_mtime: float | None = None,
+    content: str | None = None,
+    *,
+    heading: str | None = None,
+) -> None:
+    """Record a successful read/expand/write so a follow-up write can tip expected_mtime."""
+    now = time.monotonic()
+    _prune_recent_touches(now)
+    key = _write_key(vault, path)
+    if content is not None:
+        _recent_touches[key] = snapshot_from_content(
+            now, file_mtime, content, heading=heading
+        )
+        return
+    prior = _recent_touches.get(key)
+    if prior is not None:
+        prior.mono = now
+        if file_mtime is not None:
+            prior.mtime = file_mtime
+        return
+    _recent_touches[key] = PathTouch(mono=now, mtime=file_mtime)
 
 
 def _attach_tip(out: dict[str, Any], tip: str) -> dict[str, Any]:
@@ -149,10 +240,24 @@ def _attach_tip(out: dict[str, Any], tip: str) -> dict[str, Any]:
     return out
 
 
-def _attach_folder_tip(out: dict[str, Any], folder_clean: str) -> dict[str, Any]:
+def _attach_folder_tip(
+    out: dict[str, Any],
+    folder_clean: str,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
     if folder_clean:
         return out
-    return _attach_tip(out, _FOLDER_TIP)
+    tip = _FOLDER_TIP
+    if root is not None:
+        dirs = _top_level_dirs(root)
+        if dirs:
+            shown = "|".join(dirs[:8])
+            tip = (
+                f"pass folder= ({shown}) when the PARA bucket is known — "
+                "unscoped search is slower and noisier"
+            )
+    return _attach_tip(out, tip)
 
 
 def _attach_mtime_tip(
@@ -161,23 +266,43 @@ def _attach_mtime_tip(
     vault: str,
     path: str,
     expected_mtime: float | None,
+    content: str | None = None,
 ) -> dict[str, Any]:
-    """Tip when a second in-process write to the same path omits ``expected_mtime``."""
+    """Tip when a follow-up write omits ``expected_mtime`` after a recent read/write."""
     now = time.monotonic()
-    stale = [k for k, t in _recent_writes.items() if now - t > _RECENT_WRITE_TTL_S]
-    for k in stale:
-        del _recent_writes[k]
+    _prune_recent_touches(now)
 
     key = _write_key(vault or str(out.get("vault") or ""), path)
-    prior = _recent_writes.get(key)
+    prior = _recent_touches.get(key)
     if (
         expected_mtime is None
         and prior is not None
-        and (now - prior) <= _RECENT_WRITE_TTL_S
+        and (now - prior.mono) <= _RECENT_TOUCH_TTL_S
     ):
-        out = _attach_tip(out, _MTIME_TIP)
+        stored_mtime = prior.mtime
+        if stored_mtime is not None:
+            tip = f"pass expected_mtime={stored_mtime} to avoid stale_write"
+        else:
+            tip = _MTIME_TIP
+        out = _attach_tip(out, tip)
     if out.get("ok"):
-        _recent_writes[key] = now
+        new_mtime = out.get("mtime")
+        file_mtime = float(new_mtime) if isinstance(new_mtime, (int, float)) else (
+            prior.mtime if prior else None
+        )
+        if content is not None:
+            _recent_touches[key] = snapshot_from_content(now, file_mtime, content)
+        elif prior is not None:
+            prior.mono = now
+            prior.mtime = file_mtime
+            fm = out.get("frontmatter_hash")
+            body = out.get("body_hash")
+            if isinstance(fm, str):
+                prior.frontmatter_hash = fm
+            if isinstance(body, str):
+                prior.body_hash = body
+        else:
+            _recent_touches[key] = PathTouch(mono=now, mtime=file_mtime)
     return out
 
 
@@ -187,9 +312,14 @@ def _finalize_write(
     vault: str,
     path: str,
     expected_mtime: float | None,
+    content: str | None = None,
 ) -> dict[str, Any]:
     out = _attach_mtime_tip(
-        out, vault=vault, path=path, expected_mtime=expected_mtime
+        out,
+        vault=vault,
+        path=path,
+        expected_mtime=expected_mtime,
+        content=content,
     )
     return _attach_watcher_tip(out)
 
@@ -438,7 +568,7 @@ def search(
         warnings.append(missing)
     if warnings:
         out["warning"] = "; ".join(warnings)
-    return _attach_folder_tip(out, folder_clean)
+    return _attach_folder_tip(out, folder_clean, root=b.resolved().root)
 
 
 def read_note(
@@ -496,6 +626,10 @@ def read_note(
     out["start_line"] = shaped["start_line"]
     out["end_line"] = shaped["end_line"]
     out["truncated"] = shaped["truncated"]
+    attach_region_hashes(out, text, heading=heading)
+    _record_path_touch(
+        b.name, path, float(out["mtime"]), text, heading=heading
+    )
     return out
 
 
@@ -589,41 +723,62 @@ def expand_chunk(
     if scope == "chunk":
         heading = chunk.get("heading") or ""
         hlevel = int(chunk.get("heading_level") or 0)
+        body = chunk.get("content") or ""
         out_chunk: dict[str, Any] = {
             "ok": True,
             "path": rel,
             "heading": f"{'#' * hlevel} {heading}".strip() if heading else "",
             "start_line": int(chunk.get("start_line") or 1),
             "end_line": int(chunk.get("end_line") or 1),
-            "content": chunk.get("content") or "",
+            "content": body,
+            "content_hash": region_content_hash(body) if body else "",
             "scope": "chunk",
             "vault": b.name,
         }
         if full.exists():
+            file_text = full.read_text(encoding="utf-8")
             out_chunk["mtime"] = _mtime(full)
+            attach_region_hashes(out_chunk, file_text)
+            if body:
+                out_chunk["content_hash"] = region_content_hash(body)
+            _record_path_touch(
+                b.name,
+                rel,
+                float(out_chunk["mtime"]),
+                file_text,
+                heading=out_chunk["heading"] or None,
+            )
         return out_chunk
 
     if not full.exists():
         return _err(error="stale_index", message=f"source file missing: {rel}")
 
-    lines = normalize_lines(full.read_text(encoding="utf-8"))
+    file_text = full.read_text(encoding="utf-8")
+    lines = normalize_lines(file_text)
     section = section_from_chunk(
         lines,
         int(chunk.get("start_line", 1)),
         int(chunk.get("heading_level", 0)),
     )
     start = section.heading_line if section.title else section.body_start
-    return {
+    file_mtime = _mtime(full)
+    heading_label = f"{'#' * section.level} {section.title}" if section.title else ""
+    out_sec: dict[str, Any] = {
         "ok": True,
         "path": rel,
-        "heading": f"{'#' * section.level} {section.title}" if section.title else "",
+        "heading": heading_label,
         "start_line": start + 1,
         "end_line": section.body_end,
         "content": "\n".join(lines[start : section.body_end]),
         "scope": "section",
-        "mtime": _mtime(full),
+        "mtime": file_mtime,
         "vault": b.name,
     }
+    attach_region_hashes(out_sec, file_text, section=section)
+    _record_path_touch(
+        b.name, rel, float(file_mtime), file_text, heading=heading_label or None
+    )
+    return out_sec
 
 
 def backlinks(path: str, *, limit: int = 100, vault: str = "") -> dict[str, Any]:
@@ -868,6 +1023,9 @@ def write_note(
     *,
     text: str | None = None,
     expected_mtime: float | None = None,
+    expected_frontmatter_hash: str | None = None,
+    expected_body_hash: str | None = None,
+    expected_content_hash: str | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
     body, used_alias, body_err = resolve_body_text(text, content, prefer="content")
@@ -885,7 +1043,20 @@ def write_note(
     except ValueError as e:
         return _err(path=path, error="bad_path", message=str(e))
 
-    if (guard := _check_mtime(full, expected_mtime, path)):
+    prior_text = full.read_text(encoding="utf-8") if full.exists() else None
+    if (
+        guard := _guard_write(
+            full,
+            path,
+            vault=b.name,
+            regions=WriteRegions(whole_file=True),
+            expected_mtime=expected_mtime,
+            expected_frontmatter_hash=expected_frontmatter_hash,
+            expected_body_hash=expected_body_hash,
+            expected_content_hash=expected_content_hash,
+            content=prior_text,
+        )
+    ):
         return guard
 
     existed = full.exists()
@@ -918,13 +1089,18 @@ def write_note(
         "vault": b.name,
     }
     out.update(okf_meta)
+    attach_region_hashes(out, to_write)
     if new_top:
         out["warning"] = (
             f"created new top-level directory {parts[0]!r} — "
             f"existing top-level dirs: {_top_level_dirs(root)}"
         )
     out = _finalize_write(
-        out, vault=b.name, path=path, expected_mtime=expected_mtime
+        out,
+        vault=b.name,
+        path=path,
+        expected_mtime=expected_mtime,
+        content=to_write,
     )
     if used_alias:
         out = _attach_tip(
@@ -943,6 +1119,9 @@ def append_note(
     position: Literal["end", "start"] = "end",
     create: bool = False,
     expected_mtime: float | None = None,
+    expected_frontmatter_hash: str | None = None,
+    expected_body_hash: str | None = None,
+    expected_content_hash: str | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
     body, used_alias, body_err = resolve_body_text(text, content, prefer="text")
@@ -1007,8 +1186,32 @@ def append_note(
             ),
         )
 
-    if (guard := _check_mtime(full, expected_mtime, path)):
-        return guard
+    regions = classify_append_regions(
+        heading=resolved_heading, from_chunk=from_hash
+    )
+    chunk_section = None
+    prior_text: str | None = None
+    if full.exists():
+        prior_text = full.read_text(encoding="utf-8")
+        if from_hash and hash_start is not None:
+            chunk_section = section_from_chunk(
+                normalize_lines(prior_text), hash_start, int(hash_level or 0)
+            )
+        if (
+            guard := _guard_write(
+                full,
+                path,
+                vault=b.name,
+                regions=regions,
+                expected_mtime=expected_mtime,
+                expected_frontmatter_hash=expected_frontmatter_hash,
+                expected_body_hash=expected_body_hash,
+                expected_content_hash=expected_content_hash,
+                content=prior_text,
+                chunk_section=chunk_section,
+            )
+        ):
+            return guard
 
     if not full.exists():
         if not create:
@@ -1019,14 +1222,17 @@ def append_note(
             )
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(minimal_note_stub(path), encoding="utf-8")
+        prior_text = full.read_text(encoding="utf-8")
 
-    content = full.read_text(encoding="utf-8")
+    content = prior_text if prior_text is not None else full.read_text(encoding="utf-8")
     lines = normalize_lines(content)
 
     try:
         anchor_label = "EOF"
         if from_hash and hash_start is not None:
-            section = section_from_chunk(lines, hash_start, int(hash_level or 0))
+            section = chunk_section or section_from_chunk(
+                lines, hash_start, int(hash_level or 0)
+            )
             anchor_label = section.title or ch or "section"
             merged, detail = apply_append(lines, text, section=section, position=position)
         elif resolved_heading:
@@ -1045,20 +1251,28 @@ def append_note(
     full.write_text(new_content, encoding="utf-8")
     _enqueue_index(b, full)
 
+    out: dict[str, Any] = {
+        "ok": True,
+        "path": path,
+        "anchor": anchor_label,
+        "detail": detail,
+        "lines_added": max(0, len(merged) - len(lines)),
+        "bytes": full.stat().st_size,
+        "mtime": _mtime(full),
+        "vault": b.name,
+    }
+    attach_region_hashes(
+        out,
+        new_content,
+        heading=resolved_heading if not from_hash else None,
+        section=chunk_section if from_hash else None,
+    )
     out = _finalize_write(
-        {
-            "ok": True,
-            "path": path,
-            "anchor": anchor_label,
-            "detail": detail,
-            "lines_added": max(0, len(merged) - len(lines)),
-            "bytes": full.stat().st_size,
-            "mtime": _mtime(full),
-            "vault": b.name,
-        },
+        out,
         vault=b.name,
         path=path,
         expected_mtime=expected_mtime,
+        content=new_content,
     )
     if tip:
         out = _attach_tip(out, tip)
@@ -1077,6 +1291,9 @@ def patch_note(
     dry_run: bool = False,
     verbose: bool = False,
     expected_mtime: float | None = None,
+    expected_frontmatter_hash: str | None = None,
+    expected_body_hash: str | None = None,
+    expected_content_hash: str | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
     try:
@@ -1091,9 +1308,6 @@ def patch_note(
     if not full.exists():
         return _err(path=path, error="not_found", message="note not found")
 
-    if (guard := _check_mtime(full, expected_mtime, path)):
-        return guard
-
     content = full.read_text(encoding="utf-8")
     try:
         dict_ops = ops_to_dicts(ops)
@@ -1105,6 +1319,22 @@ def patch_note(
         return _err(**{k: v for k, v in materialized.items() if k != "ok"})
     dict_ops = materialized["ops"]
     hash_tips: list[str] = list(materialized.get("tips") or [])
+
+    regions = classify_patch_regions(dict_ops, yaml_note=is_yaml_note(path))
+    if (
+        guard := _guard_write(
+            full,
+            path,
+            vault=b.name,
+            regions=regions,
+            expected_mtime=expected_mtime,
+            expected_frontmatter_hash=expected_frontmatter_hash,
+            expected_body_hash=expected_body_hash,
+            expected_content_hash=expected_content_hash,
+            content=content,
+        )
+    ):
+        return guard
 
     try:
         if is_yaml_note(path):
@@ -1180,7 +1410,7 @@ def patch_note(
 
     failed = sum(1 for r in result.results if r.get("status") == "error")
     out: dict[str, Any] = {
-        "ok": result.ok,
+        "ok": True,
         "path": path,
         "applied": result.applied,
         "failed": failed,
@@ -1191,10 +1421,15 @@ def patch_note(
         "vault": b.name,
     }
     out.update(okf_meta)
+    attach_region_hashes(out, to_write)
     if verbose:
         out["lines_added"] = result.lines_added
     out = _finalize_write(
-        out, vault=b.name, path=path, expected_mtime=expected_mtime
+        out,
+        vault=b.name,
+        path=path,
+        expected_mtime=expected_mtime,
+        content=to_write,
     )
     for t in hash_tips:
         out = _attach_tip(out, t)
@@ -1213,6 +1448,9 @@ def patch_entry(
     dry_run: bool = False,
     verbose: bool = False,
     expected_mtime: float | None = None,
+    expected_frontmatter_hash: str | None = None,
+    expected_body_hash: str | None = None,
+    expected_content_hash: str | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
     """Dispatch single-path ``patch_note`` or multi-path ``patch_notes`` (XOR)."""
@@ -1237,10 +1475,20 @@ def patch_entry(
             message="pass either path+ops (single) or items[] (multi-path), not both",
         )
     if has_items:
-        if expected_mtime is not None:
+        if expected_mtime is not None or any(
+            x is not None
+            for x in (
+                expected_frontmatter_hash,
+                expected_body_hash,
+                expected_content_hash,
+            )
+        ):
             return _err(
                 error="bad_request",
-                message="expected_mtime is per-item when using items[]; omit top-level expected_mtime",
+                message=(
+                    "expected_mtime / region hashes are per-item when using items[]; "
+                    "omit top-level concurrency fields"
+                ),
             )
         return patch_notes(
             raw_items,  # type: ignore[arg-type]
@@ -1257,6 +1505,9 @@ def patch_entry(
             dry_run=dry_run,
             verbose=verbose,
             expected_mtime=expected_mtime,
+            expected_frontmatter_hash=expected_frontmatter_hash,
+            expected_body_hash=expected_body_hash,
+            expected_content_hash=expected_content_hash,
             vault=vault,
         )
     return _err(
@@ -1375,6 +1626,15 @@ def patch_notes(
                 fail_n += 1
                 continue
 
+        def _opt_hash(key: str) -> str | None:
+            val = raw.get(key)
+            if val is None:
+                return None
+            if not isinstance(val, str):
+                return None
+            s = val.strip()
+            return s or None
+
         item_out = patch_note(
             path,
             ops_list,
@@ -1382,6 +1642,9 @@ def patch_notes(
             dry_run=dry_run,
             verbose=verbose,
             expected_mtime=expected,
+            expected_frontmatter_hash=_opt_hash("expected_frontmatter_hash"),
+            expected_body_hash=_opt_hash("expected_body_hash"),
+            expected_content_hash=_opt_hash("expected_content_hash"),
             vault=b.name,
         )
         item_out = dict(item_out)
