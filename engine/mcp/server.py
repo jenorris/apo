@@ -188,7 +188,8 @@ _MCP_INSTRUCTIONS = (
     "Thread mtime → expected_mtime on follow-up writes; when mtime is stale, "
     "scoped writes may still proceed if expected_frontmatter_hash / expected_body_hash / "
     "expected_content_hash (or a same-process prior read) still matches the untouched region. "
-    "search_notes=content (prefer limit=; top_k alias); "
+    "search_notes=content (prefer limit=; top_k alias; "
+    "vault= one vault or vaults=[] fan-out across separate indexes); "
     "filter_notes=frontmatter / YAML-note catalog (prefer where=; filters alias; "
     "omit where or pass where={} to list; "
     "status sweeps pass fields=[status,okf_type,last_checked,title]); "
@@ -199,8 +200,9 @@ _MCP_INSTRUCTIONS = (
     "append_note may take chunk_hash alone). "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
     "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
-    "index.db writer and wakes on enqueue. Multi-vault: pass vault= "
-    "(APO_VAULTS registry); each vault has its own index + deferred collection."
+    "index.db writer and wakes on enqueue. Multi-vault: pass vault= or "
+    "search_notes(vaults=[…]) (APO_VAULTS registry); each vault has its own "
+    "index + deferred collection."
 ) + (
     ""
     if _LEAN_BOOT
@@ -604,6 +606,15 @@ async def search_notes(
     ] = None,
     folder: str = "",
     vault: str = "",
+    vaults: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "Fan-out across named vaults (separate indexes); merge by score. "
+                "Do not combine with vault=. Empty/omitted → single vault= or default."
+            ),
+        ),
+    ] = None,
     snippet_chars: Annotated[
         int,
         Field(description="Hit preview length (default 240). 0 = full chunk text."),
@@ -622,13 +633,14 @@ async def search_notes(
         ),
     ] = None,
 ) -> dict:
-    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). Prefer limit= over top_k. folder= scopes. Hits include chunk_hash/heading/mtime for append/expand."""
+    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). Prefer limit= over top_k. folder= scopes. vaults=[] fans out across separate indexes. Hits include chunk_hash/heading/mtime for append/expand."""
     return await asyncio.to_thread(
         apo_ops.search,
         query,
         top_k=top_k,
         folder=folder,
         vault=vault,
+        vaults=vaults,
         snippet_chars=snippet_chars,
         limit=limit,
         exclude=exclude,
