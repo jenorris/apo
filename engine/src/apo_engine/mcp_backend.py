@@ -40,6 +40,8 @@ def shape_search_hits(
                 "start_line": h.start_line,
                 "end_line": h.end_line,
                 "modified": modified,
+                # Float epoch for expected_mtime on follow-up writes (ISO modified stays).
+                "mtime": float(mtime) if mtime else None,
             }
         )
     return rows

@@ -557,8 +557,17 @@ async def search_notes(
         int | None,
         Field(description="Max hits (canonical; default 5). Prefer over top_k."),
     ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "Optional path globs to drop. When omitted and folder= is empty, "
+                "APO_SEARCH_EXCLUDE defaults apply (response carries default_exclude)."
+            ),
+        ),
+    ] = None,
 ) -> dict:
-    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). Prefer limit= over top_k. folder= scopes. Hits include chunk_hash/heading for append/expand."""
+    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). Prefer limit= over top_k. folder= scopes. Hits include chunk_hash/heading/mtime for append/expand."""
     return await asyncio.to_thread(
         apo_ops.search,
         query,
@@ -567,6 +576,7 @@ async def search_notes(
         vault=vault,
         snippet_chars=snippet_chars,
         limit=limit,
+        exclude=exclude,
     )
 
 

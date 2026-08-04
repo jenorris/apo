@@ -143,9 +143,9 @@ sequenceDiagram
 **Need:** macOS or Linux, Homebrew (or equivalent), [Ollama](https://ollama.com), a folder of `.md` notes, ~3 GB free while `bge-m3` is loaded.
 
 ```bash
-git clone <apo-repo-url> ~/Code/apo   # or your preferred path
+git clone https://github.com/jenorris/apo.git ~/Code/apo   # or your preferred path
 cd ~/Code/apo
-brew install ollama just              # Ollama is required for default embeddings
+brew install ollama just              # Ollama is required for default embeddings; Python 3.11+
 cp config.env.example .env            # set APO_NOTES_ROOT
 just setup
 just ollama && ollama pull bge-m3     # local embed daemon + model
@@ -231,6 +231,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
 | [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_VAULTS`) |
 | [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC for local gateways (out-of-repo clients) |
+| [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection `host=hermes` |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |
 
@@ -238,6 +239,6 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 
 - **Scope:** one machine, one vault root, local engine — no cloud gateway in this repo.
 - **Embeddings:** default stack needs Ollama + `bge-m3` running locally; ONNX is opt-in, not a drop-in without reindex.
-- **Maturity:** daily-driver quality; not claiming polished public-OSS packaging yet.
+- **Maturity:** daily-driver + shareable install path; Hermes projection and usage contracts ship for autonomous hosts.
 - **Layouts:** PARA / OKF / thread workflows are optional vault **contracts** (or a [template](docs/contracts/)), not engine requirements — frontmatter filtering works either way.
 

@@ -128,7 +128,7 @@ Completed projects and dead areas → `archives/` via `place_note`, preserving h
 | Semantic recall | `search_notes` |
 | Status / field sweeps | `filter_notes` |
 | Known path | `read_note` |
-| Health | `memory_status` first on failures |
+| Health | `just watch-status` + a real `search_notes` (admin `memory_status` only with `APO_MCP_LEAN=0`) |
 
 Set `APO_NOTES_ROOT` to this vault root; index; register MCP per [../quickstart.md](../quickstart.md). Then paste [../onboard-prompt.md](../onboard-prompt.md) so host rules (Cursor / Claude) match the folders you actually created.
 

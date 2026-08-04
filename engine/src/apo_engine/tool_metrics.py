@@ -164,6 +164,7 @@ def read_events(
 def rollup_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     by_tool: dict[str, dict[str, Any]] = {}
     by_error: dict[str, int] = defaultdict(int)
+    by_error_shape: dict[str, int] = defaultdict(int)
     by_day: dict[str, int] = defaultdict(int)
     flag_counts: dict[str, int] = defaultdict(int)
     total_ok = 0
@@ -187,6 +188,7 @@ def rollup_events(events: list[dict[str, Any]]) -> dict[str, Any]:
                 "fields_set": 0,
                 "folder_set": 0,
                 "used_alias": 0,
+                "by_error_shape": defaultdict(int),
             },
         )
         slot["calls"] += 1
@@ -199,6 +201,17 @@ def rollup_events(events: list[dict[str, Any]]) -> dict[str, Any]:
             total_err += 1
             err = str(ev.get("error") or "error")
             by_error[err] += 1
+        shapes = ev.get("error_shape")
+        if isinstance(shapes, list):
+            for shape in shapes:
+                if not shape:
+                    continue
+                key = str(shape)
+                by_error_shape[key] += 1
+                slot["by_error_shape"][key] += 1
+        elif isinstance(shapes, str) and shapes:
+            by_error_shape[shapes] += 1
+            slot["by_error_shape"][shapes] += 1
         dur = float(ev.get("duration_ms") or 0)
         slot["duration_ms_sum"] += dur
         dur_sum += dur
@@ -224,21 +237,25 @@ def rollup_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     tools_out = []
     for name, slot in sorted(by_tool.items(), key=lambda x: (-x[1]["calls"], x[0])):
         calls = slot["calls"] or 1
-        tools_out.append(
-            {
-                "tool": name,
-                "calls": slot["calls"],
-                "ok": slot["ok"],
-                "error": slot["error"],
-                "avg_duration_ms": round(slot["duration_ms_sum"] / calls, 2),
-                "avg_req_bytes": round(slot["req_bytes_sum"] / calls),
-                "avg_resp_bytes": round(slot["resp_bytes_sum"] / calls),
-                "expected_mtime_set": slot["expected_mtime_set"],
-                "fields_set": slot["fields_set"],
-                "folder_set": slot["folder_set"],
-                "used_alias": slot["used_alias"],
-            }
+        shape_counts = dict(
+            sorted(slot["by_error_shape"].items(), key=lambda x: (-x[1], x[0]))
         )
+        row = {
+            "tool": name,
+            "calls": slot["calls"],
+            "ok": slot["ok"],
+            "error": slot["error"],
+            "avg_duration_ms": round(slot["duration_ms_sum"] / calls, 2),
+            "avg_req_bytes": round(slot["req_bytes_sum"] / calls),
+            "avg_resp_bytes": round(slot["resp_bytes_sum"] / calls),
+            "expected_mtime_set": slot["expected_mtime_set"],
+            "fields_set": slot["fields_set"],
+            "folder_set": slot["folder_set"],
+            "used_alias": slot["used_alias"],
+        }
+        if shape_counts:
+            row["by_error_shape"] = shape_counts
+        tools_out.append(row)
 
     n = len(events) or 1
     return {
@@ -251,6 +268,9 @@ def rollup_events(events: list[dict[str, Any]]) -> dict[str, Any]:
         "avg_resp_bytes": round(resp_sum / n) if events else 0,
         "by_tool": tools_out,
         "by_error": dict(sorted(by_error.items(), key=lambda x: (-x[1], x[0]))),
+        "by_error_shape": dict(
+            sorted(by_error_shape.items(), key=lambda x: (-x[1], x[0]))
+        ),
         "by_day": dict(sorted(by_day.items())),
         "flags": dict(sorted(flag_counts.items())),
     }

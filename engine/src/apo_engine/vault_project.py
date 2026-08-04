@@ -1,6 +1,7 @@
 """Project desk skill/rule markdown from ``vault(action=merge)`` IR.
 
-Deterministic — no LLM. Hosts: ``cursor`` (.mdc alwaysApply), ``claude`` (SKILL.md).
+Deterministic — no LLM. Hosts: ``cursor`` (.mdc alwaysApply), ``claude`` /
+``hermes`` (SKILL.md). ``both`` = cursor+claude; ``all`` = cursor+claude+hermes.
 """
 
 from __future__ import annotations
@@ -13,9 +14,13 @@ from typing import Any
 
 DEFAULT_CURSOR_OUT = Path.home() / ".cursor" / "rules" / "apo-desk.mdc"
 DEFAULT_CLAUDE_OUT = Path.home() / ".claude" / "skills" / "apo-desk" / "SKILL.md"
+DEFAULT_HERMES_OUT = (
+    Path.home() / ".apo" / "projected" / "hermes" / "apo-desk" / "SKILL.md"
+)
 DEFAULT_PROJECTED_DIR = Path.home() / ".apo" / "projected"
 
-_HOSTS = frozenset({"cursor", "claude", "both"})
+_HOSTS = frozenset({"cursor", "claude", "hermes", "both", "all"})
+_HOST_HELP = "cursor|claude|hermes|both|all"
 
 # Watch / multi-caller debounce for auto-reproject.
 _reproject_lock = threading.Lock()
@@ -32,6 +37,9 @@ def resolve_out_path(host: str) -> Path:
     if host == "claude":
         explicit = os.environ.get("APO_PROJECT_CLAUDE", "").strip()
         return Path(explicit).expanduser() if explicit else DEFAULT_CLAUDE_OUT
+    if host == "hermes":
+        explicit = os.environ.get("APO_PROJECT_HERMES", "").strip()
+        return Path(explicit).expanduser() if explicit else DEFAULT_HERMES_OUT
     raise ValueError(f"unknown host {host!r}")
 
 
@@ -229,6 +237,38 @@ def render_claude_skill(merge: dict[str, Any]) -> str:
     return header + body
 
 
+def render_hermes_skill(merge: dict[str, Any]) -> str:
+    """Hermes / Lyra native skill — same desk body as Claude, Hermes frontmatter."""
+    body = render_desk_body(merge)
+    header = (
+        "---\n"
+        "name: apo-desk\n"
+        "description: >-\n"
+        "  Apo multi-vault desk policy (generated from vault merge). Durable PARA via\n"
+        "  Apo MCP/RPC; keep Mnemosyne as episodic memory — do not displace it.\n"
+        "---\n\n"
+    )
+    return header + body
+
+
+def _render_for_host(host: str, merge: dict[str, Any]) -> str:
+    if host == "cursor":
+        return render_cursor_mdc(merge)
+    if host == "claude":
+        return render_claude_skill(merge)
+    if host == "hermes":
+        return render_hermes_skill(merge)
+    raise ValueError(f"unknown host {host!r}")
+
+
+def _project_targets(host: str) -> list[str]:
+    if host == "both":
+        return ["cursor", "claude"]
+    if host == "all":
+        return ["cursor", "claude", "hermes"]
+    return [host]
+
+
 def project(
     merge: dict[str, Any],
     *,
@@ -241,12 +281,12 @@ def project(
         return {
             "ok": False,
             "error": "bad_host",
-            "message": "host must be cursor|claude|both",
+            "message": f"host must be {_HOST_HELP}",
         }
-    targets = ["cursor", "claude"] if h == "both" else [h]
+    targets = _project_targets(h)
     out: dict[str, Any] = {"ok": True, "action": "project", "host": h, "files": {}}
     for t in targets:
-        text = render_cursor_mdc(merge) if t == "cursor" else render_claude_skill(merge)
+        text = _render_for_host(t, merge)
         path = resolve_out_path(t)
         entry: dict[str, Any] = {
             "path": str(path),
@@ -260,7 +300,12 @@ def project(
             # Canonical copy under ~/.apo/projected/
             projected = DEFAULT_PROJECTED_DIR
             projected.mkdir(parents=True, exist_ok=True)
-            name = "apo-desk.mdc" if t == "cursor" else "apo-desk.SKILL.md"
+            if t == "cursor":
+                name = "apo-desk.mdc"
+            elif t == "hermes":
+                name = "hermes-apo-desk.SKILL.md"
+            else:
+                name = "apo-desk.SKILL.md"
             (projected / name).write_text(text, encoding="utf-8")
             entry["projected_copy"] = str(projected / name)
         else:

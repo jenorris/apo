@@ -1,0 +1,57 @@
+# usage-contract — host-neutral vault usage IR (template)
+#
+# Copy to <vault>/system/contracts/usage-contract.schema.yaml and edit.
+# Discovered by vault(action=contracts|describe|merge|project).
+# Apo engine does NOT interpret these fields for search/write — harnesses and
+# desk projection consume them. Machine behavior stays in okf/git/… contracts.
+#
+# Determinism: same APO_VAULTS + same usage YAMLs → byte-identical projected
+# skill for a given host (cursor | claude | hermes). No LLM in the compile path.
+
+usage_contract_version: "0.1"
+
+# Registry id this file belongs to (should match APO_VAULTS key).
+vault_id: myvault
+
+purpose: >
+  One-line what this vault is for (e.g. personal PKB, employer threads,
+  household PARA, audit session logs).
+
+in_scope:
+  - topics and folders agents should treat as primary here
+out_scope:
+  - what must not be written or imported from other vaults
+
+# folder → short rule (no cross-vault OKF/layout bleed).
+layout:
+  inbox: capture / working memory
+  areas: standing responsibilities
+  projects: time-bounded work
+  resources: reference
+  archives: cold storage
+
+# Minimal frontmatter keys agents should stamp on concept notes (optional).
+frontmatter_floor:
+  - title
+  # - okf_type
+  # - status
+  # - description
+  # - timestamp
+
+# Enum-ish habit ids (documented in docs/agent-throughput.md / desk habits).
+write_habits:
+  - prefer_append_patch
+  - folder_on_search
+  - expected_mtime_on_followup
+
+# Paths to machine contracts this vault also ships (relative to vault root).
+machine_contracts:
+  - system/contracts/git-contract.schema.yaml
+  # - system/contracts/okf-contract.schema.yaml
+
+# Optional deep docs — not inlined into projected skills (token budget).
+# Use vault_id:relative/path or absolute paths.
+pointers: []
+
+# Soft cap for harness-compiled skill snippets drawn from this file.
+token_budget: 800

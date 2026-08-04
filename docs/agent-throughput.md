@@ -34,12 +34,12 @@ YAML atoms: filter(+fields) → patch(set_field dotted path) + expected_mtime
 
 Successful responses may include a non-fatal **`tip`** field:
 
-- `search_notes` without `folder=` → tip to pass `folder=`
-- Second in-process write to the same path without `expected_mtime` → tip to thread mtime
+- `search_notes` without `folder=` → tip to pass `folder=` (includes top-level dir names when known)
+- Follow-up write after a recent `read_note` / `expand_chunk` / write to the same path without `expected_mtime` → tip with the literal `expected_mtime=<n>` value when known
 - Stale `chunk_hash` with path+heading fallback → tip to re-search for a fresh hash
 - `append_note(content=…)` / `write_note(text=…)` → tip that the alias was used; prefer canonical
 
-Do not treat `tip` as failure; `warning` remains for watcher / path issues.
+Do not treat `tip` as failure; `warning` remains for watcher / path issues. Search hits include float **`mtime`** beside ISO `modified` for threading into writes.
 
 ## Weekly metrics gate
 

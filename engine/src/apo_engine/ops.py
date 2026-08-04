@@ -131,13 +131,35 @@ _MTIME_TIP = (
     "pass expected_mtime from the prior read/write for this path to avoid stale_write"
 )
 
-# Process-local: vault:path → last successful write monotonic time (soft mtime tip).
-_recent_writes: dict[str, float] = {}
-_RECENT_WRITE_TTL_S = 300.0
+# Process-local: vault:path → (monotonic touch time, last known file mtime).
+# Touches from read_note / expand_chunk / successful writes drive soft mtime tips.
+_recent_touches: dict[str, tuple[float, float | None]] = {}
+_RECENT_TOUCH_TTL_S = 300.0
+# Back-compat alias for tests that clear the habit map.
+_recent_writes = _recent_touches
 
 
 def _write_key(vault: str, path: str) -> str:
     return f"{(vault or '').strip()}:{path.replace(chr(92), '/')}"
+
+
+def _prune_recent_touches(now: float | None = None) -> None:
+    now = time.monotonic() if now is None else now
+    stale = [k for k, (mono, _) in _recent_touches.items() if now - mono > _RECENT_TOUCH_TTL_S]
+    for k in stale:
+        del _recent_touches[k]
+
+
+def _record_path_touch(
+    vault: str,
+    path: str,
+    file_mtime: float | None = None,
+) -> None:
+    """Record a successful read/expand/write so a follow-up write can tip expected_mtime."""
+    now = time.monotonic()
+    _prune_recent_touches(now)
+    key = _write_key(vault, path)
+    _recent_touches[key] = (now, file_mtime)
 
 
 def _attach_tip(out: dict[str, Any], tip: str) -> dict[str, Any]:
@@ -149,10 +171,24 @@ def _attach_tip(out: dict[str, Any], tip: str) -> dict[str, Any]:
     return out
 
 
-def _attach_folder_tip(out: dict[str, Any], folder_clean: str) -> dict[str, Any]:
+def _attach_folder_tip(
+    out: dict[str, Any],
+    folder_clean: str,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
     if folder_clean:
         return out
-    return _attach_tip(out, _FOLDER_TIP)
+    tip = _FOLDER_TIP
+    if root is not None:
+        dirs = _top_level_dirs(root)
+        if dirs:
+            shown = "|".join(dirs[:8])
+            tip = (
+                f"pass folder= ({shown}) when the PARA bucket is known — "
+                "unscoped search is slower and noisier"
+            )
+    return _attach_tip(out, tip)
 
 
 def _attach_mtime_tip(
@@ -162,22 +198,29 @@ def _attach_mtime_tip(
     path: str,
     expected_mtime: float | None,
 ) -> dict[str, Any]:
-    """Tip when a second in-process write to the same path omits ``expected_mtime``."""
+    """Tip when a follow-up write omits ``expected_mtime`` after a recent read/write."""
     now = time.monotonic()
-    stale = [k for k, t in _recent_writes.items() if now - t > _RECENT_WRITE_TTL_S]
-    for k in stale:
-        del _recent_writes[k]
+    _prune_recent_touches(now)
 
     key = _write_key(vault or str(out.get("vault") or ""), path)
-    prior = _recent_writes.get(key)
+    prior = _recent_touches.get(key)
     if (
         expected_mtime is None
         and prior is not None
-        and (now - prior) <= _RECENT_WRITE_TTL_S
+        and (now - prior[0]) <= _RECENT_TOUCH_TTL_S
     ):
-        out = _attach_tip(out, _MTIME_TIP)
+        stored_mtime = prior[1]
+        if stored_mtime is not None:
+            tip = f"pass expected_mtime={stored_mtime} to avoid stale_write"
+        else:
+            tip = _MTIME_TIP
+        out = _attach_tip(out, tip)
     if out.get("ok"):
-        _recent_writes[key] = now
+        new_mtime = out.get("mtime")
+        file_mtime = float(new_mtime) if isinstance(new_mtime, (int, float)) else (
+            prior[1] if prior else None
+        )
+        _recent_touches[key] = (now, file_mtime)
     return out
 
 
@@ -438,7 +481,7 @@ def search(
         warnings.append(missing)
     if warnings:
         out["warning"] = "; ".join(warnings)
-    return _attach_folder_tip(out, folder_clean)
+    return _attach_folder_tip(out, folder_clean, root=b.resolved().root)
 
 
 def read_note(
@@ -496,6 +539,7 @@ def read_note(
     out["start_line"] = shaped["start_line"]
     out["end_line"] = shaped["end_line"]
     out["truncated"] = shaped["truncated"]
+    _record_path_touch(b.name, path, float(out["mtime"]))
     return out
 
 
@@ -601,6 +645,7 @@ def expand_chunk(
         }
         if full.exists():
             out_chunk["mtime"] = _mtime(full)
+            _record_path_touch(b.name, rel, float(out_chunk["mtime"]))
         return out_chunk
 
     if not full.exists():
@@ -613,6 +658,8 @@ def expand_chunk(
         int(chunk.get("heading_level", 0)),
     )
     start = section.heading_line if section.title else section.body_start
+    file_mtime = _mtime(full)
+    _record_path_touch(b.name, rel, float(file_mtime))
     return {
         "ok": True,
         "path": rel,
@@ -621,7 +668,7 @@ def expand_chunk(
         "end_line": section.body_end,
         "content": "\n".join(lines[start : section.body_end]),
         "scope": "section",
-        "mtime": _mtime(full),
+        "mtime": file_mtime,
         "vault": b.name,
     }
 

@@ -83,7 +83,7 @@ Label drafts clearly as PROPOSED. Do not write them yet.
 ### Phase 4 — Apply (only after I say yes)
 
 1. Write approved drafts (surgical edits; no drive-by cleanup).
-2. Re-check `memory_status` / a real `search_notes` query.
+2. Re-check with `just watch-status` and a real `search_notes` query (lean desk hides admin `memory_status` — set `APO_MCP_LEAN=0` only if you need it).
 3. Summarize what changed and any follow-ups I must do manually (restart app, pull embeddings).
 
 ### Start now

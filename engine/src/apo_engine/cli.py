@@ -182,12 +182,12 @@ def main(argv: list[str] | None = None) -> int:
 
     pd = sub.add_parser(
         "desk-project",
-        help="project apo-desk Cursor/Claude artifacts from ~/.apo/desk.yaml + vault contracts",
+        help="project apo-desk Cursor/Claude/Hermes artifacts from ~/.apo/desk.yaml + vault contracts",
     )
     pd.add_argument(
         "--host",
         default="both",
-        help="cursor | claude | both (default both)",
+        help="cursor | claude | hermes | both (cursor+claude) | all (default both)",
     )
     pd.add_argument(
         "--dry-run",

@@ -36,6 +36,7 @@ Arg names match MCP where possible. Prefer **`limit`** / **`where`** (aliases `t
 | POST | `/v1/expand` | `{chunk_hash, scope?, vault?}` | section or chunk |
 | POST | `/v1/backlinks` | `{path, limit?, vault?}` | wiki-link backlinks |
 | POST | `/v1/history` | `{limit?, folder?, path?, vault?, since?, until?, preview?, heading?, exclude?, fields?}` | browse by mtime (digest filters), or file git log when `path` + git contract |
+| GET/POST | `/v1/vault` | `{action, vault?, host?, write?, full?}` | registry + contracts + desk merge/project (`list` \| `contracts` \| `describe` \| `merge` \| `project`) |
 | POST | `/v1/git_sync` | `{action, message?, vault?}` | git contract sync: `status` \| `run` \| `pull` \| `clear_block` |
 
 ### Write
@@ -67,6 +68,8 @@ All responses are JSON with `ok: true|false`. Error bodies include `error` + `me
 | `APO_SEND_MAX_BYTES` | `5242880` | Max host file size for `place_note` copies |
 
 Vault / index / Ollama settings are the same as the rest of the engine (`APO_NOTES_ROOT`, `APO_INDEX`, …).
+
+**Hermes / Lyra:** prefer this RPC path so the agent process does not own the stdio MCP subprocess. Keep Mnemosyne as episodic memory — Apo is durable PARA only. See [hermes.md](./hermes.md).
 
 ## Laravel (`apo-enterprise`)
 

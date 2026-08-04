@@ -2,26 +2,27 @@
 
 Get a local Apo engine indexing **your** Markdown vault and talking to Cursor or Claude Code over MCP.
 
-**You need:** macOS or Linux, Homebrew (or equivalent), [Ollama](https://ollama.com), a folder of `.md` notes, ~3 GB free while `bge-m3` is loaded.
+**You need:** macOS or Linux, **Python 3.11+**, Homebrew (or equivalent), [Ollama](https://ollama.com), a folder of `.md` notes, ~3 GB free while `bge-m3` is loaded. `just inspect` also needs Node (`npx`) and [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) — or use `just tool-list` instead.
 
 This guide is **local engine only** — one machine, one vault root. Default embeddings require a running Ollama daemon.
 
 ## 1. Install
 
 ```bash
-git clone <apo-repo-url> ~/Code/apo   # or your preferred path
+git clone https://github.com/jenorris/apo.git ~/Code/apo   # or your preferred path
 cd ~/Code/apo
-brew install ollama just
+brew install ollama just ripgrep   # Node optional — only for `just inspect`
 cp config.env.example .env
 ```
 
-Edit `.env`:
+Edit `.env` (use **absolute paths** — `just dotenv-load` does not expand `${HOME}`):
 
 | Variable | Set to |
 |----------|--------|
 | `APO_NOTES_ROOT` | Absolute path to **your** markdown vault |
 | `APO_INDEX` | Recommend `$HOME/.apo/index.db` — survives clean checkouts; multi-vault indexes default there. To relocate later: move the file, update `APO_INDEX` everywhere it's set (`.env` + MCP config), restart the watcher — or just `just reindex` at the new path |
 | `OLLAMA_KEEP_ALIVE` | `5m` while working; `0` to unload the model when idle |
+| `APO_SEARCH_EXCLUDE` | Recommended for PARA/noisy vaults: `inbox/daily/* archives/*` (unscoped searches only; +8pts hit@5 measured — see [search-quality.md](./search-quality.md)) |
 
 ```bash
 just setup
@@ -47,12 +48,13 @@ Add an `apo` block to `~/.cursor/mcp.json` (merge into existing `mcpServers`):
     "APO_EMBED_BACKEND": "ollama",
     "APO_MODEL": "bge-m3",
     "APO_OLLAMA_URL": "http://127.0.0.1:11434",
-    "OLLAMA_KEEP_ALIVE": "5m"
+    "OLLAMA_KEEP_ALIVE": "5m",
+    "APO_SEARCH_EXCLUDE": "inbox/daily/* archives/*"
   }
 }
 ```
 
-Lean desk is **default** (admin tools + `delete_note` hidden). Set `"APO_MCP_LEAN": "0"` only when you need `memory_status` / `reindex` / `delete_note`.
+Lean desk is **default** (admin tools + `delete_note` hidden). Set `"APO_MCP_LEAN": "0"` only when you need admin tools (`reload_config`, `memory_status`, `tool_stats`, `delete_note`, `git_sync`, `reindex_deferred`, `reindex`).
 
 **Quit Cursor fully** (Cmd+Q on macOS) and reopen. MCP subprocesses do not reliably hot-reload.
 
@@ -64,12 +66,28 @@ claude mcp add -s user apo -- \
   /ABSOLUTE/PATH/TO/apo/engine/mcp/server.py
 ```
 
-Ensure the same env vars as the Cursor block are visible to that process (`~/.claude.json` or shell profile). Omit `APO_MCP_LEAN` (lean default) unless you need admin tools (`memory_status`, `reindex`, `delete_note` → set `APO_MCP_LEAN=0`).
+Then put the same env block as Cursor into `~/.claude.json` under the `apo` server (or export them in the shell that launches Claude):
+
+```json
+"env": {
+  "APO_NOTES_ROOT": "/ABSOLUTE/PATH/TO/YOUR/VAULT",
+  "APO_INDEX": "/ABSOLUTE/PATH/TO/HOME/.apo/index.db",
+  "APO_EMBED_BACKEND": "ollama",
+  "APO_MODEL": "bge-m3",
+  "APO_OLLAMA_URL": "http://127.0.0.1:11434",
+  "OLLAMA_KEEP_ALIVE": "5m",
+  "APO_SEARCH_EXCLUDE": "inbox/daily/* archives/*"
+}
+```
+
+Omit `APO_MCP_LEAN` (lean default) unless you need admin tools → set `APO_MCP_LEAN=0`.
 
 ## 4. Verify
 
 ```bash
-cd /ABSOLUTE/PATH/TO/apo && just inspect
+cd /ABSOLUTE/PATH/TO/apo
+just tool-list    # pure Python — no Node required
+# or: just inspect   # needs npx + rg
 ```
 
 Lean default: expect **11** tools (includes `vault`). With `APO_MCP_LEAN=0`, expect **18**.
@@ -78,14 +96,23 @@ In the agent, run a known `search_notes` query — the right note should land ne
 
 ## 5. Background watcher (recommended)
 
-Keeps the index current as notes change and drains the deferred write queue:
+Keeps the index current as notes change and drains the deferred write queue.
+
+**macOS (launchd):**
 
 ```bash
 just watch-install
 just watch-status
 ```
 
-After pulling engine changes that touch watch/index code: `just setup && just watch-install`.
+**Linux / foreground / any OS (no launchd):**
+
+```bash
+just watch-start
+just watch-status
+```
+
+After pulling engine changes that touch watch/index code: `just setup`, then re-run `watch-install` (macOS) or `watch-start`.
 
 Full rebuilds (`just reindex`) commit embeddings in batches and clear the backlinks table — safe to interrupt and restart.
 
@@ -95,7 +122,7 @@ Install gets the engine running. **Persistent write habits** should match *your*
 
 1. Open your vault as the agent workspace.
 2. **Existing structure:** paste [`onboard-prompt.md`](./onboard-prompt.md) (infer → propose → approve).
-3. **Empty vault / want a preset:** pick an optional contract template under [`contracts/`](./contracts/), scaffold (and any machine-readable YAML under `system/config/`), *then* run the onboard prompt.
+3. **Empty vault / want a preset:** pick an optional contract template under [`contracts/`](./contracts/), scaffold (and any machine-readable YAML under `system/contracts/`), *then* run the onboard prompt.
 4. Review drafts; approve before anything is written.
 5. Throughput habits (decision tree, `folder=`, `expected_mtime`, metrics): [`agent-throughput.md`](./agent-throughput.md).
 
@@ -103,16 +130,17 @@ Install gets the engine running. **Persistent write habits** should match *your*
 
 | Symptom | Fix |
 |---------|-----|
-| 0 Apo tools in Cursor | Full quit/reopen; confirm `apo` key; Ollama up with `bge-m3` |
+| 0 Apo tools in Cursor | Full quit/reopen (Cmd+Q); confirm `mcpServers.apo` key; `command` / `args` / `cwd` are absolute and `engine/.venv` exists (`just setup`); `APO_NOTES_ROOT` exists; Ollama up with `bge-m3`; check MCP host logs for subprocess crash |
 | Empty / stale search | `just reindex` after model/backend change; confirm `APO_NOTES_ROOT`; `just watch-status` |
-| Writes don’t show in search | Ensure watcher installed; wait for debounce/poll (enqueue wakes watcher) |
+| Writes don’t show in search | Ensure watcher is running (`just watch-status`); wait for debounce/poll (enqueue wakes watcher) |
 | Ollama `/api/embed` HTTP 500 | Check `ollama --version` and upgrade if needed before blaming vault content |
 
-Health one-liner (adjust `APO_INDEX` if you set a custom path):
+Health (Ollama + index + watcher):
 
 ```bash
 curl -sf http://127.0.0.1:11434/api/tags | grep -q bge-m3 && \
-  test -f "${APO_INDEX:-$HOME/.apo/index.db}" && echo "Apo OK"
+  test -f "${APO_INDEX:-$HOME/.apo/index.db}" && \
+  just watch-status && echo "Apo OK"
 ```
 
 ## What Apo is (one paragraph)
