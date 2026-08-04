@@ -68,21 +68,13 @@ class SearchVaultsFanoutTests(unittest.TestCase):
         # patch.dict survives conftest's monkeypatch.delenv("APO_VAULTS").
         self._env = mock.patch.dict(
             os.environ,
-            {
-                "APO_VAULTS": str(self.reg),
-                "APO_NOTES_ROOT": str(self.alpha),
-                "APO_INDEX": str(self.tmp / "legacy.db"),
-                "APO_COLLECTION": "legacy",
-            },
+            {"APO_VAULTS": str(self.reg)},
             clear=False,
         )
         self._env.start()
         self._patches = [
             mock.patch.object(core, "embed", _fake_embed),
             mock.patch.object(config, "SEARCH_EXCLUDE_DEFAULT", []),
-            mock.patch.object(config, "NOTES_ROOT", self.alpha),
-            mock.patch.object(config, "INDEX_PATH", self.tmp / "legacy.db"),
-            mock.patch.object(config, "COLLECTION", "legacy"),
         ]
         for p in self._patches:
             p.start()
