@@ -13,7 +13,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from apo_engine import ops, rpc, vault_contracts
+from apo_engine import ops, rpc, vault_contracts, vault_project
 
 
 class ContractIdTest(unittest.TestCase):
@@ -26,6 +26,23 @@ class ContractIdTest(unittest.TestCase):
             vault_contracts.contract_id_from_name("usage.yaml"),
             "usage",
         )
+
+
+class IntegrationsFormatTest(unittest.TestCase):
+    def test_str_list_accepts_scalar_and_list(self):
+        self.assertEqual(vault_project._str_list("apo"), ["apo"])
+        self.assertEqual(vault_project._str_list(["apo", " context7 "]), ["apo", "context7"])
+        self.assertEqual(vault_project._str_list(""), [])
+        self.assertEqual(vault_project._str_list(None), [])
+
+    def test_format_integrations_scalar_required(self):
+        line = vault_project.format_integrations_line(
+            "meta",
+            {"mcp": {"required": "apo", "expected": ["context7"]}, "cli": "gws"},
+        )
+        self.assertIn("required=`apo`", line)
+        self.assertIn("expected=`context7`", line)
+        self.assertIn("cli=`gws`", line)
 
 
 class DiscoverContractsTest(unittest.TestCase):

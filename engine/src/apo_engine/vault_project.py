@@ -101,7 +101,9 @@ def _usage_integrations(row: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _str_list(raw: Any) -> list[str]:
-    """Normalize a YAML list of host keys / CLI names (drop empties)."""
+    """Normalize host keys / CLI names (YAML list or single scalar string)."""
+    if isinstance(raw, str):
+        return [raw.strip()] if raw.strip() else []
     if not isinstance(raw, list):
         return []
     out: list[str] = []
