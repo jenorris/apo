@@ -507,6 +507,12 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     index = Path(path or vaults.index_path()).resolve()
     key = str(index)
     db = sqlite3.connect(str(index), timeout=config.DB_TIMEOUT)
+    if not hasattr(db, "enable_load_extension"):
+        raise RuntimeError(
+            "This Python's sqlite3 cannot load extensions (needed for sqlite-vec). "
+            "On macOS use Homebrew Python (`brew install python`), not the system/"
+            "python.org build — see https://alexgarcia.xyz/sqlite-vec/python.html"
+        )
     db.enable_load_extension(True)
     sqlite_vec.load(db)
     db.enable_load_extension(False)
