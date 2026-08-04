@@ -113,12 +113,12 @@ def _str_list(raw: Any) -> list[str]:
     return out
 
 
+def _fmt_host_keys(keys: list[str]) -> str:
+    return ", ".join(f"`{k}`" for k in keys) if keys else "—"
+
+
 def format_integrations_line(name: str, integ: dict[str, Any]) -> str:
     """One-liner for apo-desk Expected integrations section (deterministic)."""
-
-    def _fmt(keys: list[str]) -> str:
-        return ", ".join(f"`{k}`" for k in keys) if keys else "—"
-
     mcp = integ.get("mcp") if isinstance(integ.get("mcp"), dict) else {}
     required = _str_list(mcp.get("required"))
     expected = _str_list(mcp.get("expected"))
@@ -131,14 +131,50 @@ def format_integrations_line(name: str, integ: dict[str, Any]) -> str:
         cli = _str_list(cli_raw)
 
     bits = [
-        f"required={_fmt(required)}",
-        f"expected={_fmt(expected)}",
-        f"optional={_fmt(optional)}",
-        f"never={_fmt(never)}",
+        f"required={_fmt_host_keys(required)}",
+        f"expected={_fmt_host_keys(expected)}",
+        f"optional={_fmt_host_keys(optional)}",
+        f"never={_fmt_host_keys(never)}",
     ]
     if cli:
-        bits.append(f"cli={_fmt(cli)}")
+        bits.append(f"cli={_fmt_host_keys(cli)}")
     return f"- `{name}`: " + "; ".join(bits)
+
+
+def format_mcp_proxy_lines(name: str, integ: dict[str, Any]) -> list[str]:
+    """Lines for apo-desk MCP proxy section when ``integrations.mcp.proxy`` is set."""
+    mcp = integ.get("mcp") if isinstance(integ.get("mcp"), dict) else {}
+    proxy = mcp.get("proxy")
+    if not isinstance(proxy, dict):
+        return []
+    proxy_name = str(proxy.get("name") or "").strip()
+    if not proxy_name:
+        return []
+
+    via = _str_list(proxy.get("via"))
+    parked = _str_list(proxy.get("parked"))
+    catalog = str(proxy.get("catalog") or "").strip()
+    enable = str(proxy.get("enable_parked") or "").strip()
+    invoke = str(
+        proxy.get("invoke")
+        or "list_servers → list_commands → invoke_command "
+        "(nest downstream args under `parameters` only)"
+    ).strip()
+
+    lines = [
+        f"- `{name}`: use Cursor MCP host `{proxy_name}` for proxied stdio servers "
+        f"(do not expect them as top-level Cursor tools)."
+    ]
+    if via:
+        lines.append(f"  - via `{proxy_name}`: {_fmt_host_keys(via)}")
+    if parked:
+        lines.append(f"  - parked (off until enabled): {_fmt_host_keys(parked)}")
+    if catalog:
+        lines.append(f"  - catalog: `{catalog}`")
+    if enable:
+        lines.append(f"  - enable parked: {enable}")
+    lines.append(f"  - call pattern: {invoke}")
+    return lines
 
 
 def format_contribution_line(name: str, contrib: dict[str, Any]) -> str:
@@ -248,6 +284,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
 
     contrib_lines: list[str] = []
     integ_lines: list[str] = []
+    proxy_lines: list[str] = []
     contrib_pointer_raws: list[str] = []
     for name, row in sorted(vaults.items()):
         if not isinstance(row, dict):
@@ -268,6 +305,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         integ = _usage_integrations(row)
         if integ:
             integ_lines.append(format_integrations_line(name, integ))
+            proxy_lines.extend(format_mcp_proxy_lines(name, integ))
             iptrs = integ.get("pointers")
             if isinstance(iptrs, list):
                 for p in iptrs:
@@ -295,6 +333,18 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         )
         lines.append("")
         lines.extend(integ_lines)
+        lines.append("")
+
+    if proxy_lines:
+        lines.append("## MCP proxy")
+        lines.append("")
+        lines.append(
+            "When `integrations.mcp.proxy` is set, listed `via` / `parked` servers are "
+            "**not** top-level Cursor MCP tools — call them through the named proxy "
+            "(typically `lazy-mcp`). Parked servers stay off until enabled in the catalog."
+        )
+        lines.append("")
+        lines.extend(proxy_lines)
         lines.append("")
 
     lines.append("## Dual-write")

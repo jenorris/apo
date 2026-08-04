@@ -83,15 +83,25 @@ machine_contracts:
 #   expected — default tools when working this vault's domain
 #   optional — situational / parkable (ops, debugging)
 #   never    — cross-pollination guard (do not treat as primary here)
+# When stdio servers sit behind a Cursor proxy (e.g. lazy-mcp), set mcp.proxy so
+# apo-desk projects an ## MCP proxy section — agents must invoke via the proxy,
+# not expect top-level Cursor tools named after the backend.
 # integrations:
 #   mcp:
 #     required: [apo]
 #     expected: []
 #     optional: []
 #     never: []
+#     proxy:
+#       name: lazy-mcp          # Cursor mcp.json host key
+#       via: []                 # backends normally reachable through the proxy
+#       parked: []              # enabled:false until flipped in catalog
+#       catalog: vault:path/to/servers.json
+#       enable_parked: "Set enabled:true in catalog, then SIGHUP proxy PID / reload MCP"
+#       # invoke: optional override of default list_servers → … → invoke_command tip
 #   cli:
 #     expected: []   # e.g. gws, acli, gh — or a bare list under cli:
-#   pointers: []     # deep how-tos (source-routing, work-environment)
+#   pointers: []     # deep how-tos (source-routing, work-environment, lazy-mcp)
 
 # Optional deep docs — not inlined into projected skills (token budget).
 # Use vault_id:relative/path or absolute paths.

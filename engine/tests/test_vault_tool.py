@@ -125,6 +125,12 @@ class VaultOpTest(unittest.TestCase):
             "    expected: [context7]\n"
             "    optional: [granola]\n"
             "    never: [slack]\n"
+            "    proxy:\n"
+            "      name: lazy-mcp\n"
+            "      via: [bugsnag, gtm]\n"
+            "      parked: [metabase, stape]\n"
+            "      catalog: alpha:system/config/lazy-mcp/servers.json\n"
+            "      enable_parked: Flip enabled in catalog then SIGHUP\n"
             "  cli:\n"
             "    expected: [gws]\n"
             "  pointers:\n"
@@ -271,6 +277,13 @@ class VaultOpTest(unittest.TestCase):
             self.assertIn("never=`slack`", text)
             self.assertIn("cli=`gws`", text)
             self.assertIn("source-routing", text)
+            self.assertIn("## MCP proxy", text)
+            self.assertIn("use Cursor MCP host `lazy-mcp`", text)
+            self.assertIn("via `lazy-mcp`: `bugsnag`, `gtm`", text)
+            self.assertIn("parked (off until enabled): `metabase`, `stape`", text)
+            self.assertIn("alpha:system/config/lazy-mcp/servers.json", text)
+            self.assertIn("Flip enabled in catalog then SIGHUP", text)
+            self.assertIn("invoke_command", text)
 
             written = ops.vault_op("project", host="both", write=True)
             self.assertTrue(written["ok"])
