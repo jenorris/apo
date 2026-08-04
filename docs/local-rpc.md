@@ -45,10 +45,10 @@ Writes update markdown on disk and **enqueue** reindex for `apo-engine watch` (s
 
 | Method | Path | Body | Notes |
 |--------|------|------|-------|
-| POST | `/v1/write` | `{path, content?, text?, expected_mtime?, vault?}` | create/overwrite only (`content` canonical; `text` alias; `append` key → `append_removed`) |
-| POST | `/v1/append` | `{text?, content?, path?, heading?, chunk_hash?, position?, create?, expected_mtime?, vault?}` | surgical append (`text` canonical; `content` alias; `path` or `chunk_hash` required) |
-| POST | `/v1/patch` | `{path, ops, strict?, dry_run?, verbose?, expected_mtime?, vault?}` | batch mutators |
-| POST | `/v1/patch_notes` | `{items, strict?, dry_run?, verbose?, vault?}` | multi-path patch batch (`items: [{path, ops, expected_mtime?}]`, max 20) |
+| POST | `/v1/write` | `{path, content?, text?, expected_mtime?, expected_frontmatter_hash?, expected_body_hash?, expected_content_hash?, vault?}` | create/overwrite only (`content` canonical; `text` alias; `append` key → `append_removed`) |
+| POST | `/v1/append` | `{text?, content?, path?, heading?, chunk_hash?, position?, create?, expected_mtime?, expected_*_hash?, vault?}` | surgical append (`text` canonical; `content` alias; `path` or `chunk_hash` required) |
+| POST | `/v1/patch` | `{path, ops, strict?, dry_run?, verbose?, expected_mtime?, expected_*_hash?, vault?}` | batch mutators |
+| POST | `/v1/patch_notes` | `{items, strict?, dry_run?, verbose?, vault?}` | multi-path patch batch (`items: [{path, ops, expected_mtime?, expected_*_hash?}]`, max 20) |
 | POST | `/v1/place` | `{src, dst, overwrite?, fields?, expected_mtime?, vault?}` | move if src in vault; else copy host `.md` |
 | POST | `/v1/move` | same as `/v1/place` | **alias** — prefer `/v1/place` |
 | POST | `/v1/send` | same as `/v1/place` | **alias** for host→vault copy — prefer `/v1/place` |

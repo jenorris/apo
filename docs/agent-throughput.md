@@ -17,6 +17,8 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 
 - Require **`folder=`** whenever the PARA bucket is known; unscoped search is a smell.
 - Require **`expected_mtime`** on any second write to the same path in a turn.
+  Prefer threading `frontmatter_hash` / `body_hash` / `content_hash` from the prior
+  read when editing hot notes (scoped writes survive unrelated mtime bumps).
 - Cap full-file `read_note` (no `heading` / `max_chars`) unless doing a full rewrite.
 - Dual-write must be **parallel** MCP calls; end-of-turn gate fails if only one side landed.
 - `patch_note` ops need discriminator **`op`** and keys `field` / `find` / `replace` — never invented `key` / `old` / `new`.

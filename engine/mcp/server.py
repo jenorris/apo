@@ -185,7 +185,9 @@ _MCP_INSTRUCTIONS = (
     "YAML notes: set_field/delete_field (dotted nested paths); whole file is the catalog row; "
     "parallel mutators in one turn use the same vault=; "
     "place_note=move if src in vault else copy host .md into vault (delete_note is admin-only). "
-    "Thread mtime → expected_mtime on follow-up writes. "
+    "Thread mtime → expected_mtime on follow-up writes; when mtime is stale, "
+    "scoped writes may still proceed if expected_frontmatter_hash / expected_body_hash / "
+    "expected_content_hash (or a same-process prior read) still matches the untouched region. "
     "search_notes=content (prefer limit=; top_k alias); "
     "filter_notes=frontmatter / YAML-note catalog (prefer where=; filters alias; "
     "omit where or pass where={} to list; "
@@ -326,6 +328,13 @@ def _memory_status_sync() -> dict:
 ###############################################################################
 
 
+_REGION_HASH_DESC = (
+    "Region precondition (16-hex blake2b from read/expand/search). "
+    "When expected_mtime is stale, a scoped write still proceeds if this hash matches "
+    "the untouched frontmatter, body, or section/chunk."
+)
+
+
 @mcp.tool(annotations=_MUTATE)
 async def write_note(
     path: str,
@@ -342,9 +351,21 @@ async def write_note(
         Field(
             description=(
                 "Optimistic concurrency: pass mtime from a prior read/write for this path. "
-                "On stale_write, re-read and retry."
+                "On stale_write, re-read and retry (or pass matching region hashes)."
             ),
         ),
+    ] = None,
+    expected_frontmatter_hash: Annotated[
+        str | None,
+        Field(description=_REGION_HASH_DESC),
+    ] = None,
+    expected_body_hash: Annotated[
+        str | None,
+        Field(description=_REGION_HASH_DESC),
+    ] = None,
+    expected_content_hash: Annotated[
+        str | None,
+        Field(description=_REGION_HASH_DESC),
     ] = None,
     vault: str = "",
 ) -> dict:
@@ -355,6 +376,9 @@ async def write_note(
         content,
         text=text,
         expected_mtime=expected_mtime,
+        expected_frontmatter_hash=expected_frontmatter_hash,
+        expected_body_hash=expected_body_hash,
+        expected_content_hash=expected_content_hash,
         vault=vault,
     )
 
@@ -379,9 +403,21 @@ async def append_note(
         Field(
             description=(
                 "Optimistic concurrency: pass mtime from a prior read/write for this path. "
-                "On stale_write, re-read and retry."
+                "On stale_write, re-read and retry (or pass matching region hashes)."
             ),
         ),
+    ] = None,
+    expected_frontmatter_hash: Annotated[
+        str | None,
+        Field(description=_REGION_HASH_DESC),
+    ] = None,
+    expected_body_hash: Annotated[
+        str | None,
+        Field(description=_REGION_HASH_DESC),
+    ] = None,
+    expected_content_hash: Annotated[
+        str | None,
+        Field(description=_REGION_HASH_DESC),
     ] = None,
     vault: str = "",
 ) -> dict:
@@ -396,6 +432,9 @@ async def append_note(
         position=position,
         create=create,
         expected_mtime=expected_mtime,
+        expected_frontmatter_hash=expected_frontmatter_hash,
+        expected_body_hash=expected_body_hash,
+        expected_content_hash=expected_content_hash,
         vault=vault,
     )
 
@@ -422,9 +461,22 @@ async def patch_note(
         Field(
             description=(
                 "Single-path only: optimistic concurrency mtime. "
-                "Multi-path: set expected_mtime per items[] entry."
+                "Multi-path: set expected_mtime per items[] entry. "
+                "Stale mtime + matching region hash still allows scoped ops."
             ),
         ),
+    ] = None,
+    expected_frontmatter_hash: Annotated[
+        str | None,
+        Field(description=_REGION_HASH_DESC + " Single-path only; per-item for items[]."),
+    ] = None,
+    expected_body_hash: Annotated[
+        str | None,
+        Field(description=_REGION_HASH_DESC + " Single-path only; per-item for items[]."),
+    ] = None,
+    expected_content_hash: Annotated[
+        str | None,
+        Field(description=_REGION_HASH_DESC + " Single-path only; per-item for items[]."),
     ] = None,
     vault: str = "",
 ) -> dict:
@@ -438,6 +490,9 @@ async def patch_note(
         dry_run=dry_run,
         verbose=verbose,
         expected_mtime=expected_mtime,
+        expected_frontmatter_hash=expected_frontmatter_hash,
+        expected_body_hash=expected_body_hash,
+        expected_content_hash=expected_content_hash,
         vault=vault,
     )
 

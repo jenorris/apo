@@ -170,6 +170,23 @@ def _opt_float(body: dict[str, Any], key: str) -> float | None:
     return float(body[key])
 
 
+def _opt_str(body: dict[str, Any], key: str) -> str | None:
+    if key not in body or body[key] is None:
+        return None
+    if not isinstance(body[key], str):
+        return None
+    s = body[key].strip()
+    return s or None
+
+
+def _region_kwargs(body: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "expected_frontmatter_hash": _opt_str(body, "expected_frontmatter_hash"),
+        "expected_body_hash": _opt_str(body, "expected_body_hash"),
+        "expected_content_hash": _opt_str(body, "expected_content_hash"),
+    }
+
+
 @_route("POST", "/v1/write")
 def _write(body: dict[str, Any]) -> dict[str, Any]:
     path = body.get("path")
@@ -196,6 +213,7 @@ def _write(body: dict[str, Any]) -> dict[str, Any]:
         text=text if isinstance(text, str) else None,
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
+        **_region_kwargs(body),
     )
 
 
@@ -235,6 +253,7 @@ def _append(body: dict[str, Any]) -> dict[str, Any]:
         create=bool(body.get("create")),
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
+        **_region_kwargs(body),
     )
 
 
@@ -260,6 +279,7 @@ def _patch(body: dict[str, Any]) -> dict[str, Any]:
         verbose=bool(body.get("verbose")),
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
+        **_region_kwargs(body),
     )
 
 

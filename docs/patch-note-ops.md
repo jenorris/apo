@@ -24,6 +24,10 @@ add new aliases without an agent-success regression and a docs bump.
 
 Thread `mtime` from read/write into **`expected_mtime`** on the next mutate for
 the same path (`place_note` guards **src** for in-vault moves, **dst** for host copies).
+When file mtime advanced from an *unrelated* edit, scoped writes may still proceed if
+**`expected_frontmatter_hash` / `expected_body_hash` / `expected_content_hash`** match
+(or a same-process prior `read_note` / `expand_chunk` left a region snapshot). Reads
+return those hashes; search hits include `content_hash` for the chunk text.
 
 ## Roles (not one overloaded “anchor”)
 
