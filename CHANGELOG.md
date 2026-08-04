@@ -2,9 +2,9 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
-## [0.4.0] — 2026-08-03
+## [Unreleased]
 
-Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share. **Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads.
+Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share (cut as **v0.4.0** when ready). **Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads.
 
 ### Added
 
