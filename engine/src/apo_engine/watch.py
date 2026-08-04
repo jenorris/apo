@@ -303,6 +303,36 @@ def _watch_one(
                 ready = debouncer.ready(now=now)
                 if ready:
                     stats.indexed += _index_paths(ready, verbose=verbose)
+                    try:
+                        from . import vault_project
+
+                        if any(
+                            vault_project.is_contracts_rel(
+                                p.relative_to(root).as_posix()
+                            )
+                            for p in ready
+                        ):
+                            vault_project.maybe_reproject(
+                                reason=f"contracts:{label}", verbose=verbose
+                            )
+                    except Exception as proj_err:
+                        if verbose:
+                            print(
+                                f"  [{label}] desk-project error: {proj_err}",
+                                flush=True,
+                            )
+
+                # Desk overlay lives outside vault roots — poll mtime each cycle.
+                try:
+                    from . import vault_project
+
+                    vault_project.maybe_reproject(reason="desk-poll", verbose=verbose)
+                except Exception as proj_err:
+                    if verbose:
+                        print(
+                            f"  [{label}] desk-poll project error: {proj_err}",
+                            flush=True,
+                        )
 
                 if verbose and (stats.indexed or stats.purged or (
                     stats.vault_stats

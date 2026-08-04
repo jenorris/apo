@@ -145,15 +145,19 @@ class VaultOpTest(unittest.TestCase):
     def test_contracts_all_and_one(self):
         all_out = ops.vault_op("contracts")
         self.assertTrue(all_out["ok"])
+        self.assertFalse(all_out["full"])
         self.assertIn("alpha", all_out["vaults"])
-        self.assertIn(
-            "usage-contract", all_out["vaults"]["alpha"]["contracts"]
-        )
+        alpha_c = all_out["vaults"]["alpha"]["contracts"]["usage-contract"]
+        self.assertNotIn("data", alpha_c)
+        self.assertEqual(alpha_c["path"], "system/contracts/usage-contract.schema.yaml")
         one = ops.vault_op("contracts", vault="beta")
         self.assertEqual(one["vault"], "beta")
         self.assertIn("git-contract", one["contracts"])
+        self.assertNotIn("data", one["contracts"]["git-contract"])
+        full = ops.vault_op("contracts", vault="beta", full=True)
+        self.assertTrue(full["full"])
         self.assertEqual(
-            one["contracts"]["git-contract"]["data"]["remote"],
+            full["contracts"]["git-contract"]["data"]["remote"],
             "https://b.git",
         )
 
@@ -163,8 +167,10 @@ class VaultOpTest(unittest.TestCase):
         self.assertEqual(out["vault"], "alpha")
         self.assertTrue(out["default"])
         self.assertEqual(out["contract_ids"], ["usage-contract"])
+        self.assertNotIn("data", out["contracts"]["usage-contract"])
+        full = ops.vault_op("describe", full=True)
         self.assertEqual(
-            out["contracts"]["usage-contract"]["data"]["purpose"], "test"
+            full["contracts"]["usage-contract"]["data"]["purpose"], "test"
         )
 
     def test_bad_action(self):
@@ -238,14 +244,22 @@ class VaultOpTest(unittest.TestCase):
             out = ops.vault_op("merge")
         self.assertTrue(out["ok"])
         self.assertEqual(out["action"], "merge")
+        self.assertFalse(out["full"])
         self.assertEqual(out["desk"]["citations"], "absolute_markdown")
         self.assertFalse(out["merge_rules"]["cross_pollinate_contracts"])
         self.assertEqual(out["vaults"]["alpha"]["role"], "pkb")
         self.assertEqual(out["vaults"]["beta"]["role"], "employer")
         self.assertIn("usage-contract", out["vaults"]["alpha"]["contract_ids"])
+        self.assertNotIn("data", out["vaults"]["alpha"]["contracts"]["usage-contract"])
         self.assertEqual(out["desk_meta"]["source"], "file")
         self.assertIn("habits", out["desk"])
         self.assertIn("pointers", out["merge_rules"]["desk_overlay_keys"])
+        full = ops.vault_op("merge", full=True)
+        self.assertTrue(full["full"])
+        self.assertEqual(
+            full["vaults"]["alpha"]["contracts"]["usage-contract"]["data"]["purpose"],
+            "test",
+        )
 
     def test_merge_defaults_without_desk(self):
         missing = self.tmp / "no-such-desk.yaml"

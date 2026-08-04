@@ -138,16 +138,30 @@ def contract_ids(vault_root: Path) -> list[str]:
     return list(discover_contracts(vault_root))
 
 
+def summarize_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Strip parsed ``data`` — id/path/source/ok (+ error)."""
+    out: dict[str, Any] = {
+        "id": entry["id"],
+        "path": entry["path"],
+        "source": entry["source"],
+        "ok": entry.get("ok", True),
+    }
+    if not out["ok"] and entry.get("error"):
+        out["error"] = entry["error"]
+    return out
+
+
+def present_contracts(
+    contracts: dict[str, dict[str, Any]], *, full: bool
+) -> dict[str, dict[str, Any]]:
+    """Return contracts with or without YAML bodies (default: summaries)."""
+    if full:
+        return contracts
+    return {cid: summarize_entry(entry) for cid, entry in contracts.items()}
+
+
 def contracts_summary(vault_root: Path) -> list[dict[str, Any]]:
     """Ids + paths without parsed bodies (for ``list``)."""
-    out: list[dict[str, Any]] = []
-    for cid, entry in discover_contracts(vault_root).items():
-        out.append(
-            {
-                "id": cid,
-                "path": entry["path"],
-                "source": entry["source"],
-                "ok": entry.get("ok", True),
-            }
-        )
-    return out
+    return [
+        summarize_entry(entry) for entry in discover_contracts(vault_root).values()
+    ]

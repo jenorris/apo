@@ -1,6 +1,7 @@
 # Apo desk overlay — host-level multi-vault policy (not vault content).
 # Copy to ~/.apo/desk.yaml (or set APO_DESK_CONFIG).
 # Consumed by vault(action=merge|project). Per-vault machine contracts stay in system/contracts/.
+# After edits: `just desk-project` (or let apo-engine watch auto-reproject).
 
 desk_version: "0.1"
 

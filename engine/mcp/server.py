@@ -175,7 +175,8 @@ _MCP_INSTRUCTIONS = (
     "files are source of truth. "
     "Lean desk is default (APO_MCP_LEAN=0 exposes admin + delete_note + git_sync). "
     "vault(action=list|contracts|describe|merge|project): registry + system/contracts/ "
-    "(legacy system/config/*-contract.schema.yaml still discovered; merge adds "
+    "(summaries by default; full=true for YAML bodies; "
+    "legacy system/config/*-contract.schema.yaml still discovered; merge adds "
     "~/.apo/desk.yaml; project emits apo-desk Cursor/Claude artifacts). "
     "Routing: write_note=create/overwrite only (body=content; text alias; no append); "
     "append_note=Markdown session log / History / post-search add "
@@ -737,10 +738,25 @@ async def vault(
             ),
         ),
     ] = False,
+    full: Annotated[
+        bool,
+        Field(
+            description=(
+                "contracts / describe / merge: when false (default), return contract "
+                "summaries (id/path/source/ok) without YAML bodies. When true, include "
+                "parsed data=. Ignored for list/project."
+            ),
+        ),
+    ] = False,
 ) -> dict:
     """Vault registry, contracts, desk merge, and host skill projection."""
     return await asyncio.to_thread(
-        apo_ops.vault_op, action, vault=vault, host=host, write=write
+        apo_ops.vault_op,
+        action,
+        vault=vault,
+        host=host,
+        write=write,
+        full=full,
     )
 
 

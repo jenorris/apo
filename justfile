@@ -17,8 +17,10 @@ setup:
     @echo "ready — run 'just ollama' then 'just index' then 'just mcp'"
 
 # Engine test suite (hermetic — never touches ~/.apo or your vault).
+# PYTHONPATH=src so git worktrees hit this tree's sources (venv may be
+# editable-installed against the primary clone).
 test *ARGS:
-    cd engine && .venv/bin/python -m pytest tests {{ARGS}}
+    cd engine && PYTHONPATH=src .venv/bin/python -m pytest tests {{ARGS}}
 
 ollama:
     @command -v ollama >/dev/null 2>&1 || { echo "ollama not found on PATH — install it first (e.g. brew install ollama)"; exit 1; }
@@ -43,6 +45,11 @@ stats:
 
 tool-stats *ARGS:
     {{eng}} tool-stats {{ARGS}}
+
+# Project apo-desk Cursor/Claude artifacts from ~/.apo/desk.yaml + vault contracts.
+# Also auto-runs (debounced) from `apo-engine watch` when desk.yaml or system/contracts/ change.
+desk-project *ARGS:
+    {{eng}} desk-project {{ARGS}}
 
 # Local JSON HTTP RPC for gateways (default http://127.0.0.1:8765).
 rpc *ARGS:

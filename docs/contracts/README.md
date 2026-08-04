@@ -10,7 +10,7 @@
 
 Do **not** confuse templates here with a setting in MCP config. Opt-in means: put the machine-readable (and/or agent-facing) contract **in the vault**, then point agents at it.
 
-**Agent discovery:** MCP/RPC `vault(action=list|contracts|describe|merge|project)` — lean-visible. Prefer YAML under `system/contracts/`. `merge` unions the registry with per-vault contracts and `~/.apo/desk.yaml`. `project` emits Cursor `apo-desk.mdc` / Claude `apo-desk` skill (see [../examples/desk.example.yaml](../examples/desk.example.yaml)).
+**Agent discovery:** MCP/RPC `vault(action=list|contracts|describe|merge|project)` — lean-visible. Prefer YAML under `system/contracts/`. `merge` / `contracts` / `describe` return summaries by default (`full=true` for YAML bodies). `merge` unions the registry with per-vault contracts and `~/.apo/desk.yaml`. `project` emits Cursor `apo-desk.mdc` / Claude `apo-desk` skill (see [../examples/desk.example.yaml](../examples/desk.example.yaml)); re-run via `just desk-project` or the watcher after desk/contract changes.
 
 ## Shipped templates
 

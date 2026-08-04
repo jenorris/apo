@@ -1,4 +1,4 @@
-"""Command-line interface: index | search | stats | tool-stats | watch | serve."""
+"""Command-line interface: index | search | stats | tool-stats | watch | desk-project | serve."""
 from __future__ import annotations
 
 import argparse
@@ -111,6 +111,20 @@ def _cmd_serve(args) -> int:
     return 0
 
 
+def _cmd_desk_project(args) -> int:
+    """Render apo-desk Cursor/Claude artifacts from live desk + vault contracts."""
+    from . import vault_project
+
+    host = (getattr(args, "host", None) or "both").strip() or "both"
+    write = not bool(getattr(args, "dry_run", False))
+    if write:
+        out = vault_project.project_live(host=host, write=True)
+    else:
+        out = vault_project.project_live(host=host, write=False)
+    print(json.dumps(out, indent=2))
+    return 0 if out.get("ok") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="apo-engine", description="Local semantic search over a markdown vault.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -165,6 +179,22 @@ def main(argv: list[str] | None = None) -> int:
     pw.add_argument("--interval", type=float, default=None, help="poll interval seconds (default from WATCH_INTERVAL)")
     pw.add_argument("--poll-only", action="store_true", help="disable fsevents; poll on interval only")
     pw.set_defaults(func=_cmd_watch)
+
+    pd = sub.add_parser(
+        "desk-project",
+        help="project apo-desk Cursor/Claude artifacts from ~/.apo/desk.yaml + vault contracts",
+    )
+    pd.add_argument(
+        "--host",
+        default="both",
+        help="cursor | claude | both (default both)",
+    )
+    pd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="return rendered text without writing host files",
+    )
+    pd.set_defaults(func=_cmd_desk_project)
 
     pr = sub.add_parser(
         "serve",

@@ -1743,12 +1743,15 @@ def vault_op(
     vault: str = "",
     host: str = "both",
     write: bool = False,
+    full: bool = False,
 ) -> dict[str, Any]:
     """Vault management: list | contracts | describe | merge | project.
 
     Read-only except ``project`` with ``write=True`` (writes host skill/rule files).
     Live IR preferred under ``system/contracts/``; legacy
     ``system/config/*-contract.schema.yaml`` still discovered.
+    ``merge`` / ``contracts`` / ``describe`` default to contract summaries
+    (no YAML bodies); pass ``full=True`` for parsed ``data``.
     ``merge`` unions the registry with per-vault contracts and ``~/.apo/desk.yaml``.
     ``project`` renders desk Cursor/Claude artifacts from merge IR.
     """
@@ -1764,6 +1767,8 @@ def vault_op(
     except Exception as e:
         return _err(error="bad_vault", message=str(e))
 
+    want_full = bool(full)
+
     if act == "list":
         return {
             "ok": True,
@@ -1778,17 +1783,20 @@ def vault_op(
     if act == "contracts":
         key = (vault or "").strip()
         if not key:
-            # All vaults — harness extract path.
             out_vaults: dict[str, Any] = {}
             for name, b in sorted(bindings.items()):
                 root = b.resolved().root
+                found = vault_contracts.discover_contracts(root)
                 out_vaults[name] = {
                     "root": str(root),
-                    "contracts": vault_contracts.discover_contracts(root),
+                    "contracts": vault_contracts.present_contracts(
+                        found, full=want_full
+                    ),
                 }
             return {
                 "ok": True,
                 "action": "contracts",
+                "full": want_full,
                 "default_vault": default_name,
                 "vaults": out_vaults,
             }
@@ -1797,20 +1805,23 @@ def vault_op(
         except OpsError as e:
             return _err(error=e.code, message=e.message)
         root = b.resolved().root
+        found = vault_contracts.discover_contracts(root)
         return {
             "ok": True,
             "action": "contracts",
+            "full": want_full,
             "vault": b.name,
             "root": str(root),
-            "contracts": vault_contracts.discover_contracts(root),
+            "contracts": vault_contracts.present_contracts(found, full=want_full),
         }
 
-    def _merge_payload() -> dict[str, Any]:
+    def _merge_payload(*, bodies: bool) -> dict[str, Any]:
         desk = vault_desk.load_desk()
         roles = desk.get("vault_roles") if isinstance(desk.get("vault_roles"), dict) else {}
         merged_vaults: dict[str, Any] = {}
         for name, b in sorted(bindings.items()):
             root = b.resolved().root
+            found = vault_contracts.discover_contracts(root)
             row: dict[str, Any] = {
                 "root": str(root),
                 "collection": b.collection,
@@ -1818,7 +1829,7 @@ def vault_op(
                 "default": name == default_name,
                 "top_level_dirs": _top_level_dirs(root),
                 "contract_ids": vault_contracts.contract_ids(root),
-                "contracts": vault_contracts.discover_contracts(root),
+                "contracts": vault_contracts.present_contracts(found, full=bodies),
             }
             if name in roles:
                 row["role"] = roles[name]
@@ -1832,6 +1843,7 @@ def vault_op(
         return {
             "ok": True,
             "action": "merge",
+            "full": bodies,
             "default_vault": default_name,
             "desk": vault_desk.public_desk(desk),
             "desk_meta": desk_meta,
@@ -1853,10 +1865,11 @@ def vault_op(
         }
 
     if act == "merge":
-        return _merge_payload()
+        return _merge_payload(bodies=want_full)
 
     if act == "project":
-        merge = _merge_payload()
+        # Projection only needs paths/ids — summaries are enough.
+        merge = _merge_payload(bodies=False)
         if not merge.get("ok"):
             return merge
         projected = vault_project.project(
@@ -1874,16 +1887,17 @@ def vault_op(
     except OpsError as e:
         return _err(error=e.code, message=e.message)
     root = b.resolved().root
-    contracts = vault_contracts.discover_contracts(root)
+    found = vault_contracts.discover_contracts(root)
     return {
         "ok": True,
         "action": "describe",
+        "full": want_full,
         "vault": b.name,
         "root": str(root),
         "collection": b.collection,
         "ingest_dir": config.INGEST_DIR,
         "default": b.name == default_name,
         "top_level_dirs": _top_level_dirs(root),
-        "contract_ids": list(contracts),
-        "contracts": contracts,
+        "contract_ids": list(found),
+        "contracts": vault_contracts.present_contracts(found, full=want_full),
     }

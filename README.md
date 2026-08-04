@@ -179,7 +179,7 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 | Mode | Count | Includes |
 |------|------:|----------|
-| Lean (**default**) | **11** | `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note` (optional `items[]`), `place_note` (move / host promote), `filter_notes`, `backlinks`, `history`, `vault` (`list` / `contracts` / `describe` / `merge` / `project`) |
+| Lean (**default**) | **11** | `search_notes`, `expand_chunk`, `read_note`, `write_note`, `append_note`, `patch_note` (optional `items[]`), `place_note` (move / host promote), `filter_notes`, `backlinks`, `history`, `vault` (`list` / `contracts` / `describe` / `merge` / `project`; summaries default, `full=true` for bodies) |
 | Full (`APO_MCP_LEAN=0`) | **18** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note`, `tool_stats`, `git_sync` |
 
 Counts are contract-tested (`engine/tests/test_mcp_lean.py`) — if this table drifts from the code, CI fails.

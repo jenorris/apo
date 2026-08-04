@@ -355,11 +355,15 @@ def _vault(body: dict[str, Any]) -> dict[str, Any]:
     write = body.get("write", False)
     if not isinstance(write, bool):
         return {"ok": False, "error": "bad_request", "message": "`write` must be a boolean"}
+    full = body.get("full", False)
+    if not isinstance(full, bool):
+        return {"ok": False, "error": "bad_request", "message": "`full` must be a boolean"}
     return ops.vault_op(
         action.strip(),
         vault=str(body.get("vault") or ""),
         host=str(host or "both"),
         write=write,
+        full=full,
     )
 
 
