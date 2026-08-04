@@ -145,6 +145,8 @@ class QueryEmbedCacheTest(unittest.TestCase):
         core.clear_query_embed_cache()
 
     def test_cache_hit(self):
+        core.clear_query_embed_cache()
+        self.calls = 0
         a = core.query_embed("same query")
         b = core.query_embed("same query")
         self.assertEqual(a, b)

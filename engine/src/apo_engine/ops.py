@@ -512,8 +512,13 @@ def _resolve_search_bindings(
 ) -> list[vaults.VaultBinding]:
     """Resolve single ``vault=`` or multi ``vaults=`` (not both)."""
     vault_s = (vault or "").strip()
-    multi = _dedupe_vault_names(list(vaults_arg)) if vaults_arg else []
-    if multi:
+    if vaults_arg is not None:
+        multi = _dedupe_vault_names(list(vaults_arg))
+        if not multi:
+            raise OpsError(
+                "bad_request",
+                "vaults= must list at least one non-empty vault name",
+            )
         if vault_s:
             raise OpsError(
                 "bad_request",
@@ -629,8 +634,9 @@ def search(
     all_rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     any_reranked = False
-    try:
-        for b in targets:
+    failed = 0
+    for b in targets:
+        try:
             rows, w, reranked = _search_one_vault(
                 query,
                 b,
@@ -644,10 +650,25 @@ def search(
             all_rows.extend(rows)
             warnings.extend(w)
             any_reranked = any_reranked or reranked
-    except SystemExit as e:
-        return _err(error="search_failed", message=str(e) or "index unavailable")
-    except Exception as e:
-        return _err(error="search_failed", message=str(e))
+        except SystemExit as e:
+            msg = str(e) or "index unavailable"
+            if fanout:
+                failed += 1
+                warnings.append(f"vault {b.name}: search_failed ({msg})")
+                continue
+            return _err(error="search_failed", message=msg)
+        except Exception as e:
+            if fanout:
+                failed += 1
+                warnings.append(f"vault {b.name}: search_failed ({e})")
+                continue
+            return _err(error="search_failed", message=str(e))
+
+    if fanout and failed == len(targets):
+        return _err(
+            error="search_failed",
+            message="all vaults failed: " + "; ".join(warnings) if warnings else "all vaults failed",
+        )
 
     if fanout:
         all_rows.sort(key=lambda r: float(r.get("score") or 0.0), reverse=True)

@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from apo_engine import config, core, ops
+from apo_engine import config, core, ops, vaults
 
 _DIM = 16
 
@@ -65,34 +65,41 @@ class SearchVaultsFanoutTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        self._env = {}
-        for key in ("APO_VAULTS", "APO_NOTES_ROOT", "APO_INDEX", "APO_COLLECTION"):
-            self._env[key] = os.environ.pop(key, None)
-        os.environ["APO_VAULTS"] = str(self.reg)
+        # patch.dict survives conftest's monkeypatch.delenv("APO_VAULTS").
+        self._env = mock.patch.dict(
+            os.environ,
+            {
+                "APO_VAULTS": str(self.reg),
+                "APO_NOTES_ROOT": str(self.alpha),
+                "APO_INDEX": str(self.tmp / "legacy.db"),
+                "APO_COLLECTION": "legacy",
+            },
+            clear=False,
+        )
+        self._env.start()
         self._patches = [
             mock.patch.object(core, "embed", _fake_embed),
-            mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
             mock.patch.object(config, "SEARCH_EXCLUDE_DEFAULT", []),
+            mock.patch.object(config, "NOTES_ROOT", self.alpha),
+            mock.patch.object(config, "INDEX_PATH", self.tmp / "legacy.db"),
+            mock.patch.object(config, "COLLECTION", "legacy"),
         ]
         for p in self._patches:
             p.start()
-        # Index each vault under bind (watcher not required for tests)
-        from apo_engine import vaults as vmod
-
-        _default, bindings = vmod.load_bindings()
-        with mock.patch.object(core, "embed", _fake_embed):
-            for name in ("alpha", "beta"):
-                with vmod.bind(bindings[name]):
-                    core.index_vault(rebuild=True, verbose=False)
+        core.clear_query_embed_cache()
+        _default, bindings = vaults.load_bindings()
+        self.assertEqual(set(bindings), {"alpha", "beta"}, bindings)
+        for name in ("alpha", "beta"):
+            with vaults.bind(bindings[name]):
+                core.index_vault(rebuild=True, verbose=False)
 
     def tearDown(self):
-        for p in self._patches:
+        for p in reversed(self._patches):
             p.stop()
-        for key, val in self._env.items():
-            if val is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = val
+        self._env.stop()
+        core.clear_query_embed_cache()
+        core.writer_close()
+        core.reader_close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_fanout_merges_and_stamps_vault(self):
@@ -124,6 +131,12 @@ class SearchVaultsFanoutTests(unittest.TestCase):
         self.assertFalse(out["ok"], out)
         self.assertEqual(out.get("error"), "bad_request")
         self.assertIn("nope", out.get("message", ""))
+
+    def test_empty_vaults_bad_request(self):
+        out = ops.search("uniquezzz", vaults=["", "  "], limit=3)
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out.get("error"), "bad_request")
+        self.assertIn("non-empty", out.get("message", ""))
 
     def test_dedupe_vault_names(self):
         out = ops.search("uniquezzz", vaults=["alpha", "alpha", "beta"], limit=5)

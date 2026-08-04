@@ -54,7 +54,7 @@ def _search(body: dict[str, Any]) -> dict[str, Any]:
     vaults_raw = body.get("vaults")
     if vaults_raw is not None and not isinstance(vaults_raw, list):
         return {"ok": False, "error": "bad_request", "message": "`vaults` must be an array of strings"}
-    vaults_arg = [str(x) for x in vaults_raw] if vaults_raw else None
+    vaults_arg = [str(x) for x in vaults_raw] if vaults_raw is not None else None
     return ops.search(
         query,
         top_k=int(top_k) if top_k is not None else None,
