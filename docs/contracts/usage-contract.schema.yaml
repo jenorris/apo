@@ -44,6 +44,32 @@ write_habits:
   - folder_on_search
   - expected_mtime_on_followup
 
+# Authoring dialect + optional render profile (harness / desk projection).
+# Dialect = what agents may put in .md bodies. Render = export/publish only
+# (e.g. just htmlize). Do not invent dialect enums like "obsidian-ofm+tailwind"
+# — Tailwind is stylesheet provenance under render, not an authoring dialect.
+# Projected into apo-desk as a one-liner per vault; deep OFM tables stay in
+# contribution.pointers (not inlined — respect token_budget).
+contribution:
+  dialect: gfm   # plain-md | gfm | obsidian-ofm
+  # features:     # never | sparse | preferred | required | ok | rare
+  #   wikilinks: required
+  #   callouts: preferred
+  #   embeds: sparse
+  #   highlight: sparse
+  #   comments: ok
+  #   mermaid: ok
+  #   math: rare
+  # surfaces:     # optional overrides by note kind
+  #   session_log: { dialect: gfm, callouts: never }
+  #   ops_card: { callouts: preferred }
+  # render:       # omit = Obsidian / raw MD only
+  #   profile: htmlize   # none | htmlize
+  #   stylesheet: system/assets/htmlize.css
+  #   pointer: meta:system/skills/htmlize-design
+  # pointers:
+  #   - meta:system/config/obsidian-callouts
+
 # Paths to machine contracts this vault also ships (relative to vault root).
 machine_contracts:
   - system/contracts/git-contract.schema.yaml

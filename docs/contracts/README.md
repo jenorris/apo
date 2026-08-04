@@ -35,6 +35,8 @@ Templates may ship:
 2. **Behaviors** — when/how the agent must write (prose for Cursor/Claude rules)
 3. **Machine contract** — YAML Apo loads at write time (OKF stamp/validate today)
 
+**Usage `contribution`:** optional authoring dialect (`plain-md` \| `gfm` \| `obsidian-ofm`) plus feature/surface overrides and an orthogonal `render` profile (`none` \| `htmlize`). Desk projection loads usage bodies only and emits a one-liner per vault into apo-desk; deep OFM/htmlize docs stay in `contribution.pointers`. Not a machine contract — engine does not validate body syntax.
+
 Engine-universal habits (check `ok`, prefer `append_note`/`patch_note`, `folder=` on search) belong in every template’s Apo section. **Do not** put vault-specific private paths in these shared templates.
 
 ## Candidates (not shipped yet)
