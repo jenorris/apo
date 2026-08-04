@@ -19,6 +19,7 @@ Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share 
 
 ### Changed
 
+- **Git sync commit subjects** — empty/`auto` messages expand path-aware templates (`{path_count}`, `{top_folders}` / `{paths_summary}` plus time tokens). Agent `git_sync` `message` still wins as subject. Commits always include a capped `Paths:` body trailer.
 - Tool counts: lean **11** / full **18** (adds `vault`).
 - `APO_SEARCH_EXCLUDE` documented as recommended desk default (`inbox/daily/* archives/*`); `config.env.example` enables it.
 - `launchd-watch.sh` default embed backend aligned with engine (`ollama`).

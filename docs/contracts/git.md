@@ -44,7 +44,7 @@ Fill `remote` / `host` for *this* vault. Keep `never_commit` aligned with the va
 1. **Never commit** paths matching `never_commit` (especially `*.db`, `.env`, `.apo/`, Passport keys, `*.sqlite`).
 2. **Do not** force-push the vault’s default branch.
 3. Apo MCP writes update files on disk; with `sync.enabled`, the watcher debounces commit+push. Prefer MCP `git_sync` for status / force run / clear_block.
-4. Tool-triggered `git_sync` `action=run` should pass an agent `message`; auto commits use `sync.commit_message_template` (`{iso_local}` → `YYYY-MM-DD HH:MM ET`).
+4. Tool-triggered `git_sync` `action=run` should pass an agent `message` (subject). Empty message / auto commits use `sync.commit_message_template` with `{iso_local}` → `YYYY-MM-DD HH:MM ET`, plus path tokens `{path_count}`, `{top_folders}` / `{paths_summary}`. A capped `Paths:` body trailer is always attached.
 5. When binaries are stored: use Git LFS if `lfs.enabled`; keep `.sha256` digest sidecars in **plain** git (not LFS pointers only).
 6. After a bare-metal restore: clone → point `APO_VAULTS` / `APO_NOTES_ROOT` at the checkout → `just index --vault <id>` (or equivalent). Do not copy old `index.db` from backups unless debugging.
 7. **History:** prefer MCP/RPC `history`. Browse mode (no `path`) = index mtime with optional `since`/`until`, `preview=first|last`, `heading=`, `exclude=`, `fields=` (returns `chunk_hash`). With `path=` and this contract active (YAML + `.git`), Apo returns **file-level** `git log` commits.

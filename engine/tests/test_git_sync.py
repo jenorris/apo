@@ -43,7 +43,8 @@ def _write_contract(vault: Path, *, enabled: bool = True, extra: str = "") -> No
         f"  enabled: {'true' if enabled else 'false'}\n"
         "  debounce_seconds: 2\n"
         "  pull_interval_seconds: 60\n"
-        "  commit_message_template: 'apo: sync {iso_local}'\n"
+        "  commit_message_template: "
+        "'apo: sync {iso_local} · {path_count} paths · {top_folders}'\n"
         "  auto_push: true\n"
     )
     if extra:
@@ -64,6 +65,69 @@ class GitSyncHelpersTest(unittest.TestCase):
         dt = datetime(2026, 8, 3, 0, 35, tzinfo=ZoneInfo("America/New_York"))
         msg = git_sync.format_commit_message("apo: sync {iso_local}", now=dt)
         self.assertEqual(msg, "apo: sync 2026-08-03 00:35 ET")
+
+    def test_paths_summary_bits_top_folders_and_truncation(self):
+        paths = [
+            "areas/threads/a.md",
+            "areas/threads/b.md",
+            "areas/threads/c.md",
+            "inbox/daily/2026-08-04.md",
+            "inbox/daily/2026-08-03.md",
+            "projects/apo/x.md",
+            "resources/wiki/y.md",
+            "system/config/z.md",
+            "note.md",
+        ]
+        bits = git_sync.paths_summary_bits(paths)
+        self.assertEqual(bits["path_count"], "9")
+        self.assertEqual(bits["top_folders"], bits["paths_summary"])
+        # areas/threads (3), inbox/daily (2), then alphabetical among count=1:
+        # note.md, projects/apo, resources/wiki, system/config → top 3 by (-count, name)
+        self.assertEqual(
+            bits["top_folders"],
+            "areas/threads, inbox/daily, note.md +3 more",
+        )
+
+    def test_format_commit_message_path_tokens(self):
+        dt = datetime(2026, 8, 4, 14, 27, tzinfo=ZoneInfo("America/New_York"))
+        tmpl = "apo: sync {iso_local} · {path_count} paths · {top_folders}"
+        msg = git_sync.format_commit_message(
+            tmpl,
+            now=dt,
+            paths=["areas/threads/a.md", "inbox/daily/d.md"],
+        )
+        self.assertEqual(
+            msg,
+            "apo: sync 2026-08-04 14:27 ET · 2 paths · areas/threads, inbox/daily",
+        )
+        # Unknown tokens stay literal
+        self.assertIn(
+            "{unknown}",
+            git_sync.format_commit_message("x {unknown} {path_count}", paths=["a.md"]),
+        )
+
+    def test_commit_message_parts_agent_vs_template(self):
+        paths = ["areas/threads/a.md"]
+        tmpl = "apo: sync {iso_local} · {path_count} paths · {top_folders}"
+        subj, body = git_sync.commit_message_parts(
+            tmpl,
+            message="agent: outcome",
+            paths=paths,
+        )
+        self.assertEqual(subj, "agent: outcome")
+        self.assertIn("Paths:", body)
+        self.assertIn("- areas/threads/a.md", body)
+
+        subj2, body2 = git_sync.commit_message_parts(tmpl, paths=paths)
+        self.assertIn("1 paths", subj2)
+        self.assertIn("areas/threads", subj2)
+        self.assertEqual(body2, body)
+
+    def test_paths_body_cap(self):
+        paths = [f"f/{i}.md" for i in range(45)]
+        body = git_sync.paths_body(paths)
+        self.assertIn("… and 5 more", body)
+        self.assertEqual(len([ln for ln in body.splitlines() if ln.startswith("- ")]), 40)
 
 
 class GitSyncRepoTest(unittest.TestCase):
@@ -108,12 +172,26 @@ class GitSyncRepoTest(unittest.TestCase):
         self.assertTrue(out["committed"])
         self.assertTrue(out["pushed"])
         self.assertTrue(out["message"].startswith("apo: sync "))
+        self.assertIn("paths", out["message"])
+        self.assertIn("note.md", out["message"])
         self.assertIn("note.md", out["paths"])
         self.assertNotIn("secret.db", out["paths"])
 
-        log = _git(self.vault, "log", "-1", "--name-only", "--pretty=%s")
-        self.assertIn("note.md", log.stdout)
+        log = _git(self.vault, "log", "-1", "--name-only", "--pretty=%B")
+        self.assertIn("Paths:", log.stdout)
+        self.assertIn("- note.md", log.stdout)
         self.assertNotIn("secret.db", log.stdout)
+
+    def test_commit_agent_message_keeps_paths_body(self):
+        (self.vault / "areas" / "threads").mkdir(parents=True)
+        (self.vault / "areas" / "threads" / "t.md").write_text("x\n", encoding="utf-8")
+        out = git_sync.commit_and_push(self.vault, message="agent: foo")
+        self.assertTrue(out["ok"], msg=out)
+        self.assertEqual(out["message"], "agent: foo")
+        log = _git(self.vault, "log", "-1", "--pretty=%B")
+        self.assertTrue(log.stdout.startswith("agent: foo\n"))
+        self.assertIn("Paths:", log.stdout)
+        self.assertIn("- areas/threads/t.md", log.stdout)
 
     def test_commits_paths_git_would_quote_or_glob(self):
         # core.quotePath C-escapes non-ASCII names in porcelain output, and

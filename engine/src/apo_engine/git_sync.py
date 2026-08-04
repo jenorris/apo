@@ -13,6 +13,7 @@ import os
 import subprocess
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,7 +36,9 @@ class SyncSettings:
     enabled: bool = False
     debounce_seconds: float = 45.0
     pull_interval_seconds: float = 900.0
-    commit_message_template: str = "apo: sync {iso_local}"
+    commit_message_template: str = (
+        "apo: sync {iso_local} · {path_count} paths · {top_folders}"
+    )
     auto_push: bool = True
     default_branch: str = "main"
     never_commit: tuple[str, ...] = ()
@@ -83,12 +86,13 @@ def sync_settings(vault_root: Path) -> SyncSettings:
         pull_iv = float(sync.get("pull_interval_seconds", 900))
     except (TypeError, ValueError):
         pull_iv = 900.0
-    tmpl = str(sync.get("commit_message_template") or "apo: sync {iso_local}").strip()
+    _default_tmpl = "apo: sync {iso_local} · {path_count} paths · {top_folders}"
+    tmpl = str(sync.get("commit_message_template") or _default_tmpl).strip()
     return SyncSettings(
         enabled=bool(sync.get("enabled", False)),
         debounce_seconds=max(1.0, debounce),
         pull_interval_seconds=max(30.0, pull_iv),
-        commit_message_template=tmpl or "apo: sync {iso_local}",
+        commit_message_template=tmpl or _default_tmpl,
         auto_push=bool(sync.get("auto_push", True)),
         default_branch=branch,
         never_commit=tuple(str(p) for p in never if str(p).strip()),
@@ -303,16 +307,93 @@ def list_stageable_paths(vault_root: Path, never_commit: tuple[str, ...] | list[
     return out
 
 
-def format_commit_message(template: str, *, now: datetime | None = None) -> str:
-    """Expand ``{iso_local}`` (ET wall clock) and ``{iso_utc}``."""
+_PATHS_BODY_MAX = 40
+_TOP_FOLDERS_MAX = 3
+
+
+def _folder_key(path: str) -> str:
+    """First two path segments (``areas/threads``), or one if shallow."""
+    parts = [p for p in path.replace("\\", "/").split("/") if p and p != "."]
+    if len(parts) >= 2:
+        return f"{parts[0]}/{parts[1]}"
+    if len(parts) == 1:
+        return parts[0]
+    return "."
+
+
+def paths_summary_bits(paths: list[str] | tuple[str, ...]) -> dict[str, str]:
+    """Mechanical folder summary for commit-message templates."""
+    counts: Counter[str] = Counter(_folder_key(p) for p in paths)
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    top = ordered[:_TOP_FOLDERS_MAX]
+    folders = ", ".join(name for name, _ in top)
+    extra = len(ordered) - len(top)
+    if extra > 0:
+        folders = f"{folders} +{extra} more" if folders else f"+{extra} more"
+    n = str(len(paths))
+    return {
+        "path_count": n,
+        "top_folders": folders,
+        "paths_summary": folders,
+    }
+
+
+def paths_body(
+    paths: list[str] | tuple[str, ...],
+    *,
+    max_lines: int = _PATHS_BODY_MAX,
+) -> str:
+    """Commit body trailer listing changed paths (capped)."""
+    lines = [f"- {p}" for p in paths]
+    if len(lines) > max_lines:
+        rest = len(lines) - max_lines
+        lines = lines[:max_lines] + [f"… and {rest} more"]
+    return "Paths:\n" + "\n".join(lines)
+
+
+def format_commit_message(
+    template: str,
+    *,
+    now: datetime | None = None,
+    paths: list[str] | tuple[str, ...] = (),
+) -> str:
+    """Expand time + path placeholders in ``sync.commit_message_template``.
+
+    Known tokens: ``{iso_local}``, ``{iso_utc}``, ``{path_count}``,
+    ``{top_folders}``, ``{paths_summary}`` (alias of top_folders).
+    Unknown ``{…}`` tokens are left literal.
+    """
     dt = now or datetime.now(ZoneInfo("America/New_York"))
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=ZoneInfo("America/New_York"))
     local = dt.astimezone(ZoneInfo("America/New_York"))
     iso_local = local.strftime("%Y-%m-%d %H:%M ET")
     iso_utc = dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    msg = template.replace("{iso_local}", iso_local).replace("{iso_utc}", iso_utc)
+    bits = paths_summary_bits(paths)
+    msg = (
+        template.replace("{iso_local}", iso_local)
+        .replace("{iso_utc}", iso_utc)
+        .replace("{path_count}", bits["path_count"])
+        .replace("{top_folders}", bits["top_folders"])
+        .replace("{paths_summary}", bits["paths_summary"])
+    )
     return msg.strip() or f"apo: sync {iso_local}"
+
+
+def commit_message_parts(
+    template: str,
+    *,
+    message: str | None = None,
+    paths: list[str] | tuple[str, ...] = (),
+    now: datetime | None = None,
+) -> tuple[str, str]:
+    """Subject (agent message or template) + Paths body trailer."""
+    agent = (message or "").strip()
+    if agent:
+        subject = agent
+    else:
+        subject = format_commit_message(template, now=now, paths=paths)
+    return subject, paths_body(paths)
 
 
 def commit_and_push(
@@ -390,8 +471,12 @@ def commit_and_push(
         write_status(vault_root, st)
         return {"ok": True, "committed": False, "pushed": False, "paths": [], "status": read_status(vault_root)}
 
-    msg = (message or "").strip() or format_commit_message(settings.commit_message_template)
-    commit = _run_git(vault_root, "commit", "-m", msg)
+    subject, body = commit_message_parts(
+        settings.commit_message_template,
+        message=message,
+        paths=staged,
+    )
+    commit = _run_git(vault_root, "commit", "-m", subject, "-m", body)
     if commit.returncode != 0:
         err = (commit.stderr or commit.stdout or "git commit failed").strip()
         if "nothing to commit" in err.lower():
@@ -405,7 +490,7 @@ def commit_and_push(
     commit_hash = (head.stdout or "").strip() if head.returncode == 0 else ""
     st["last_commit"] = {
         "hash": commit_hash,
-        "message": msg,
+        "message": subject,
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "paths": staged,
     }
@@ -427,7 +512,7 @@ def commit_and_push(
         "committed": True,
         "pushed": pushed,
         "hash": commit_hash,
-        "message": msg,
+        "message": subject,
         "paths": staged,
         "status": read_status(vault_root),
     }
