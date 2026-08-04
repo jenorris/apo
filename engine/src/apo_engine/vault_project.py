@@ -72,17 +72,71 @@ def _md_link(label: str, path: str) -> str:
     return f"{label}: `{path}`"
 
 
-def _usage_contribution(row: dict[str, Any]) -> dict[str, Any] | None:
-    """Return usage-contract ``contribution`` mapping when present."""
+def _usage_data(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Return parsed usage-contract ``data`` when present and ok."""
     contracts = row.get("contracts") if isinstance(row.get("contracts"), dict) else {}
     entry = contracts.get("usage-contract")
     if not isinstance(entry, dict) or not entry.get("ok", True):
         return None
     data = entry.get("data")
-    if not isinstance(data, dict):
+    return data if isinstance(data, dict) else None
+
+
+def _usage_contribution(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Return usage-contract ``contribution`` mapping when present."""
+    data = _usage_data(row)
+    if not data:
         return None
     contrib = data.get("contribution")
     return contrib if isinstance(contrib, dict) else None
+
+
+def _usage_integrations(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Return usage-contract ``integrations`` mapping when present."""
+    data = _usage_data(row)
+    if not data:
+        return None
+    integ = data.get("integrations")
+    return integ if isinstance(integ, dict) else None
+
+
+def _str_list(raw: Any) -> list[str]:
+    """Normalize a YAML list of host keys / CLI names (drop empties)."""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip())
+    return out
+
+
+def format_integrations_line(name: str, integ: dict[str, Any]) -> str:
+    """One-liner for apo-desk Expected integrations section (deterministic)."""
+
+    def _fmt(keys: list[str]) -> str:
+        return ", ".join(f"`{k}`" for k in keys) if keys else "—"
+
+    mcp = integ.get("mcp") if isinstance(integ.get("mcp"), dict) else {}
+    required = _str_list(mcp.get("required"))
+    expected = _str_list(mcp.get("expected"))
+    optional = _str_list(mcp.get("optional"))
+    never = _str_list(mcp.get("never"))
+    cli_raw = integ.get("cli")
+    if isinstance(cli_raw, dict):
+        cli = _str_list(cli_raw.get("expected"))
+    else:
+        cli = _str_list(cli_raw)
+
+    bits = [
+        f"required={_fmt(required)}",
+        f"expected={_fmt(expected)}",
+        f"optional={_fmt(optional)}",
+        f"never={_fmt(never)}",
+    ]
+    if cli:
+        bits.append(f"cli={_fmt(cli)}")
+    return f"- `{name}`: " + "; ".join(bits)
 
 
 def format_contribution_line(name: str, contrib: dict[str, Any]) -> str:
@@ -191,24 +245,32 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     lines.append("")
 
     contrib_lines: list[str] = []
+    integ_lines: list[str] = []
     contrib_pointer_raws: list[str] = []
     for name, row in sorted(vaults.items()):
         if not isinstance(row, dict):
             continue
         contrib = _usage_contribution(row)
-        if not contrib:
-            continue
-        contrib_lines.append(format_contribution_line(name, contrib))
-        ptrs = contrib.get("pointers")
-        if isinstance(ptrs, list):
-            for p in ptrs:
-                if isinstance(p, str) and p.strip():
-                    contrib_pointer_raws.append(p.strip())
-        render = contrib.get("render")
-        if isinstance(render, dict):
-            rp = render.get("pointer")
-            if isinstance(rp, str) and rp.strip():
-                contrib_pointer_raws.append(rp.strip())
+        if contrib:
+            contrib_lines.append(format_contribution_line(name, contrib))
+            ptrs = contrib.get("pointers")
+            if isinstance(ptrs, list):
+                for p in ptrs:
+                    if isinstance(p, str) and p.strip():
+                        contrib_pointer_raws.append(p.strip())
+            render = contrib.get("render")
+            if isinstance(render, dict):
+                rp = render.get("pointer")
+                if isinstance(rp, str) and rp.strip():
+                    contrib_pointer_raws.append(rp.strip())
+        integ = _usage_integrations(row)
+        if integ:
+            integ_lines.append(format_integrations_line(name, integ))
+            iptrs = integ.get("pointers")
+            if isinstance(iptrs, list):
+                for p in iptrs:
+                    if isinstance(p, str) and p.strip():
+                        contrib_pointer_raws.append(p.strip())
     if contrib_lines:
         lines.append("## Contribution")
         lines.append("")
@@ -219,6 +281,18 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         )
         lines.append("")
         lines.extend(contrib_lines)
+        lines.append("")
+
+    if integ_lines:
+        lines.append("## Expected integrations")
+        lines.append("")
+        lines.append(
+            "Per-vault MCP host keys / CLI names from usage-contract `integrations` "
+            "(advisory — does not start Cursor MCP processes). "
+            "`required` / `expected` / `optional` / `never` guide tool choice by vault domain."
+        )
+        lines.append("")
+        lines.extend(integ_lines)
         lines.append("")
 
     lines.append("## Dual-write")
