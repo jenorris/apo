@@ -75,6 +75,24 @@ machine_contracts:
   - system/contracts/git-contract.schema.yaml
   # - system/contracts/okf-contract.schema.yaml
 
+# Expected MCP / CLI surface for agents working this vault's domain.
+# Harness / desk projection only — does not start or stop Cursor MCP processes.
+# Host keys match ~/.cursor/mcp.json / plugin ids (no secrets here).
+# Semantics:
+#   required — must be available for consequential work in this vault (usually apo)
+#   expected — default tools when working this vault's domain
+#   optional — situational / parkable (ops, debugging)
+#   never    — cross-pollination guard (do not treat as primary here)
+# integrations:
+#   mcp:
+#     required: [apo]
+#     expected: []
+#     optional: []
+#     never: []
+#   cli:
+#     expected: []   # e.g. gws, acli, gh — or a bare list under cli:
+#   pointers: []     # deep how-tos (source-routing, work-environment)
+
 # Optional deep docs — not inlined into projected skills (token budget).
 # Use vault_id:relative/path or absolute paths.
 pointers: []

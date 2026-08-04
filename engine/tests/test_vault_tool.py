@@ -101,7 +101,17 @@ class VaultOpTest(unittest.TestCase):
             "  render:\n"
             "    profile: htmlize\n"
             "  pointers:\n"
-            "    - alpha:system/config/obsidian-callouts\n",
+            "    - alpha:system/config/obsidian-callouts\n"
+            "integrations:\n"
+            "  mcp:\n"
+            "    required: [apo]\n"
+            "    expected: [context7]\n"
+            "    optional: [granola]\n"
+            "    never: [slack]\n"
+            "  cli:\n"
+            "    expected: [gws]\n"
+            "  pointers:\n"
+            "    - alpha:system/config/source-routing\n",
             encoding="utf-8",
         )
         cfg = self.b / "system" / "config"
@@ -236,6 +246,14 @@ class VaultOpTest(unittest.TestCase):
             self.assertIn("session_log=gfm/callouts never", text)
             self.assertIn("render `htmlize`", text)
             self.assertIn("`alpha`: `obsidian-ofm`", text)
+            # integrations from usage-contract body
+            self.assertIn("## Expected integrations", text)
+            self.assertIn("required=`apo`", text)
+            self.assertIn("expected=`context7`", text)
+            self.assertIn("optional=`granola`", text)
+            self.assertIn("never=`slack`", text)
+            self.assertIn("cli=`gws`", text)
+            self.assertIn("source-routing", text)
 
             written = ops.vault_op("project", host="both", write=True)
             self.assertTrue(written["ok"])
