@@ -99,12 +99,16 @@ def format_contribution_line(name: str, contrib: dict[str, Any]) -> str:
         for sname, srow in sorted(surfaces.items()):
             if not isinstance(srow, dict):
                 continue
+            parts: list[str] = []
             if srow.get("dialect"):
-                extras.append(f"{sname}={srow['dialect']}")
-            elif srow.get("callouts") is not None and srow["callouts"] != features.get(
-                "callouts"
+                parts.append(str(srow["dialect"]))
+            if (
+                srow.get("callouts") is not None
+                and srow["callouts"] != features.get("callouts")
             ):
-                extras.append(f"{sname}=callouts {srow['callouts']}")
+                parts.append(f"callouts {srow['callouts']}")
+            if parts:
+                extras.append(f"{sname}=" + "/".join(parts))
 
     render = contrib.get("render")
     if isinstance(render, dict):

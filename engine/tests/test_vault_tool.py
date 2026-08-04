@@ -233,7 +233,7 @@ class VaultOpTest(unittest.TestCase):
             self.assertIn("## Contribution", text)
             self.assertIn("obsidian-ofm", text)
             self.assertIn("callouts preferred", text)
-            self.assertIn("session_log=gfm", text)
+            self.assertIn("session_log=gfm/callouts never", text)
             self.assertIn("render `htmlize`", text)
             self.assertIn("`alpha`: `obsidian-ofm`", text)
 
