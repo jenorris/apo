@@ -213,13 +213,16 @@ _MCP_INSTRUCTIONS = (
 )
 mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
 
-# Rewrite opaque Pydantic ValidationError text into agent-actionable ToolError hints
+# FastMCP wraps middleware with reversed(list): first added = outermost.
+# Metrics must sit *outside* validation rewrite so schema rejects are recorded as
+# validation_error + error_shape (not raw ValidationError with empty shapes).
+# Inner: rewrite opaque Pydantic ValidationError → agent-actionable ToolError
 # (FastMCP validates args before tool bodies — see apo_engine.validation_hints).
 from apo_engine.agent_validation import AgentValidationMiddleware  # noqa: E402
 from apo_engine.tool_metrics_middleware import ToolMetricsMiddleware  # noqa: E402
 
-mcp.add_middleware(AgentValidationMiddleware())
 mcp.add_middleware(ToolMetricsMiddleware())
+mcp.add_middleware(AgentValidationMiddleware())
 
 # Load vault registry at import (fast); the index backend connects lazily per vault.
 _load_vaults()

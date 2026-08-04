@@ -8,7 +8,9 @@ from pydantic import ValidationError as PydanticValidationError
 from pydantic import TypeAdapter
 
 from apo_engine.patch_ops import PatchOp
+from apo_engine.tool_metrics_middleware import _validation_error_shape
 from apo_engine.validation_hints import (
+    _pydantic_errors,
     flatten_patch_failure_error,
     format_tool_validation_error,
 )
@@ -39,6 +41,24 @@ class FormatToolValidationErrorTest(unittest.TestCase):
         self.assertIn("field/find/replace", msg)
         self.assertNotIn("union_tag_not_found", msg)
         self.assertNotIn("errors.pydantic.dev", msg)
+
+    def test_pydantic_errors_walks_toolerror_cause_chain(self):
+        """Metrics middleware sees ToolError; shapes live on nested pydantic cause."""
+        from fastmcp.exceptions import ToolError
+
+        inner = _patch_ops_validation_error(
+            [{"field": "content", "old": "a", "value": "b"}]
+        )
+        tool_err = ToolError(format_tool_validation_error("patch_note", inner))
+        tool_err.__cause__ = inner
+        errors = _pydantic_errors(tool_err)
+        self.assertTrue(errors)
+        self.assertEqual(errors[0].get("type"), "union_tag_not_found")
+        shapes = _validation_error_shape(tool_err)
+        self.assertTrue(
+            any(s.startswith("union_tag_not_found:") for s in shapes),
+            shapes,
+        )
 
     def test_read_note_snippet_chars(self):
         class Fake(Exception):

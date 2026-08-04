@@ -18,6 +18,10 @@ Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share 
 - **Agent habit UX** — `read_note` / `expand_chunk` record path touches so follow-up writes tip literal `expected_mtime=<n>`; unscoped search tips include top-level dirs; search hits include float `mtime` beside ISO `modified`; MCP `search_notes` accepts `exclude=`; `tool_stats` rolls up `by_error_shape`.
 - **`just tool-list`** — pure-Python lean tool count (no Node/`npx`).
 
+### Fixed
+
+- **Tool metrics middleware order** — `ToolMetricsMiddleware` sits outside `AgentValidationMiddleware` so schema rejects are recorded as `validation_error` + `error_shape` (was inner → raw `ValidationError`, empty `by_error_shape`). `_pydantic_errors` walks the `__cause__` chain (ToolError → FastMCP → pydantic) so shapes survive the rewrite.
+
 ### Changed
 
 - **Git sync commit subjects** — empty/`auto` messages expand path-aware templates (`{path_count}`, `{top_folders}` / `{paths_summary}` plus time tokens). Agent `git_sync` `message` still wins as subject. Commits always include a capped `Paths:` body trailer.
