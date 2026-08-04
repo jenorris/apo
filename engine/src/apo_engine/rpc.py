@@ -51,12 +51,17 @@ def _search(body: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "bad_request", "message": "`exclude` must be an array of strings"}
     top_k = body.get("top_k", body.get("k"))
     limit = body.get("limit")
+    vaults_raw = body.get("vaults")
+    if vaults_raw is not None and not isinstance(vaults_raw, list):
+        return {"ok": False, "error": "bad_request", "message": "`vaults` must be an array of strings"}
+    vaults_arg = [str(x) for x in vaults_raw] if vaults_raw is not None else None
     return ops.search(
         query,
         top_k=int(top_k) if top_k is not None else None,
         limit=int(limit) if limit is not None else None,
         folder=str(body.get("folder") or ""),
         vault=str(body.get("vault") or ""),
+        vaults=vaults_arg,
         snippet_chars=int(body.get("snippet_chars", 240)),
         exclude=[str(x) for x in exclude] if exclude else None,
         hybrid=not bool(body.get("no_hybrid")),

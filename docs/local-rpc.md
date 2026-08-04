@@ -30,7 +30,7 @@ Arg names match MCP where possible. Prefer **`limit`** / **`where`** (aliases `t
 |--------|------|------|-------|
 | GET | `/health` | — | `{ok, service, version, vaults}` |
 | GET/POST | `/v1/stats` | `{vault?}` | index stats |
-| POST | `/v1/search` | `{query, limit?, top_k?, folder?, exclude?, snippet_chars?, vault?, no_hybrid?}` | hybrid search — prefer `limit` |
+| POST | `/v1/search` | `{query, limit?, top_k?, folder?, exclude?, snippet_chars?, vault?, vaults?, no_hybrid?}` | hybrid search — prefer `limit`; `vaults=[]` fans out across separate indexes |
 | POST | `/v1/read` | `{path, heading?, start_line?, end_line?, max_chars?, raw?, vault?}` | `frontmatter` sidecar + body `content` (raw=true → byte-exact) |
 | POST | `/v1/filter` | `{where, folder?, limit?, offset?, fields?, vault?}` | frontmatter catalog — prefer `where`; `fields` projects FM keys |
 | POST | `/v1/expand` | `{chunk_hash, scope?, vault?}` | section or chunk |

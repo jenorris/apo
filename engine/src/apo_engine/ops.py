@@ -494,81 +494,201 @@ def stats(*, vault: str = "") -> dict[str, Any]:
     return data
 
 
+def _dedupe_vault_names(names: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in names:
+        n = (raw or "").strip()
+        if not n or n in seen:
+            continue
+        seen.add(n)
+        out.append(n)
+    return out
+
+
+def _resolve_search_bindings(
+    vault: str = "",
+    vaults_arg: list[str] | None = None,
+) -> list[vaults.VaultBinding]:
+    """Resolve single ``vault=`` or multi ``vaults=`` (not both)."""
+    vault_s = (vault or "").strip()
+    if vaults_arg is not None:
+        multi = _dedupe_vault_names(list(vaults_arg))
+        if not multi:
+            raise OpsError(
+                "bad_request",
+                "vaults= must list at least one non-empty vault name",
+            )
+        if vault_s:
+            raise OpsError(
+                "bad_request",
+                "pass vault= or vaults=, not both",
+            )
+        _default, bindings = vaults.load_bindings()
+        resolved: list[vaults.VaultBinding] = []
+        for name in multi:
+            if name not in bindings:
+                raise OpsError(
+                    "bad_request",
+                    f"unknown vault {name!r}; available: {sorted(bindings)}",
+                )
+            resolved.append(bindings[name])
+        return resolved
+    return [_binding(vault_s)]
+
+
+def _search_degraded_warning(degraded: str) -> str:
+    if config.EMBED_BACKEND == "ollama":
+        fix = (
+            "results are keyword-only (BM25) until the embed backend is back — "
+            f"check the Ollama daemon (`just ollama`, APO_OLLAMA_URL={config.OLLAMA_URL}) "
+            f"and that the model is pulled (`ollama pull {config.MODEL_NAME}`)"
+        )
+    else:
+        fix = (
+            "results are keyword-only (BM25) until the embed backend is back — "
+            "check the fastembed install (pip install -e '.[cpu]') and APO_MODEL"
+        )
+    return f"{degraded}; {fix}"
+
+
+def _search_one_vault(
+    query: str,
+    b: vaults.VaultBinding,
+    *,
+    k: int,
+    folder_clean: str,
+    snippet_chars: int,
+    exclude: list[str] | None,
+    hybrid: bool,
+    stamp_vault: bool,
+) -> tuple[list[dict[str, Any]], list[str], bool]:
+    """Run hybrid search in one vault. Returns (rows, warnings, reranked)."""
+    warnings: list[str] = []
+    with vaults.bind(b):
+        hits = core.search(
+            query,
+            k=k,
+            folder=folder_clean,
+            snippet_chars=snippet_chars,
+            exclude=exclude,
+            hybrid=hybrid,
+        )
+        results = shape_search_hits(hits)
+        rr = core.last_search_rerank()
+        degraded = core.last_search_degraded()
+    if stamp_vault:
+        for row in results:
+            row["vault"] = b.name
+    reranked = False
+    if rr is not None:
+        if rr.get("applied"):
+            reranked = True
+        elif rr.get("detail"):
+            detail = f"rerank unavailable ({rr['detail']}) — fused order returned"
+            warnings.append(f"vault {b.name}: {detail}" if stamp_vault else detail)
+    if degraded:
+        detail = _search_degraded_warning(degraded)
+        warnings.append(f"vault {b.name}: {detail}" if stamp_vault else detail)
+    missing = _missing_folder_warning(b.resolved().root, folder_clean, b.name)
+    if missing:
+        warnings.append(missing)
+    return results, warnings, reranked
+
+
 def search(
     query: str,
     *,
     top_k: int | None = None,
     folder: str = "",
     vault: str = "",
+    vaults: list[str] | None = None,
     snippet_chars: int = 240,
     exclude: list[str] | None = None,
     hybrid: bool = True,
     limit: int | None = None,
 ) -> dict[str, Any]:
     try:
-        b = _binding(vault)
+        targets = _resolve_search_bindings(vault, vaults)
     except OpsError as e:
         return _err(error=e.code, message=e.message)
     k, err = resolve_top_k(top_k, limit)
     if err:
         return _err(error="bad_request", message=err)
     folder_clean = folder.replace("\\", "/").strip("/")
-    if folder_clean:
-        try:
-            _safe_resolve(b.resolved().root, folder_clean)
-        except ValueError as e:
-            return _err(error="bad_path", message=str(e))
+    for b in targets:
+        if folder_clean:
+            try:
+                _safe_resolve(b.resolved().root, folder_clean)
+            except ValueError as e:
+                return _err(error="bad_path", message=str(e))
     # Unscoped searches inherit APO_SEARCH_EXCLUDE (noise folders like session
     # logs); folder-scoped or caller-provided exclude= always wins.
     default_exclude: list[str] | None = None
-    if not exclude and not folder_clean and config.SEARCH_EXCLUDE_DEFAULT:
+    effective_exclude = exclude
+    if not effective_exclude and not folder_clean and config.SEARCH_EXCLUDE_DEFAULT:
         default_exclude = list(config.SEARCH_EXCLUDE_DEFAULT)
-        exclude = default_exclude
-    try:
-        with vaults.bind(b):
-            hits = core.search(
+        effective_exclude = default_exclude
+
+    fanout = len(targets) > 1
+    all_rows: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    any_reranked = False
+    failed = 0
+    for b in targets:
+        try:
+            rows, w, reranked = _search_one_vault(
                 query,
+                b,
                 k=k,
-                folder=folder_clean,
+                folder_clean=folder_clean,
                 snippet_chars=snippet_chars,
-                exclude=exclude,
+                exclude=effective_exclude,
                 hybrid=hybrid,
+                stamp_vault=fanout,
             )
-            results = shape_search_hits(hits)
-    except SystemExit as e:
-        return _err(error="search_failed", message=str(e) or "index unavailable")
-    except Exception as e:
-        return _err(error="search_failed", message=str(e))
-    out: dict[str, Any] = {"ok": True, "results": results, "vault": b.name}
+            all_rows.extend(rows)
+            warnings.extend(w)
+            any_reranked = any_reranked or reranked
+        except SystemExit as e:
+            msg = str(e) or "index unavailable"
+            if fanout:
+                failed += 1
+                warnings.append(f"vault {b.name}: search_failed ({msg})")
+                continue
+            return _err(error="search_failed", message=msg)
+        except Exception as e:
+            if fanout:
+                failed += 1
+                warnings.append(f"vault {b.name}: search_failed ({e})")
+                continue
+            return _err(error="search_failed", message=str(e))
+
+    if fanout and failed == len(targets):
+        return _err(
+            error="search_failed",
+            message="all vaults failed: " + "; ".join(warnings) if warnings else "all vaults failed",
+        )
+
+    if fanout:
+        all_rows.sort(key=lambda r: float(r.get("score") or 0.0), reverse=True)
+        all_rows = all_rows[:k]
+        out: dict[str, Any] = {
+            "ok": True,
+            "results": all_rows,
+            "vaults": [b.name for b in targets],
+        }
+        tip_root: Path | None = None
+    else:
+        out = {"ok": True, "results": all_rows, "vault": targets[0].name}
+        tip_root = targets[0].resolved().root
     if default_exclude:
         out["default_exclude"] = default_exclude
-    warnings: list[str] = []
-    rr = core.last_search_rerank()
-    if rr is not None:
-        if rr.get("applied"):
-            out["reranked"] = True
-        elif rr.get("detail"):
-            warnings.append(f"rerank unavailable ({rr['detail']}) — fused order returned")
-    degraded = core.last_search_degraded()
-    if degraded:
-        if config.EMBED_BACKEND == "ollama":
-            fix = (
-                "results are keyword-only (BM25) until the embed backend is back — "
-                f"check the Ollama daemon (`just ollama`, APO_OLLAMA_URL={config.OLLAMA_URL}) "
-                f"and that the model is pulled (`ollama pull {config.MODEL_NAME}`)"
-            )
-        else:
-            fix = (
-                "results are keyword-only (BM25) until the embed backend is back — "
-                "check the fastembed install (pip install -e '.[cpu]') and APO_MODEL"
-            )
-        warnings.append(f"{degraded}; {fix}")
-    missing = _missing_folder_warning(b.resolved().root, folder_clean, b.name)
-    if missing:
-        warnings.append(missing)
+    if any_reranked:
+        out["reranked"] = True
     if warnings:
         out["warning"] = "; ".join(warnings)
-    return _attach_folder_tip(out, folder_clean, root=b.resolved().root)
+    return _attach_folder_tip(out, folder_clean, root=tip_root)
 
 
 def read_note(
