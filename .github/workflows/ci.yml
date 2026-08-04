@@ -31,7 +31,7 @@ jobs:
           brew install "python@${{ matrix.python-version }}"
           BREW_PREFIX="$(brew --prefix "python@${{ matrix.python-version }}")"
           echo "${BREW_PREFIX}/bin" >> "$GITHUB_PATH"
-          echo "PYTHON_BIN=python${{ matrix.python-version }}" >> "$GITHUB_ENV"
+          echo "PYTHON_BIN=${BREW_PREFIX}/bin/python${{ matrix.python-version }}" >> "$GITHUB_ENV"
           "${BREW_PREFIX}/bin/python${{ matrix.python-version }}" - <<'PY'
           import sqlite3
           c = sqlite3.connect(":memory:")
@@ -43,11 +43,11 @@ jobs:
         working-directory: engine
         run: |
           PYTHON="${PYTHON_BIN:-python}"
-          "$PYTHON" -m pip install -U pip
-          "$PYTHON" -m pip install -e '.[mcp,dev]'
+          # Homebrew Python is PEP 668 externally-managed — always use a venv.
+          "$PYTHON" -m venv .venv
+          .venv/bin/python -m pip install -U pip
+          .venv/bin/python -m pip install -e '.[mcp,dev]'
 
       - name: Run tests
         working-directory: engine
-        run: |
-          PYTHON="${PYTHON_BIN:-python}"
-          "$PYTHON" -m pytest tests -q
+        run: .venv/bin/python -m pytest tests -q
