@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import vault_contracts
+
 DEFAULT_CURSOR_OUT = Path.home() / ".cursor" / "rules" / "apo-desk.mdc"
 DEFAULT_CLAUDE_OUT = Path.home() / ".claude" / "skills" / "apo-desk" / "SKILL.md"
 DEFAULT_HERMES_OUT = (
@@ -70,6 +72,81 @@ def _md_link(label: str, path: str) -> str:
     return f"{label}: `{path}`"
 
 
+def _usage_contribution(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Return usage-contract ``contribution`` mapping when present."""
+    contracts = row.get("contracts") if isinstance(row.get("contracts"), dict) else {}
+    entry = contracts.get("usage-contract")
+    if not isinstance(entry, dict) or not entry.get("ok", True):
+        return None
+    data = entry.get("data")
+    if not isinstance(data, dict):
+        return None
+    contrib = data.get("contribution")
+    return contrib if isinstance(contrib, dict) else None
+
+
+def format_contribution_line(name: str, contrib: dict[str, Any]) -> str:
+    """One-liner for apo-desk Contribution section (deterministic)."""
+    dialect = str(contrib.get("dialect") or "gfm").strip() or "gfm"
+    extras: list[str] = []
+
+    features = contrib.get("features") if isinstance(contrib.get("features"), dict) else {}
+    if features.get("callouts") is not None:
+        extras.append(f"callouts {features['callouts']}")
+
+    surfaces = contrib.get("surfaces")
+    if isinstance(surfaces, dict):
+        for sname, srow in sorted(surfaces.items()):
+            if not isinstance(srow, dict):
+                continue
+            parts: list[str] = []
+            if srow.get("dialect"):
+                parts.append(str(srow["dialect"]))
+            if (
+                srow.get("callouts") is not None
+                and srow["callouts"] != features.get("callouts")
+            ):
+                parts.append(f"callouts {srow['callouts']}")
+            if parts:
+                extras.append(f"{sname}=" + "/".join(parts))
+
+    render = contrib.get("render")
+    if isinstance(render, dict):
+        profile = str(render.get("profile") or "").strip()
+        if profile:
+            extras.append(f"render `{profile}`")
+
+    if extras:
+        return f"- `{name}`: `{dialect}` ({'; '.join(extras)})"
+    return f"- `{name}`: `{dialect}`"
+
+def attach_usage_contribution_bodies(merge: dict[str, Any]) -> dict[str, Any]:
+    """Ensure each vault's usage-contract entry includes parsed ``data`` for project.
+
+    Other contracts stay summary-only. Mutates and returns ``merge``.
+    """
+    vaults = merge.get("vaults")
+    if not isinstance(vaults, dict):
+        return merge
+    for _name, row in vaults.items():
+        if not isinstance(row, dict):
+            continue
+        root_s = str(row.get("root") or "").strip()
+        if not root_s:
+            continue
+        found = vault_contracts.discover_contracts(Path(root_s))
+        usage = found.get("usage-contract")
+        if not usage:
+            continue
+        contracts = row.get("contracts")
+        if not isinstance(contracts, dict):
+            contracts = {}
+            row["contracts"] = contracts
+        # Keep summary fields; attach full entry (with data) for usage only.
+        contracts["usage-contract"] = usage
+    return merge
+
+
 def render_desk_body(merge: dict[str, Any]) -> str:
     """Shared markdown body (no host frontmatter)."""
     desk = merge.get("desk") if isinstance(merge.get("desk"), dict) else {}
@@ -112,6 +189,37 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     lines.append("")
     lines.append("Pass `vault=` for non-default. Never cross-pollinate OKF/layout between vaults.")
     lines.append("")
+
+    contrib_lines: list[str] = []
+    contrib_pointer_raws: list[str] = []
+    for name, row in sorted(vaults.items()):
+        if not isinstance(row, dict):
+            continue
+        contrib = _usage_contribution(row)
+        if not contrib:
+            continue
+        contrib_lines.append(format_contribution_line(name, contrib))
+        ptrs = contrib.get("pointers")
+        if isinstance(ptrs, list):
+            for p in ptrs:
+                if isinstance(p, str) and p.strip():
+                    contrib_pointer_raws.append(p.strip())
+        render = contrib.get("render")
+        if isinstance(render, dict):
+            rp = render.get("pointer")
+            if isinstance(rp, str) and rp.strip():
+                contrib_pointer_raws.append(rp.strip())
+    if contrib_lines:
+        lines.append("## Contribution")
+        lines.append("")
+        lines.append(
+            "Per-vault authoring dialect from usage-contract "
+            "(`plain-md` | `gfm` | `obsidian-ofm`). "
+            "Render profiles (`htmlize`) are export-only — not body syntax."
+        )
+        lines.append("")
+        lines.extend(contrib_lines)
+        lines.append("")
 
     lines.append("## Dual-write")
     lines.append("")
@@ -198,9 +306,33 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     if pointers:
         lines.append("## Deep policy pointers")
         lines.append("")
+        seen_ptr: set[str] = set()
         for key, raw in sorted(pointers.items()):
             path = _abs_pointer(str(raw), vaults)
+            if path in seen_ptr:
+                continue
+            seen_ptr.add(path)
             label = key.replace("_", " ")
+            lines.append(f"- {_md_link(label, path)}")
+        for raw in contrib_pointer_raws:
+            path = _abs_pointer(raw, vaults)
+            if path in seen_ptr:
+                continue
+            seen_ptr.add(path)
+            # vault_id:rel → short label from basename
+            label = Path(path).stem.replace("-", " ").replace("_", " ")
+            lines.append(f"- {_md_link(label, path)}")
+        lines.append("")
+    elif contrib_pointer_raws:
+        lines.append("## Deep policy pointers")
+        lines.append("")
+        seen_ptr: set[str] = set()
+        for raw in contrib_pointer_raws:
+            path = _abs_pointer(raw, vaults)
+            if path in seen_ptr:
+                continue
+            seen_ptr.add(path)
+            label = Path(path).stem.replace("-", " ").replace("_", " ")
             lines.append(f"- {_md_link(label, path)}")
         lines.append("")
 

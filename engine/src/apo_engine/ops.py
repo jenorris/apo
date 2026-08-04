@@ -2131,10 +2131,11 @@ def vault_op(
         return _merge_payload(bodies=want_full)
 
     if act == "project":
-        # Projection only needs paths/ids — summaries are enough.
+        # Summaries for inventory; attach usage-contract bodies for contribution.
         merge = _merge_payload(bodies=False)
         if not merge.get("ok"):
             return merge
+        vault_project.attach_usage_contribution_bodies(merge)
         projected = vault_project.project(
             merge, host=host or "both", write=bool(write)
         )

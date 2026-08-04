@@ -88,7 +88,20 @@ class VaultOpTest(unittest.TestCase):
         cdir = self.a / "system" / "contracts"
         cdir.mkdir(parents=True)
         (cdir / "usage-contract.schema.yaml").write_text(
-            "usage_contract_version: '0.1'\npurpose: test\n",
+            "usage_contract_version: '0.1'\n"
+            "purpose: test\n"
+            "contribution:\n"
+            "  dialect: obsidian-ofm\n"
+            "  features:\n"
+            "    callouts: preferred\n"
+            "  surfaces:\n"
+            "    session_log:\n"
+            "      dialect: gfm\n"
+            "      callouts: never\n"
+            "  render:\n"
+            "    profile: htmlize\n"
+            "  pointers:\n"
+            "    - alpha:system/config/obsidian-callouts\n",
             encoding="utf-8",
         )
         cfg = self.b / "system" / "config"
@@ -216,6 +229,13 @@ class VaultOpTest(unittest.TestCase):
             self.assertIn("Do not hand-edit", text)
             # pointer expanded using alpha root
             self.assertIn(str(self.a), text)
+            # contribution from usage-contract body
+            self.assertIn("## Contribution", text)
+            self.assertIn("obsidian-ofm", text)
+            self.assertIn("callouts preferred", text)
+            self.assertIn("session_log=gfm/callouts never", text)
+            self.assertIn("render `htmlize`", text)
+            self.assertIn("`alpha`: `obsidian-ofm`", text)
 
             written = ops.vault_op("project", host="both", write=True)
             self.assertTrue(written["ok"])
