@@ -843,8 +843,9 @@ async def git_sync(
         str,
         Field(
             description=(
-                "Commit message for action=run. Empty → template from git contract "
-                "(auto path uses template; agents should pass a message)."
+                "Commit message for action=run (subject). Empty → path-aware "
+                "template from git contract; always attaches a Paths body trailer. "
+                "Agents should pass a one-line outcome when available."
             ),
         ),
     ] = "",

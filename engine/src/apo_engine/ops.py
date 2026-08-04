@@ -1964,7 +1964,8 @@ def git_sync_op(
     """Git contract sync: status | run | pull | clear_block.
 
     ``run`` commits all dirty paths except ``never_commit`` / gitignore, then pushes.
-    Auto path uses template message; pass ``message`` to override (tool-triggered).
+    Auto path uses path-aware template message; pass ``message`` to override subject
+    (tool-triggered). A Paths body trailer is always attached.
     """
     try:
         b = _binding(vault)

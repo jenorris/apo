@@ -26,7 +26,7 @@ sync:
   enabled: false
   debounce_seconds: 45
   pull_interval_seconds: 900
-  commit_message_template: "apo: sync {iso_local}"
+  commit_message_template: "apo: sync {iso_local} · {path_count} paths · {top_folders}"
   auto_push: true
   # Optional shell hook fired once when sync enters `blocked` (not on every tick).
   # Blocked state is otherwise only in .apo/git-sync-status.json, so a stuck
