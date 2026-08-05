@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Apo session telemetry — Cursor user hooks (~/.cursor/hooks/).
-# preToolUse: inject _apo.conversation_id into Apo MCP tool args (per-call, multi-session safe).
-# sessionStart: write ~/.apo/active-session.json (active_session convenience).
+# Apo session telemetry — copy to ~/.cursor/hooks/apo-telemetry.sh
+# Wire docs: docs/contracts/telemetry.md
 set -euo pipefail
 
 INPUT="$(cat)"
