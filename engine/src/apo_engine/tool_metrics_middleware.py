@@ -1,10 +1,11 @@
-"""FastMCP middleware: record privacy-safe MCP tool-use metrics."""
+"""FastMCP middleware: record vault-contract-governed MCP tool-use metrics."""
 
 from __future__ import annotations
 
 import os
 import time
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
@@ -19,7 +20,7 @@ def _tool_name(context: MiddlewareContext[Any]) -> str:
     name = str(getattr(msg, "name", "") or "")
     if name:
         return name
-    params = getattr(msg, "params", None)
+    params = getattr(context, "params", None)
     return str(getattr(params, "name", "") or "")
 
 
@@ -41,7 +42,7 @@ def _tool_arguments(context: MiddlewareContext[Any]) -> dict[str, Any]:
     args = getattr(msg, "arguments", None)
     if isinstance(args, dict):
         return args
-    params = getattr(msg, "params", None)
+    params = getattr(context, "params", None)
     if params is not None:
         nested = getattr(params, "arguments", None)
         if isinstance(nested, dict):
@@ -49,16 +50,35 @@ def _tool_arguments(context: MiddlewareContext[Any]) -> dict[str, Any]:
     return {}
 
 
+_SKIP_METRICS_TOOLS = frozenset({"tool_stats", "session_stats", "active_session"})
+
+
 class ToolMetricsMiddleware(Middleware):
     """Record one tool-call event per tools/call (best-effort; never blocks the tool)."""
 
-    def __init__(self, collection: str | None = None) -> None:
+    def __init__(
+        self,
+        collection: str | None = None,
+        *,
+        vault_id: str = "",
+        vault_root: Path | None = None,
+        vault_resolver: Callable[[dict[str, Any]], tuple[str, Path | None]] | None = None,
+    ) -> None:
         super().__init__()
         self.collection = (
             (collection or "").strip()
             or (os.environ.get("APO_COLLECTION") or "").strip()
             or "default"
         )
+        self.default_vault_id = vault_id
+        self.default_vault_root = vault_root
+        self.vault_resolver = vault_resolver
+
+    def _resolve_vault(self, args: dict[str, Any]) -> tuple[str, Path | None]:
+        if self.vault_resolver is not None:
+            vid, root = self.vault_resolver(args)
+            return vid, root
+        return self.default_vault_id, self.default_vault_root
 
     async def on_call_tool(
         self,
@@ -69,13 +89,13 @@ class ToolMetricsMiddleware(Middleware):
             return await call_next(context)
 
         tool = _tool_name(context) or "?"
-        # Don't recurse metrics into the metrics tool itself.
-        if tool == "tool_stats":
+        if tool in _SKIP_METRICS_TOOLS:
             return await call_next(context)
 
         args = _tool_arguments(context)
         flags = tool_metrics.extract_arg_flags(args, tool=tool)
         req_bytes = tool_metrics.estimate_bytes(args)
+        vault_id, vault_root = self._resolve_vault(args)
         t0 = time.perf_counter()
         try:
             result = await call_next(context)
@@ -84,7 +104,6 @@ class ToolMetricsMiddleware(Middleware):
             err_flags = dict(flags)
             shape = _validation_error_shape(e)
             if shape:
-                # Which fields/op-shapes agents actually fumble — burn-down signal.
                 err_flags["error_shape"] = shape
             tool_metrics.record_call(
                 collection=self.collection,
@@ -95,6 +114,9 @@ class ToolMetricsMiddleware(Middleware):
                 req_bytes=req_bytes,
                 resp_bytes=tool_metrics.estimate_bytes(str(e)),
                 flags=err_flags,
+                vault_id=vault_id,
+                vault_root=vault_root,
+                arguments=args,
             )
             raise
         except Exception as e:
@@ -108,6 +130,9 @@ class ToolMetricsMiddleware(Middleware):
                 req_bytes=req_bytes,
                 resp_bytes=0,
                 flags=flags,
+                vault_id=vault_id,
+                vault_root=vault_root,
+                arguments=args,
             )
             raise
 
@@ -122,5 +147,8 @@ class ToolMetricsMiddleware(Middleware):
             req_bytes=req_bytes,
             resp_bytes=resp_bytes,
             flags=flags,
+            vault_id=vault_id,
+            vault_root=vault_root,
+            arguments=args,
         )
         return result

@@ -1,8 +1,6 @@
 """MCP tool-use analytics — DuckDB under ~/.apo/metrics.duckdb.
 
-Records call metadata only (no note bodies or paths). Used to tune the MCP
-surface from real desk metrics. Disable with APO_TOOL_METRICS=0/false/no/off.
-
+Privacy dimensions are vault-contract-driven (``telemetry-contract.schema.yaml``).
 Legacy ``tool-metrics-*.jsonl`` files are imported once on first open, then deleted.
 """
 from __future__ import annotations
@@ -14,9 +12,11 @@ import threading
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import duckdb
+
+from apo_engine import telemetry_contract as tc
 
 _JSONL_NAME = re.compile(r"^tool-metrics-(.+)\.jsonl$")
 _write_lock = threading.Lock()
@@ -27,6 +27,14 @@ _FLAG_KEYS = (
     "used_alias",
     "ops_count",
     "error_shape",
+)
+_EXTRA_COLS = (
+    ("vault_id", "VARCHAR"),
+    ("conversation_id", "VARCHAR"),
+    ("note_path", "VARCHAR"),
+    ("path_hash", "VARCHAR"),
+    ("heading", "VARCHAR"),
+    ("chunk_hash", "VARCHAR"),
 )
 
 
@@ -77,7 +85,6 @@ def extract_arg_flags(
     if args.get("filters") is not None:
         flags["used_alias"] = True
     name = (tool or "").strip()
-    # Body-field aliases: content≡text on append; text≡content on write.
     if name == "append_note" and args.get("content") is not None:
         flags["used_alias"] = True
     if name == "write_note" and args.get("text") is not None:
@@ -124,14 +131,33 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             expected_mtime_set BOOLEAN,
             used_alias BOOLEAN,
             ops_count INTEGER,
-            error_shape JSON
+            error_shape JSON,
+            vault_id VARCHAR,
+            conversation_id VARCHAR,
+            note_path VARCHAR,
+            path_hash VARCHAR,
+            heading VARCHAR,
+            chunk_hash VARCHAR
         )
         """
     )
+    for col, typ in _EXTRA_COLS:
+        try:
+            conn.execute(
+                f"ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS {col} {typ}"
+            )
+        except duckdb.Error:
+            pass
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_tool_calls_collection_ts
         ON tool_calls (collection, ts)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation
+        ON tool_calls (conversation_id, ts)
         """
     )
 
@@ -200,8 +226,9 @@ def _insert_events(
             """
             INSERT INTO tool_calls (
                 ts, collection, tool, ok, error, duration_ms, req_bytes, resp_bytes,
-                folder_set, fields_set, expected_mtime_set, used_alias, ops_count, error_shape
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                folder_set, fields_set, expected_mtime_set, used_alias, ops_count, error_shape,
+                vault_id, conversation_id, note_path, path_hash, heading, chunk_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 event.get("ts"),
@@ -220,6 +247,12 @@ def _insert_events(
                 bool(flags["used_alias"]) if flags.get("used_alias") else None,
                 int(flags["ops_count"]) if flags.get("ops_count") is not None else None,
                 _error_shape_json(flags.get("error_shape")),
+                event.get("vault_id") or None,
+                event.get("conversation_id") or None,
+                event.get("note_path") or None,
+                event.get("path_hash") or None,
+                event.get("heading") or None,
+                event.get("chunk_hash") or None,
             ],
         )
 
@@ -289,6 +322,9 @@ def _row_to_event(row: tuple[Any, ...], columns: list[str]) -> dict[str, Any]:
                 event["error_shape"] = raw_shape
         else:
             event["error_shape"] = raw_shape
+    for key in ("vault_id", "conversation_id", "note_path", "path_hash", "heading", "chunk_hash"):
+        if data.get(key):
+            event[key] = data[key]
     return event
 
 
@@ -302,10 +338,17 @@ def record_call(
     req_bytes: int = 0,
     resp_bytes: int = 0,
     flags: dict[str, Any] | None = None,
+    vault_id: str = "",
+    vault_root: Path | None = None,
+    arguments: dict[str, Any] | None = None,
+    conversation_id: str | None = None,
     path: Path | None = None,
 ) -> None:
     """Insert one tool-call event. Best-effort — never raises to callers."""
     if not metrics_enabled():
+        return
+    policy = tc.policy_for_vault(vault_root)
+    if not policy.enabled:
         return
     db_path = metrics_db_path(path)
     event: dict[str, Any] = {
@@ -316,9 +359,15 @@ def record_call(
         "duration_ms": round(float(duration_ms), 2),
         "req_bytes": int(req_bytes),
         "resp_bytes": int(resp_bytes),
+        "vault_id": (vault_id or policy.vault_id or "").strip() or None,
     }
     if flags:
         event.update(flags)
+    if policy.record_conversation_id:
+        cid = (conversation_id or tc.conversation_id_from_env() or "").strip()
+        if cid:
+            event["conversation_id"] = cid
+    event.update(tc.extract_note_context(tool, arguments, policy))
     try:
         _migrate_jsonl_once(db_path)
         with _write_lock:
@@ -332,25 +381,18 @@ def record_call(
         return
 
 
-def _parse_ts(ts: str) -> datetime | None:
-    try:
-        if ts.endswith("Z"):
-            ts = ts[:-1] + "+00:00"
-        return datetime.fromisoformat(ts)
-    except (TypeError, ValueError):
-        return None
-
-
 def read_events(
     collection: str,
     *,
     days: int | None = None,
     tool: str | None = None,
+    conversation_id: str | None = None,
     path: Path | None = None,
 ) -> list[dict[str, Any]]:
     db_path = metrics_db_path(path)
     coll = (collection or "default").strip() or "default"
     tool_filter = (tool or "").strip() or None
+    conv_filter = (conversation_id or "").strip() or None
     cutoff: datetime | None = None
     if days is not None and days > 0:
         cutoff = datetime.now(timezone.utc).timestamp() - (days * 86400)
@@ -365,7 +407,8 @@ def read_events(
                 sql = """
                     SELECT ts, tool, ok, error, duration_ms, req_bytes, resp_bytes,
                            folder_set, fields_set, expected_mtime_set, used_alias,
-                           ops_count, error_shape
+                           ops_count, error_shape, vault_id, conversation_id,
+                           note_path, path_hash, heading, chunk_hash
                     FROM tool_calls
                     WHERE collection = ?
                 """
@@ -373,6 +416,9 @@ def read_events(
                 if tool_filter:
                     sql += " AND tool = ?"
                     params.append(tool_filter)
+                if conv_filter:
+                    sql += " AND conversation_id = ?"
+                    params.append(conv_filter)
                 if cutoff is not None:
                     cutoff_ts = datetime.fromtimestamp(
                         cutoff, tz=timezone.utc
@@ -505,6 +551,35 @@ def rollup_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def rollup_by_path(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    slots: dict[str, dict[str, Any]] = {}
+    for ev in events:
+        note_path = str(ev.get("note_path") or "").strip()
+        if not note_path:
+            continue
+        slot = slots.setdefault(
+            note_path,
+            {"path": note_path, "calls": 0, "ok": 0, "error": 0, "tools": defaultdict(int)},
+        )
+        slot["calls"] += 1
+        if ev.get("ok"):
+            slot["ok"] += 1
+        else:
+            slot["error"] += 1
+        slot["tools"][str(ev.get("tool") or "?")] += 1
+    out = []
+    for path, slot in sorted(slots.items(), key=lambda x: (-x[1]["calls"], x[0])):
+        row = {
+            "path": path,
+            "calls": slot["calls"],
+            "ok": slot["ok"],
+            "error": slot["error"],
+            "by_tool": dict(sorted(slot["tools"].items(), key=lambda x: (-x[1], x[0]))),
+        }
+        out.append(row)
+    return out
+
+
 def tool_stats(
     collection: str,
     *,
@@ -520,6 +595,57 @@ def tool_stats(
     out["metrics_path"] = str(metrics_db_path(path))
     out["enabled"] = metrics_enabled()
     return out
+
+
+def session_stats(
+    collection: str,
+    *,
+    vault_root: Path | None = None,
+    conversation_id: str | None = None,
+    days: int | None = None,
+    tool: str | None = None,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    policy = tc.policy_for_vault(vault_root)
+    cid = (conversation_id or tc.conversation_id_from_env() or "").strip() or None
+    if cid:
+        events = read_events(
+            collection, days=days, tool=tool, conversation_id=cid, path=path
+        )
+    elif days is not None:
+        events = read_events(collection, days=days, tool=tool, path=path)
+    else:
+        # Session scope without id: last 24h fallback
+        events = read_events(collection, days=1, tool=tool, path=path)
+    out = rollup_events(events)
+    out["collection"] = collection
+    out["days"] = days if cid else (days if days is not None else 1)
+    out["tool_filter"] = tool or None
+    out["conversation_id"] = cid
+    out["metrics_path"] = str(metrics_db_path(path))
+    out["enabled"] = metrics_enabled() and policy.enabled
+    if policy.expose_paths:
+        out["by_path"] = rollup_by_path(events)
+    if not cid:
+        out["tip"] = (
+            "Session scope is approximate (24h window). "
+            "Pass conversation_id or set APO_CONVERSATION_ID (Cursor hook) "
+            "for exact session attribution."
+        )
+    return out
+
+
+def read_active_session() -> dict[str, Any]:
+    p = tc.active_session_path()
+    if not p.is_file():
+        return {"ok": True, "active": False, "path": str(p)}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"ok": False, "active": False, "path": str(p), "error": "unreadable"}
+    if not isinstance(data, dict):
+        return {"ok": False, "active": False, "path": str(p), "error": "invalid_json"}
+    return {"ok": True, "active": True, "path": str(p), **data}
 
 
 def summarize_result(result: Any) -> tuple[bool, str | None, int]:

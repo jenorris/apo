@@ -1,0 +1,40 @@
+# Apo telemetry contract — template / example
+# Copy to <vault>/system/contracts/telemetry-contract.schema.yaml
+# Prose twin: docs/contracts/telemetry.md
+# Privacy and agent access are vault-defined — not hardcoded in the engine.
+
+telemetry_contract_version: "0.1"
+enabled: true
+
+store:
+  backend: duckdb
+  path: ~/.apo/metrics.duckdb
+
+# Engine records only dimensions listed under allow; strips deny keys at ingest.
+privacy:
+  allow:
+    dimensions: [tool, ok, duration_ms, collection, conversation_id, vault_id]
+    flags: [folder_set, expected_mtime_set, error_shape, used_alias, fields_set]
+    paths: vault_relative # none | hash_only | vault_relative | absolute
+    headings: true
+    chunk_hash: true
+  deny:
+    - note_body
+    - search_query
+    - prompt_text
+    - tool_arguments_raw
+
+retention_days: 90
+
+agent_access:
+  lean_visible: true
+  scope: session # session | collection | desk
+  expose_paths: true
+
+ingest:
+  conversation_id_env: APO_CONVERSATION_ID
+  active_session_file: ~/.apo/active-session.json
+  rpc_telemetry: false # POST /v1/telemetry — hook ingest (future)
+
+pointers:
+  - docs/agent-throughput.md

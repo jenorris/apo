@@ -10,6 +10,9 @@ Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share 
 
 - **Search contract** — [docs/contracts/search-contract.schema.yaml](docs/contracts/search-contract.schema.yaml): per-vault `default_exclude` globs for unscoped search and history browse. Loader: `apo_engine.search_contract`. Fan-out responses may include `default_exclude_by_vault`.
 - **`vault-tools/`** — contract-gated batch mutators for vault corpora (OKF lint/fix/linkify/export pilot). Invoke with `--vault` / `VAULT_ROOT`; preflight requires `system/contracts/okf-contract*.yaml`. Thin vault Just binders call this toolkit; agents should not use vault roots as edit cwds. See [vault-tools/README.md](vault-tools/README.md). `just vault-tools …`.
+- **Telemetry contract** — [docs/contracts/telemetry-contract.schema.yaml](docs/contracts/telemetry-contract.schema.yaml) + [telemetry.md](docs/contracts/telemetry.md). Vault-defined privacy for tool-use metrics (`paths: vault_relative` for optimization nodes). Engine honors `enabled: false`.
+- **Lean MCP `session_stats` / `active_session`** — session-scoped rollups from `~/.apo/metrics.duckdb`; `by_path` when contract `expose_paths: true`. RPC `POST /v1/session_stats`. Admin `tool_stats` unchanged.
+- **Contract-aware ingest** — `record_call` stamps `conversation_id` (``APO_CONVERSATION_ID`` or `active-session.json`), vault-relative `note_path`, heading, chunk_hash per telemetry contract.
 - **`search_notes(vaults=[…])` fan-out** — hybrid search across named vaults (separate sqlite indexes), merge by score, stamp each hit with `vault`. Mutual exclusion with `vault=`. MCP + RPC `/v1/search`. See [docs/multi-vault.md](docs/multi-vault.md).
 - **Usage `contribution`** — optional authoring dialect (`plain-md` \| `gfm` \| `obsidian-ofm`) + features/surfaces + orthogonal `render` (`none` \| `htmlize`) on [usage-contract.schema.yaml](docs/contracts/usage-contract.schema.yaml). `vault(project)` selectively loads usage-contract bodies and emits a per-vault **Contribution** one-liner into apo-desk (deep OFM/htmlize docs stay in pointers).
 - **Region write preconditions** — `expected_frontmatter_hash` / `expected_body_hash` / `expected_content_hash` on `write_note` / `append_note` / `patch_note` (and per `items[]`). When `expected_mtime` is stale, FM-only or section/chunk writes still proceed if the untouched region matches. Same-process prior `read_note` / `expand_chunk` snapshots enable the FM/body split without extra args. Reads, expands, and search hits return the hashes.
@@ -28,7 +31,7 @@ Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share 
 
 - **Tool metrics storage** — MCP tool-use analytics now live in `~/.apo/metrics.duckdb` (DuckDB). Legacy `~/.apo/tool-metrics-*.jsonl` files are imported once on first open, then deleted. `just tool-stats` / admin `tool_stats` rollups unchanged.
 - **Git sync commit subjects** — empty/`auto` messages expand path-aware templates (`{path_count}`, `{top_folders}` / `{paths_summary}` plus time tokens). Agent `git_sync` `message` still wins as subject. Commits always include a capped `Paths:` body trailer.
-- Tool counts: lean **11** / full **18** (adds `vault`).
+- Tool counts: lean **13** / full **20** (adds `session_stats`, `active_session`).
 - **`APO_SEARCH_EXCLUDE`** — deprecated desk-wide fallback; per-vault search-contract preferred.
 - `launchd-watch.sh` default embed backend aligned with engine (`ollama`).
 - Share docs: real clone URL, Python 3.11+, Linux `watch-start`, Claude env example, lean health/`0 tools` troubleshooting, `/v1/vault` in local-rpc.
