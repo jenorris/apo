@@ -349,8 +349,6 @@ def read_events(
     path: Path | None = None,
 ) -> list[dict[str, Any]]:
     db_path = metrics_db_path(path)
-    if not db_path.is_file():
-        return []
     coll = (collection or "default").strip() or "default"
     tool_filter = (tool or "").strip() or None
     cutoff: datetime | None = None
@@ -358,6 +356,8 @@ def read_events(
         cutoff = datetime.now(timezone.utc).timestamp() - (days * 86400)
     try:
         _migrate_jsonl_once(db_path)
+        if not db_path.is_file():
+            return []
         with _write_lock:
             conn = _connect(db_path)
             try:
