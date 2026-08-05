@@ -33,6 +33,7 @@ agent_access:
 
 ingest:
   conversation_id_env: APO_CONVERSATION_ID
+  # Preferred: MCP _meta apo/conversation_id or args _apo.conversation_id (stripped pre-validation)
   active_session_file: ~/.apo/active-session.json
   rpc_telemetry: false # POST /v1/telemetry — hook ingest (future)
 

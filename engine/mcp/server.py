@@ -238,7 +238,9 @@ def _metrics_vault_for_args(args: dict[str, Any]) -> tuple[str, Path | None]:
 
 
 from apo_engine.tool_metrics_middleware import ToolMetricsMiddleware  # noqa: E402
+from apo_engine.session_context_middleware import SessionContextMiddleware  # noqa: E402
 
+mcp.add_middleware(SessionContextMiddleware())
 mcp.add_middleware(
     ToolMetricsMiddleware(vault_resolver=_metrics_vault_for_args)
 )

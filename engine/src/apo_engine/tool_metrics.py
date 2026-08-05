@@ -364,7 +364,9 @@ def record_call(
     if flags:
         event.update(flags)
     if policy.record_conversation_id:
-        cid = (conversation_id or tc.conversation_id_from_env() or "").strip()
+        from apo_engine.session_context import request_conversation_id
+
+        cid = (conversation_id or request_conversation_id() or "").strip()
         if cid:
             event["conversation_id"] = cid
     event.update(tc.extract_note_context(tool, arguments, policy))
@@ -607,7 +609,11 @@ def session_stats(
     path: Path | None = None,
 ) -> dict[str, Any]:
     policy = tc.policy_for_vault(vault_root)
-    cid = (conversation_id or tc.conversation_id_from_env() or "").strip() or None
+    cid = (conversation_id or "").strip() or None
+    if not cid:
+        from apo_engine.session_context import request_conversation_id
+
+        cid = (request_conversation_id() or "").strip() or None
     if cid:
         events = read_events(
             collection, days=days, tool=tool, conversation_id=cid, path=path
@@ -629,7 +635,7 @@ def session_stats(
     if not cid:
         out["tip"] = (
             "Session scope is approximate (24h window). "
-            "Pass conversation_id or set APO_CONVERSATION_ID (Cursor hook) "
+            "Pass conversation_id, _apo.conversation_id, or _meta apo/conversation_id "
             "for exact session attribution."
         )
     return out

@@ -512,7 +512,11 @@ class RpcHandler(BaseHTTPRequestHandler):
                 return
 
         try:
-            result = handler(body)
+            from apo_engine.session_context import bind_request_session, strip_session_body
+
+            with bind_request_session(body=body):
+                body = strip_session_body(body)
+                result = handler(body)
         except Exception as e:
             result = {"ok": False, "error": "internal", "message": str(e)}
 

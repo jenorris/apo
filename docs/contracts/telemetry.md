@@ -30,11 +30,24 @@ Ship `paths: vault_relative` + `expose_paths: true` so agents and `session_stats
 | `active_session` | yes | Read `~/.apo/active-session.json` (Cursor hook) |
 | `tool_stats` | admin | Desk-wide operator rollups |
 
-## Hooks (optional)
+## Session identity (MCP wire)
 
-- `sessionStart` → write `active-session.json`
-- `beforeMCPExecution` → `export APO_CONVERSATION_ID=…`
+Per-call attribution — safe for **multiple concurrent sessions** and **remote Apo** (gateway/RPC):
 
-Example shell: [scripts/cursor-telemetry-hooks.example.sh](../../scripts/cursor-telemetry-hooks.example.sh)
+| Transport | Field | Example |
+|-----------|-------|---------|
+| MCP `_meta` | `apo/conversation_id` | Standard request meta (preferred for HTTP MCP) |
+| MCP / RPC args | `_apo.conversation_id` | Stripped before tool validation |
+| RPC body | `_apo` or top-level `conversation_id` | Laravel gateway |
+| Legacy | `APO_CONVERSATION_ID` env, `active-session.json` | Local stdio fallback only |
+
+Engine middleware binds ids in a **request contextvar** (not a global file) before metrics ingest.
+
+## Hooks (Cursor local)
+
+- **`preToolUse`** → inject `_apo.conversation_id` into Apo MCP tool args (`updated_input`)
+- **`sessionStart`** → write `active-session.json` for `active_session` convenience
+
+Example shell: [scripts/cursor-telemetry-hooks.example.sh](../../scripts/cursor-telemetry-hooks.example.sh) · installed: `~/.cursor/hooks/apo-telemetry.sh`
 
 See [Cursor hooks](https://cursor.com/docs/hooks) and [cursor-otel-hook](https://github.com/LangGuard-AI/cursor-otel-hook) for full trace export.

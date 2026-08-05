@@ -11,6 +11,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 from apo_engine import tool_metrics
+from apo_engine.session_context import request_conversation_id
 
 
 def _tool_name(context: MiddlewareContext[Any]) -> str:
@@ -96,6 +97,7 @@ class ToolMetricsMiddleware(Middleware):
         flags = tool_metrics.extract_arg_flags(args, tool=tool)
         req_bytes = tool_metrics.estimate_bytes(args)
         vault_id, vault_root = self._resolve_vault(args)
+        conv_id = request_conversation_id()
         t0 = time.perf_counter()
         try:
             result = await call_next(context)
@@ -117,6 +119,7 @@ class ToolMetricsMiddleware(Middleware):
                 vault_id=vault_id,
                 vault_root=vault_root,
                 arguments=args,
+                conversation_id=conv_id,
             )
             raise
         except Exception as e:
@@ -133,6 +136,7 @@ class ToolMetricsMiddleware(Middleware):
                 vault_id=vault_id,
                 vault_root=vault_root,
                 arguments=args,
+                conversation_id=conv_id,
             )
             raise
 
@@ -150,5 +154,6 @@ class ToolMetricsMiddleware(Middleware):
             vault_id=vault_id,
             vault_root=vault_root,
             arguments=args,
+            conversation_id=conv_id,
         )
         return result
