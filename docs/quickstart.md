@@ -22,7 +22,7 @@ Edit `.env` (use **absolute paths** — `just dotenv-load` does not expand `${HO
 | `APO_NOTES_ROOT` | Absolute path to **your** markdown vault |
 | `APO_INDEX` | Recommend `$HOME/.apo/index.db` — survives clean checkouts; multi-vault indexes default there. To relocate later: move the file, update `APO_INDEX` everywhere it's set (`.env` + MCP config), restart the watcher — or just `just reindex` at the new path |
 | `OLLAMA_KEEP_ALIVE` | `5m` while working; `0` to unload the model when idle |
-| `APO_SEARCH_EXCLUDE` | Recommended for PARA/noisy vaults: `inbox/daily/* archives/*` (unscoped searches only; +8pts hit@5 measured — see [search-quality.md](./search-quality.md)) |
+| Search noise filter | Copy [search-contract.schema.yaml](./contracts/search-contract.schema.yaml) to `<vault>/system/contracts/` and set `default_exclude` (see [search-quality.md](./search-quality.md)) |
 
 ```bash
 just setup
@@ -48,11 +48,12 @@ Add an `apo` block to `~/.cursor/mcp.json` (merge into existing `mcpServers`):
     "APO_EMBED_BACKEND": "ollama",
     "APO_MODEL": "bge-m3",
     "APO_OLLAMA_URL": "http://127.0.0.1:11434",
-    "OLLAMA_KEEP_ALIVE": "5m",
-    "APO_SEARCH_EXCLUDE": "inbox/daily/* archives/*"
+    "OLLAMA_KEEP_ALIVE": "5m"
   }
 }
 ```
+
+Per-vault search noise filters live in `<vault>/system/contracts/search-contract.schema.yaml` — not MCP env.
 
 Lean desk is **default** (admin tools + `delete_note` hidden). Set `"APO_MCP_LEAN": "0"` only when you need admin tools (`reload_config`, `memory_status`, `tool_stats`, `delete_note`, `git_sync`, `reindex_deferred`, `reindex`).
 
@@ -75,8 +76,7 @@ Then put the same env block as Cursor into `~/.claude.json` under the `apo` serv
   "APO_EMBED_BACKEND": "ollama",
   "APO_MODEL": "bge-m3",
   "APO_OLLAMA_URL": "http://127.0.0.1:11434",
-  "OLLAMA_KEEP_ALIVE": "5m",
-  "APO_SEARCH_EXCLUDE": "inbox/daily/* archives/*"
+  "OLLAMA_KEEP_ALIVE": "5m"
 }
 ```
 

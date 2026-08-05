@@ -19,6 +19,7 @@ from apo_engine import (
     deferred as index_deferred,
     git_contract,
     git_sync,
+    search_contract,
     okf as apo_okf,
     vault_contracts,
     vault_desk,
@@ -562,16 +563,22 @@ def _search_one_vault(
     exclude: list[str] | None,
     hybrid: bool,
     stamp_vault: bool,
-) -> tuple[list[dict[str, Any]], list[str], bool]:
-    """Run hybrid search in one vault. Returns (rows, warnings, reranked)."""
+) -> tuple[list[dict[str, Any]], list[str], bool, list[str] | None]:
+    """Run hybrid search in one vault. Returns (rows, warnings, reranked, default_exclude)."""
     warnings: list[str] = []
+    root = b.resolved().root
+    effective_exclude, applied_default, _source = search_contract.resolve_search_exclude(
+        root,
+        caller_exclude=exclude,
+        folder_clean=folder_clean,
+    )
     with vaults.bind(b):
         hits = core.search(
             query,
             k=k,
             folder=folder_clean,
             snippet_chars=snippet_chars,
-            exclude=exclude,
+            exclude=effective_exclude,
             hybrid=hybrid,
         )
         results = shape_search_hits(hits)
@@ -593,7 +600,7 @@ def _search_one_vault(
     missing = _missing_folder_warning(b.resolved().root, folder_clean, b.name)
     if missing:
         warnings.append(missing)
-    return results, warnings, reranked
+    return results, warnings, reranked, applied_default
 
 
 def search(
@@ -622,31 +629,30 @@ def search(
                 _safe_resolve(b.resolved().root, folder_clean)
             except ValueError as e:
                 return _err(error="bad_path", message=str(e))
-    # Unscoped searches inherit APO_SEARCH_EXCLUDE (noise folders like session
-    # logs); folder-scoped or caller-provided exclude= always wins.
-    default_exclude: list[str] | None = None
-    effective_exclude = exclude
-    if not effective_exclude and not folder_clean and config.SEARCH_EXCLUDE_DEFAULT:
-        default_exclude = list(config.SEARCH_EXCLUDE_DEFAULT)
-        effective_exclude = default_exclude
-
     fanout = len(targets) > 1
     all_rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     any_reranked = False
+    default_exclude: list[str] | None = None
+    default_exclude_by_vault: dict[str, list[str]] = {}
     failed = 0
     for b in targets:
         try:
-            rows, w, reranked = _search_one_vault(
+            rows, w, reranked, applied_default = _search_one_vault(
                 query,
                 b,
                 k=k,
                 folder_clean=folder_clean,
                 snippet_chars=snippet_chars,
-                exclude=effective_exclude,
+                exclude=exclude,
                 hybrid=hybrid,
                 stamp_vault=fanout,
             )
+            if applied_default:
+                if fanout:
+                    default_exclude_by_vault[b.name] = applied_default
+                else:
+                    default_exclude = applied_default
             all_rows.extend(rows)
             warnings.extend(w)
             any_reranked = any_reranked or reranked
@@ -684,6 +690,8 @@ def search(
         tip_root = targets[0].resolved().root
     if default_exclude:
         out["default_exclude"] = default_exclude
+    if default_exclude_by_vault:
+        out["default_exclude_by_vault"] = default_exclude_by_vault
     if any_reranked:
         out["reranked"] = True
     if warnings:
@@ -1084,6 +1092,13 @@ def history(
         if not isinstance(exclude, list) or any(not isinstance(x, str) for x in exclude):
             return _err(error="bad_request", message="exclude must be a list of strings")
 
+    folder_clean = folder.replace("\\", "/").strip("/")
+    effective_exclude, applied_default, _source = search_contract.resolve_search_exclude(
+        root,
+        caller_exclude=exclude,
+        folder_clean=folder_clean,
+    )
+
     try:
         base = _safe_resolve(root, folder) if folder else root
     except ValueError as e:
@@ -1100,7 +1115,7 @@ def history(
                 until=until_ts,
                 preview=mode,
                 heading=heading_clean or None,
-                exclude=exclude,
+                exclude=effective_exclude,
             )
     except ValueError as e:
         return _err(error="bad_request", message=str(e))
@@ -1129,6 +1144,8 @@ def history(
         out["heading"] = heading_clean
     if exclude:
         out["exclude"] = list(exclude)
+    elif applied_default:
+        out["default_exclude"] = applied_default
     return out
 
 
