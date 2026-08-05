@@ -1,0 +1,31 @@
+# Apo vault-tools — contract-gated batch mutators for vault corpora.
+# Prefer: just --justfile ~/Notes/<vault>/justfile … from outside the vault.
+# Or: just -f vault-tools/justfile okf-lint --vault ~/Notes/Meta
+
+set shell := ["bash", "-cu"]
+
+tools := justfile_directory()
+okf := tools / "tools" / "okf"
+
+default:
+    @just --list --justfile "{{ source_file() }}"
+
+# OKF lint (exit 1 on errors). Usage: just okf-lint --vault ~/Notes/Meta [--strict] [path…]
+okf-lint *args:
+    python3 "{{ okf }}/okf_lint.py" {{ args }}
+
+# OKF fix safe frontmatter gaps
+okf-fix *args:
+    python3 "{{ okf }}/okf_lint.py" --fix {{ args }}
+
+# Regenerate index.md listings
+okf-indexes *args:
+    python3 "{{ okf }}/okf_lint.py" --regenerate-indexes {{ args }}
+
+# Append ## OKF links
+okf-linkify *args:
+    python3 "{{ okf }}/okf_linkify.py" {{ args }}
+
+# Export portable OKF subset
+okf-export *args:
+    python3 "{{ okf }}/okf_export.py" {{ args }}

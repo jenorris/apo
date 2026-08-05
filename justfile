@@ -51,6 +51,10 @@ tool-stats *ARGS:
 desk-project *ARGS:
     {{eng}} desk-project {{ARGS}}
 
+# Contract-gated vault batch tools (OKF lint/fix/…). See vault-tools/README.md
+vault-tools *ARGS:
+    just --justfile "{{ justfile_directory() }}/vault-tools/justfile" {{ARGS}}
+
 # Local JSON HTTP RPC for gateways (default http://127.0.0.1:8765).
 rpc *ARGS:
     {{eng}} serve {{ARGS}}
