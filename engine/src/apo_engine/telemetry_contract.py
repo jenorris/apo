@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -141,9 +142,25 @@ def extract_note_context(
     return out
 
 
+def conversation_id_from_active_session() -> str | None:
+    p = active_session_path()
+    if not p.is_file():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw = str(data.get("conversation_id") or data.get("session_id") or "").strip()
+    return raw or None
+
+
 def conversation_id_from_env() -> str | None:
     raw = os.environ.get("APO_CONVERSATION_ID", "").strip()
-    return raw or None
+    if raw:
+        return raw
+    return conversation_id_from_active_session()
 
 
 def active_session_path() -> Path:

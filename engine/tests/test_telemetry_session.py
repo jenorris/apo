@@ -120,6 +120,17 @@ class SessionStatsTest(unittest.TestCase):
                 out = tool_metrics.read_active_session()
                 self.assertFalse(out["active"])
 
+    def test_conversation_id_from_active_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "active-session.json"
+            path.write_text(
+                json.dumps({"conversation_id": "from-file"}),
+                encoding="utf-8",
+            )
+            with mock.patch.object(tc, "active_session_path", return_value=path):
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    self.assertEqual(tc.conversation_id_from_env(), "from-file")
+
 
 if __name__ == "__main__":
     unittest.main()
