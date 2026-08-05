@@ -92,10 +92,12 @@ SCOPED_VECTOR_FULL_SCAN_MAX: int = int(os.environ.get("APO_SCOPED_VECTOR_FULL_SC
 QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "120"))
 QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "64"))
 
-# Default exclude globs for *unscoped* searches (no folder=, no caller exclude=).
+# Default exclude globs for *unscoped* searches when the vault has no
+# search-contract.schema.yaml (legacy desk-wide fallback — prefer vault-side
+# ``system/contracts/search-contract.schema.yaml`` per vault).
 # Space/comma separated. Session logs and archives crowd out canonical notes in
 # recall — measured +8pts hit@5 on a noisy PARA vault with:
-#   APO_SEARCH_EXCLUDE="inbox/daily/* archives/*"
+#   default_exclude: [inbox/daily/*, archives/*]
 SEARCH_EXCLUDE_DEFAULT: list[str] = [
     g for g in re.split(r"[,\s]+", os.environ.get("APO_SEARCH_EXCLUDE", "").strip()) if g
 ]

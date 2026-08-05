@@ -1,0 +1,17 @@
+# Apo search contract — template / example
+# Copy to <vault>/system/contracts/search-contract.schema.yaml and edit.
+# Legacy path system/config/search-contract.schema.yaml still loaded.
+# Runtime: unscoped search_notes / CLI search / RPC /v1/search and history browse
+# when exclude= is omitted and folder= is empty. Never applied when folder= or
+# caller exclude= is set.
+
+search_contract_version: "0.1"
+
+# Path globs (vault-relative) dropped from unscoped hybrid search and history browse.
+# Measured +8pts hit@5 on noisy PARA vaults with inbox/daily + archives excluded.
+# Sessions/audit vaults should use [] — inbox/daily is primary content there.
+default_exclude:
+  - inbox/daily/*
+  - archives/*
+  # - inbox/zettels/*
+  # - system/agent-client/*

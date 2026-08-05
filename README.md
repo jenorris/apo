@@ -200,7 +200,7 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | `APO_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace |
 | `APO_DEFERRED_DIR` | `~/.apo` | Runtime dir for queues + tool metrics (tests/sandboxes override) |
 | `APO_TOOL_METRICS` | `1` | Record MCP tool-use events in `~/.apo/metrics.duckdb` (`0` disables) |
-| `APO_SEARCH_EXCLUDE` | (empty) | Default exclude globs for unscoped searches, e.g. `inbox/daily/* archives/*` (measured +8pts hit@5 on a noisy PARA vault) |
+| `APO_SEARCH_EXCLUDE` | (empty) | **Deprecated** desk-wide fallback when a vault has no search-contract; prefer `system/contracts/search-contract.schema.yaml` |
 | `APO_RERANK` | `0` | Opt-in local cross-encoder reranker (`pip install -e '.[rerank]'`) |
 | `APO_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder id |
 | `APO_RERANK_POOL` | `24` | Fused candidates rescored before the cut to `k` |

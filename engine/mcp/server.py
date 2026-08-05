@@ -631,7 +631,7 @@ async def search_notes(
         Field(
             description=(
                 "Optional path globs to drop. When omitted and folder= is empty, "
-                "APO_SEARCH_EXCLUDE defaults apply (response carries default_exclude)."
+                "vault search-contract defaults apply (response carries default_exclude)."
             ),
         ),
     ] = None,

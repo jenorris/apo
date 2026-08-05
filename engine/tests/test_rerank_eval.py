@@ -104,10 +104,19 @@ class RerankVaultTest(unittest.TestCase):
             "# Log\n\nalpha alpha alpha alpha noise entry\n", encoding="utf-8"
         )
         core.index_vault(verbose=False)
-        with mock.patch.object(config, "SEARCH_EXCLUDE_DEFAULT", ["noise/*"]):
-            unscoped = ops.search("alpha", limit=5)
-            scoped = ops.search("alpha", folder="noise", limit=5)
-            explicit = ops.search("alpha", limit=5, exclude=["first*"])
+        contract_dir = self.vault / "system" / "contracts"
+        contract_dir.mkdir(parents=True)
+        (contract_dir / "search-contract.schema.yaml").write_text(
+            "search_contract_version: '0.1'\ndefault_exclude:\n  - noise/*\n",
+            encoding="utf-8",
+        )
+        from apo_engine import search_contract
+
+        search_contract.clear_default_exclude_cache()
+        unscoped = ops.search("alpha", limit=5)
+        scoped = ops.search("alpha", folder="noise", limit=5)
+        explicit = ops.search("alpha", limit=5, exclude=["first*"])
+        search_contract.clear_default_exclude_cache()
         self.assertEqual(unscoped.get("default_exclude"), ["noise/*"])
         self.assertNotIn("noise/log.md", [r["source"] for r in unscoped["results"]])
         self.assertIn("noise/log.md", [r["source"] for r in scoped["results"]])

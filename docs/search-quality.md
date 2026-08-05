@@ -30,12 +30,19 @@ Metrics: **hit@k** (any expected path in top k) and **MRR@k**.
 Honest read:
 
 1. **Noise exclusion is the big, free win.** Session logs and archived journals
-   crowd out canonical notes in unscoped recall. Set it once:
+   crowd out canonical notes in unscoped recall. Configure **per vault** in
+   `system/contracts/search-contract.schema.yaml`:
 
-   ```bash
-   # .env / MCP server env — applies to unscoped searches only
-   APO_SEARCH_EXCLUDE="inbox/daily/* archives/*"
+   ```yaml
+   search_contract_version: "0.1"
+   default_exclude:
+     - inbox/daily/*
+     - archives/*
    ```
+
+   Audit/session vaults should ship `default_exclude: []` — their primary
+   content lives under `inbox/daily`. Legacy desk-wide fallback:
+   `APO_SEARCH_EXCLUDE` env (deprecated; used only when no vault contract).
 
    `folder=`-scoped searches and caller-provided `exclude=` are never touched;
    responses carry `default_exclude` so agents can see the filter was applied.
