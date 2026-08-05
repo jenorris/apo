@@ -198,6 +198,7 @@ _MCP_INSTRUCTIONS = (
     "status sweeps → filter_notes. "
     "Hits expose chunk_hash/heading for append/expand (skip read when possible; "
     "append_note may take chunk_hash alone). "
+    "session_stats / active_session: desk tool-use metrics (session-scoped; paths when telemetry contract allows). "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
     "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
     "index.db writer and wakes on enqueue. Multi-vault: pass vault= or "
@@ -219,13 +220,31 @@ mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
 # Inner: rewrite opaque Pydantic ValidationError → agent-actionable ToolError
 # (FastMCP validates args before tool bodies — see apo_engine.validation_hints).
 from apo_engine.agent_validation import AgentValidationMiddleware  # noqa: E402
+
+_load_vaults()
+
+
+def _metrics_vault_for_args(args: dict[str, Any]) -> tuple[str, Path | None]:
+    key = str(args.get("vault") or "").strip() or DEFAULT_VAULT
+    v = VAULTS.get(key)
+    if v is not None:
+        return v.name, v.root
+    if VAULTS:
+        dv = VAULTS.get(DEFAULT_VAULT)
+        if dv is not None:
+            return dv.name, dv.root
+    root_s = os.environ.get("APO_NOTES_ROOT", "").strip()
+    return key, Path(root_s).expanduser() if root_s else None
+
+
 from apo_engine.tool_metrics_middleware import ToolMetricsMiddleware  # noqa: E402
 
-mcp.add_middleware(ToolMetricsMiddleware())
+mcp.add_middleware(
+    ToolMetricsMiddleware(vault_resolver=_metrics_vault_for_args)
+)
 mcp.add_middleware(AgentValidationMiddleware())
 
-# Load vault registry at import (fast); the index backend connects lazily per vault.
-_load_vaults()
+# Index backend connects lazily per vault (registry loaded above).
 
 
 ###############################################################################
@@ -278,7 +297,7 @@ async def tool_stats(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """MCP tool-use rollups from ~/.apo/metrics.duckdb (admin). No note bodies/paths stored."""
+    """MCP tool-use rollups from ~/.apo/metrics.duckdb (admin). Note paths only when vault telemetry contract allows."""
     return await asyncio.to_thread(_tool_stats_sync, days, tool, vault)
 
 
@@ -296,6 +315,63 @@ def _tool_stats_sync(
     if days is not None and days < 0:
         return _err(error="bad_request", message="days must be >= 0 or null")
     return apo_metrics.tool_stats(v.collection, days=days, tool=tool)
+
+
+@mcp.tool(annotations=_RO)
+async def session_stats(
+    days: Annotated[
+        int | None,
+        Field(description="Rollup window in days. Omit with conversation_id for session default."),
+    ] = None,
+    tool: Annotated[
+        str | None,
+        Field(description="Optional tool name filter (e.g. search_notes)."),
+    ] = None,
+    conversation_id: Annotated[
+        str | None,
+        Field(description="Cursor conversation id (default: APO_CONVERSATION_ID env)."),
+    ] = None,
+    vault: str = "",
+) -> dict:
+    """Session-scoped tool-use rollups. Includes by_path when vault telemetry contract allows."""
+    return await asyncio.to_thread(
+        _session_stats_sync, days, tool, conversation_id, vault
+    )
+
+
+def _session_stats_sync(
+    days: int | None,
+    tool: str | None,
+    conversation_id: str | None,
+    vault: str,
+) -> dict:
+    from apo_engine import tool_metrics as apo_metrics
+
+    try:
+        v = _vault(vault)
+    except VaultError as e:
+        return _err(error="bad_vault", message=str(e))
+    if days is not None and days < 0:
+        return _err(error="bad_request", message="days must be >= 0 or null")
+    return apo_metrics.session_stats(
+        v.collection,
+        vault_root=v.root,
+        conversation_id=conversation_id,
+        days=days,
+        tool=tool,
+    )
+
+
+@mcp.tool(annotations=_RO)
+async def active_session() -> dict:
+    """Read ~/.apo/active-session.json (written by Cursor sessionStart hook)."""
+    return await asyncio.to_thread(_active_session_sync)
+
+
+def _active_session_sync() -> dict:
+    from apo_engine import tool_metrics as apo_metrics
+
+    return apo_metrics.read_active_session()
 
 
 def _memory_status_sync() -> dict:

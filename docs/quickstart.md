@@ -90,7 +90,7 @@ just tool-list    # pure Python — no Node required
 # or: just inspect   # needs npx + rg
 ```
 
-Lean default: expect **11** tools (includes `vault`). With `APO_MCP_LEAN=0`, expect **18**.
+Lean default: expect **13** tools (includes `vault`, `session_stats`, `active_session`). With `APO_MCP_LEAN=0`, expect **20**.
 
 In the agent, run a known `search_notes` query — the right note should land near the top.
 

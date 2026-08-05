@@ -92,11 +92,13 @@ class LeanModeTest(unittest.TestCase):
         self.assertNotIn("recent_activity", names)
         self.assertNotIn("delete_note", names)
         self.assertIn("vault", names)
-        self.assertEqual(len(names), 11)
+        self.assertIn("session_stats", names)
+        self.assertIn("active_session", names)
+        self.assertEqual(len(names), 13)
 
     def test_full_mode_tool_count(self):
         names = _list_tool_names(lean=False)
-        self.assertEqual(len(names), 18)
+        self.assertEqual(len(names), 20)
         self.assertIn("vault", names)
         self.assertTrue(_ADMIN <= names)
         self.assertNotIn("patch_notes", names)

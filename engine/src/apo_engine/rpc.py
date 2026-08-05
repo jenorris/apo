@@ -41,6 +41,33 @@ def _stats(body: dict[str, Any]) -> dict[str, Any]:
     return ops.stats(vault=str(body.get("vault") or ""))
 
 
+@_route("POST", "/v1/session_stats")
+def _session_stats(body: dict[str, Any]) -> dict[str, Any]:
+    from apo_engine import tool_metrics, vaults as apo_vaults
+
+    vault_name = str(body.get("vault") or "").strip()
+    try:
+        default_name, bindings = apo_vaults.load_bindings()
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        return {"ok": False, "error": "bad_vault", "message": str(e)}
+    key = vault_name or default_name
+    binding = bindings.get(key)
+    if binding is None:
+        return {"ok": False, "error": "bad_vault", "message": f"unknown vault {key!r}"}
+    days = body.get("days")
+    if days is not None and int(days) < 0:
+        return {"ok": False, "error": "bad_request", "message": "days must be >= 0 or null"}
+    tool = body.get("tool")
+    conv = body.get("conversation_id")
+    return tool_metrics.session_stats(
+        binding.collection,
+        vault_root=binding.root,
+        conversation_id=str(conv).strip() if conv else None,
+        days=int(days) if days is not None else None,
+        tool=str(tool).strip() if tool else None,
+    )
+
+
 @_route("POST", "/v1/search")
 def _search(body: dict[str, Any]) -> dict[str, Any]:
     query = body.get("query")
