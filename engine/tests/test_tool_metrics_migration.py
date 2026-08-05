@@ -45,6 +45,31 @@ class ToolMetricsMigrationTest(unittest.TestCase):
                 self.assertEqual(by_tool["search_notes"]["calls"], 1)
                 self.assertEqual(by_tool["append_note"]["calls"], 1)
 
+    def test_read_events_migrates_jsonl_before_db_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            jsonl = runtime / "tool-metrics-only.jsonl"
+            jsonl.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-01-15T12:00:00Z",
+                        "tool": "search_notes",
+                        "ok": True,
+                        "duration_ms": 5.0,
+                        "req_bytes": 10,
+                        "resp_bytes": 100,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            db_path = runtime / "metrics.duckdb"
+            with mock.patch.object(tool_metrics, "DEFERRED_DIR", runtime):
+                events = tool_metrics.read_events("only", path=db_path)
+                self.assertFalse(jsonl.is_file())
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["tool"], "search_notes")
+
     def test_migration_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
