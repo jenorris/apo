@@ -9,6 +9,7 @@ Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share 
 ### Added
 
 - **Agent-habit wire compat** — `append_note`/`write_note` accept legacy `body=` alias; MCP instructions no longer say `body=text` (misread as kwarg). `patch_note` ops accept `set_field.path`→`field`, `replace_text.old_text`/`new_text`→`find`/`replace`. Validation hints + `agent-throughput.md` updated.
+- **Telemetry `apo_version`** — each tool-call row stamps engine semver; `tool_stats` / `session_stats` expose `engine_version` + `by_version` rollups for cross-version burn-down.
 
 - **MCP wire session context** — `SessionContextMiddleware` reads `_meta.apo/conversation_id` or `_apo.conversation_id` on each tools/call; strips `_apo` before validation; binds per-request contextvar for metrics (multi-session + remote-safe). RPC bodies accept the same fields. — [docs/contracts/search-contract.schema.yaml](docs/contracts/search-contract.schema.yaml): per-vault `default_exclude` globs for unscoped search and history browse. Loader: `apo_engine.search_contract`. Fan-out responses may include `default_exclude_by_vault`.
 - **`vault-tools/`** — contract-gated batch mutators for vault corpora (OKF lint/fix/linkify/export pilot). Invoke with `--vault` / `VAULT_ROOT`; preflight requires `system/contracts/okf-contract*.yaml`. Thin vault Just binders call this toolkit; agents should not use vault roots as edit cwds. See [vault-tools/README.md](vault-tools/README.md). `just vault-tools …`.
