@@ -50,7 +50,7 @@ def _tool_arguments(context: MiddlewareContext[Any]) -> dict[str, Any]:
 
 
 class ToolMetricsMiddleware(Middleware):
-    """Append one JSONL event per tools/call (best-effort; never blocks the tool)."""
+    """Record one tool-call event per tools/call (best-effort; never blocks the tool)."""
 
     def __init__(self, collection: str | None = None) -> None:
         super().__init__()

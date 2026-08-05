@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import json
 import os
 import tempfile
 import unittest
@@ -93,23 +92,19 @@ class McpValidationHintTest(unittest.TestCase):
             self.assertNotIn("union_tag_not_found", text)
 
             # conftest redirects tool_metrics.DEFERRED_DIR into an isolated tmp.
-            metrics_path = tool_metrics.DEFERRED_DIR / "tool-metrics-hint_test.jsonl"
-            self.assertTrue(metrics_path.is_file(), f"missing metrics at {metrics_path}")
-            rows = [
-                json.loads(line)
-                for line in metrics_path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
+            metrics_db = tool_metrics.metrics_db_path()
+            self.assertTrue(metrics_db.is_file(), f"missing metrics db at {metrics_db}")
+            stats = tool_metrics.tool_stats("hint_test", days=None, path=metrics_db)
             patch_errs = [
-                r for r in rows if r.get("tool") == "patch_note" and r.get("ok") is False
+                t
+                for t in stats.get("by_tool", [])
+                if t.get("tool") == "patch_note" and t.get("error", 0) > 0
             ]
             self.assertEqual(len(patch_errs), 1)
             row = patch_errs[0]
-            self.assertEqual(row["error"], "validation_error")
-            self.assertGreater(row.get("resp_bytes", 0), 0)
-            shapes = row.get("error_shape") or []
+            shapes = row.get("by_error_shape") or {}
             self.assertTrue(
-                any("ops" in str(s) or "op" in str(s) for s in shapes),
+                any("ops" in str(k) or "op" in str(k) for k in shapes),
                 f"expected ops/op shape in {shapes!r}",
             )
 
