@@ -1,0 +1,4 @@
+id: okf
+requires_contracts:
+  - okf-contract
+description: Offline OKF lint / fix / linkify / export (twin of Apo write-path contract)
