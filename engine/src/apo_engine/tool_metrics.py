@@ -87,7 +87,11 @@ def extract_arg_flags(
     name = (tool or "").strip()
     if name == "append_note" and args.get("content") is not None:
         flags["used_alias"] = True
+    if name == "append_note" and args.get("body") is not None:
+        flags["used_alias"] = True
     if name == "write_note" and args.get("text") is not None:
+        flags["used_alias"] = True
+    if name == "write_note" and args.get("body") is not None:
         flags["used_alias"] = True
     if args.get("folder"):
         flags["folder_set"] = True

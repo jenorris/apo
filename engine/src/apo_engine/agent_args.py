@@ -13,35 +13,35 @@ def resolve_body_text(
     text: str | None,
     content: str | None,
     *,
+    body: str | None = None,
     prefer: Literal["text", "content"],
-) -> tuple[str | None, bool, str | None]:
-    """Resolve note body. ``content``≡``text`` (prefer marks the canonical key).
+) -> tuple[str | None, str | None, str | None]:
+    """Resolve note body. ``content``≡``text``; ``body`` is a legacy alias for either.
 
-    Returns ``(body, used_alias, error_message)``. On conflict or missing body,
-    ``body`` is None and ``error_message`` is set. ``used_alias`` is True when
-    only the non-canonical key was provided.
+    Returns ``(body, alias_key, error_message)``. ``alias_key`` is None when the
+    canonical key was used; otherwise ``content``, ``text``, or ``body``.
     """
-    text_set = text is not None
-    content_set = content is not None
     canonical = prefer
-    alias = "content" if prefer == "text" else "text"
-    if text_set and content_set and text != content:
-        return None, False, (
-            f"conflicting text and content; pass only one "
-            f"({canonical}= is canonical; {alias}= is an alias)"
+    provided: list[tuple[str, str]] = []
+    if text is not None:
+        provided.append(("text", text))
+    if content is not None:
+        provided.append(("content", content))
+    if body is not None:
+        provided.append(("body", body))
+    if not provided:
+        return None, None, (
+            f"missing {canonical}= (aliases content=, text=, body= — prefer {canonical}=)"
         )
-    if not text_set and not content_set:
-        return None, False, (
-            f"missing {canonical}= (alias {alias}= also accepted)"
+    values = [v for _, v in provided]
+    if len(set(values)) > 1:
+        keys = ", ".join(k + "=" for k, _ in provided)
+        return None, None, (
+            f"conflicting body args ({keys}); pass only one ({canonical}= is canonical)"
         )
-    if prefer == "text":
-        body = text if text_set else content
-        used_alias = content_set and not text_set
-    else:
-        body = content if content_set else text
-        used_alias = text_set and not content_set
-    assert body is not None
-    return body, used_alias, None
+    resolved = values[0]
+    alias_key = None if any(k == canonical for k, _ in provided) else provided[0][0]
+    return resolved, alias_key, None
 
 
 def resolve_top_k(

@@ -16,7 +16,7 @@ _OPS_HINT = (
     "Ops: set_field(field,value); replace_text(find,replace,scope.heading|heading); "
     "replace_section(heading,text); append(heading,text) "
     "(standalone add → append_note). "
-    "Keys: field/find/replace — never key/old/new."
+    "Keys: field/find/replace — never path/key/old/new/old_text/new_text."
 )
 
 _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
@@ -41,7 +41,8 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "snippet_chars": "expand_chunk has no snippet_chars — pass chunk_hash (+ optional scope=section|chunk).",
     },
     "write_note": {
-        "text": "write_note uses content= (not text). Alias text= is accepted when content= is omitted. For append under a heading use append_note(path, text, heading=…).",
+        "body": "write_note uses content= (canonical); text= and body= are accepted aliases. For append under a heading use append_note(path, text, heading=…).",
+        "text": "write_note uses content= (not text). Aliases text= and body= are accepted when content= is omitted. For append under a heading use append_note(path, text, heading=…).",
         "ops": "write_note has no ops — use patch_note for surgical edits.",
         "append": (
             "write_note append is removed — use append_note(path, text, heading=… "
@@ -58,7 +59,8 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         ),
     },
     "append_note": {
-        "content": "append_note uses text= (canonical); content= is an accepted alias. For full overwrite use write_note(path, content).",
+        "body": "append_note uses text= (canonical); content= and body= are accepted aliases. For full overwrite use write_note(path, content).",
+        "content": "append_note uses text= (canonical); content= and body= are accepted aliases. For full overwrite use write_note(path, content).",
         "ops": "append_note has no ops — use patch_note for mutators, or append_note(path, text, heading=…).",
         "index": "append_note has no index= — writes always enqueue for apo-engine watch.",
         "path": (
@@ -71,8 +73,14 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "text": "patch_note mutates via ops[] — put text on an op (append/replace_section), not top-level.",
         "content": "patch_note has no content — use write_note for full overwrite, or ops with replace_section/replace_text.",
         "find": "find belongs inside an op: {\"op\":\"replace_text\",\"find\":\"…\",\"replace\":\"…\"}.",
+        "path": (
+            "patch_note single-path mode uses top-level path= + ops=[…]. "
+            "Multi-path: items=[{path, ops, …}] — each item requires path."
+        ),
         "old": _OPS_HINT,
         "new": _OPS_HINT,
+        "old_text": "replace_text uses find= and replace= (aliases old_text/new_text accepted).",
+        "new_text": "replace_text uses find= and replace= (aliases old_text/new_text accepted).",
         "key": _OPS_HINT,
         "index": "patch_note has no index= — writes always enqueue for apo-engine watch.",
     },
@@ -191,7 +199,7 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
                 )
                 continue
             if name == "append_note" and loc_tail == "text":
-                # Dual-error case: content= present → prefer alias hint over generic missing.
+                # Dual-error case: content=/body= present → prefer alias hint over generic missing.
                 for peer in errors:
                     keys = _input_keys(peer)
                     if "content" in keys or (
@@ -199,6 +207,12 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
                         and _loc_tail(peer) == "content"
                     ):
                         hints.append(_TOOL_PARAM_HINTS["append_note"]["content"])
+                        break
+                    if "body" in keys or (
+                        peer.get("type") == "unexpected_keyword_argument"
+                        and _loc_tail(peer) == "body"
+                    ):
+                        hints.append(_TOOL_PARAM_HINTS["append_note"]["body"])
                         break
                 else:
                     hints.append(
@@ -220,6 +234,12 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
                         "write_note missing required argument 'content' "
                         "(alias text= also accepted)."
                     )
+                continue
+            if name == "patch_note" and loc_tail == "path" and "items" in loc_str:
+                hints.append(
+                    "patch_note items[] entries each need path= and ops=[…]. "
+                    "Single-path mode: top-level path= + ops= (not items=)."
+                )
                 continue
             if name == "patch_note" and loc_tail == "ops":
                 hints.append(f"patch_note requires ops=[…]. {_OPS_HINT}")

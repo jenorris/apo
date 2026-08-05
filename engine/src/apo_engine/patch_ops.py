@@ -28,6 +28,25 @@ class SetFieldOp(_OpBase):
     field: str
     value: Any = ""
 
+    @model_validator(mode="before")
+    @classmethod
+    def _alias_path_to_field(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        path = data.pop("path", None)
+        key = data.pop("key", None)
+        field = data.get("field")
+        if path is not None:
+            if field is not None:
+                _conflict(str(path), str(field), left="path", right="field")
+            data["field"] = path
+        elif key is not None:
+            if field is not None:
+                _conflict(str(key), str(field), left="key", right="field")
+            data["field"] = key
+        return data
+
 
 class DeleteFieldOp(_OpBase):
     op: Literal["delete_field"]
@@ -54,6 +73,28 @@ class ReplaceTextOp(_OpBase):
     heading: str | None = None
     # Alias for scope.chunk_hash — search hit → scoped replace without re-read.
     chunk_hash: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _alias_old_new_text(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        old = data.pop("old_text", None)
+        if old is None:
+            old = data.pop("old", None)
+        new = data.pop("new_text", None)
+        if new is None:
+            new = data.pop("new", None)
+        if old is not None:
+            if data.get("find") is not None:
+                _conflict(str(old), str(data["find"]), left="old_text", right="find")
+            data["find"] = old
+        if new is not None:
+            if data.get("replace") is not None:
+                _conflict(str(new), str(data["replace"]), left="new_text", right="replace")
+            data["replace"] = new
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -178,13 +219,14 @@ PatchOp = Annotated[
 
 OPS_FIELD_DESC = (
     "Deterministic mutators; discriminated by op. "
-    "Keys: field/find/replace — never key/old/new. "
+    "Keys: field/find/replace — never path/key/old/new/old_text/new_text (aliases accepted). "
     "Ops: set_field(field,value); delete_field(field); "
     "replace_text(find,replace,scope.heading|heading|chunk_hash); "
     "replace_section(heading|target|chunk_hash,text); "
     "append/prepend(text,heading|target|chunk_hash); append_eof(text). "
     "Standalone add → append_note. "
     "Aliases frozen: target≡heading; replace_text heading≡scope.heading; "
+    "set_field path≡field; replace_text old_text/new_text≡find/replace; "
     "chunk_hash≡search hit (stale → heading fallback when path+heading known)."
 )
 

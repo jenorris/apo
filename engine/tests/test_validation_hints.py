@@ -110,6 +110,34 @@ class FormatToolValidationErrorTest(unittest.TestCase):
         self.assertIn("read_note", msg)
         self.assertNotIn("Unexpected keyword argument", msg)
 
+    def test_append_note_body_dual_error(self):
+        class Fake(Exception):
+            def errors(self, include_url: bool = True):
+                return [
+                    {
+                        "type": "missing_argument",
+                        "loc": ("text",),
+                        "msg": "Missing required argument",
+                        "input": {
+                            "path": "a.md",
+                            "body": "line",
+                            "heading": "Session log",
+                        },
+                    },
+                    {
+                        "type": "unexpected_keyword_argument",
+                        "loc": ("body",),
+                        "msg": "Unexpected keyword argument",
+                        "input": "line",
+                    },
+                ]
+
+        exc = Exception("boom")
+        exc.__cause__ = Fake()
+        msg = format_tool_validation_error("append_note", exc)
+        self.assertIn("body=", msg)
+        self.assertIn("text=", msg)
+
     def test_append_note_content_dual_error(self):
         class Fake(Exception):
             def errors(self, include_url: bool = True):

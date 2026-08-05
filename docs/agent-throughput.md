@@ -22,7 +22,8 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 - Cap full-file `read_note` (no `heading` / `max_chars`) unless doing a full rewrite.
 - Dual-write must be **parallel** MCP calls; end-of-turn gate fails if only one side landed.
 - `patch_note` ops need discriminator **`op`** and keys `field` / `find` / `replace` — never invented `key` / `old` / `new`.
-- Body keys: **`append_note` → `text=`** (alias `content=`); **`write_note` → `content=`** (alias `text=`). Prefer canonical; never pass `heading=` / `create=` to `write_note`.
+- Body keys: **`append_note` → `text=`** (aliases `content=`, `body=`); **`write_note` → `content=`** (aliases `text=`, `body=`). Prefer canonical; never pass `heading=` / `create=` to `write_note`.
+- `patch_note` wire: **`set_field`** uses `field=` (not `path`/`key`); **`replace_text`** uses `find`/`replace` (not `old_text`/`new_text`); multi-path **`items=[{path, ops}]`** — each item needs `path`.
 
 ## Fast path (cheat card)
 

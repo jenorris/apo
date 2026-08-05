@@ -1159,13 +1159,16 @@ def write_note(
     content: str | None = None,
     *,
     text: str | None = None,
+    body: str | None = None,
     expected_mtime: float | None = None,
     expected_frontmatter_hash: str | None = None,
     expected_body_hash: str | None = None,
     expected_content_hash: str | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
-    body, used_alias, body_err = resolve_body_text(text, content, prefer="content")
+    body, alias_key, body_err = resolve_body_text(
+        text, content, body=body, prefer="content"
+    )
     if body_err:
         return _err(path=path, error="bad_request", message=body_err)
     assert body is not None
@@ -1239,9 +1242,9 @@ def write_note(
         expected_mtime=expected_mtime,
         content=to_write,
     )
-    if used_alias:
+    if alias_key:
         out = _attach_tip(
-            out, "write_note: used text= alias; prefer content="
+            out, f"write_note: used {alias_key}= alias; prefer content="
         )
     return out
 
@@ -1251,6 +1254,7 @@ def append_note(
     text: str | None = None,
     *,
     content: str | None = None,
+    body: str | None = None,
     heading: str | None = None,
     chunk_hash: str | None = None,
     position: Literal["end", "start"] = "end",
@@ -1261,7 +1265,9 @@ def append_note(
     expected_content_hash: str | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
-    body, used_alias, body_err = resolve_body_text(text, content, prefer="text")
+    body, alias_key, body_err = resolve_body_text(
+        text, content, body=body, prefer="text"
+    )
     if body_err:
         return _err(
             path=(path or "").replace("\\", "/").strip() or None,
@@ -1413,9 +1419,9 @@ def append_note(
     )
     if tip:
         out = _attach_tip(out, tip)
-    if used_alias:
+    if alias_key:
         out = _attach_tip(
-            out, "append_note: used content= alias; prefer text="
+            out, f"append_note: used {alias_key}= alias; prefer text="
         )
     return out
 

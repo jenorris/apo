@@ -19,43 +19,49 @@ class ResolveBodyTextTest(unittest.TestCase):
     def test_canonical_text(self):
         body, alias, err = resolve_body_text("hello", None, prefer="text")
         self.assertEqual(body, "hello")
-        self.assertFalse(alias)
+        self.assertIsNone(alias)
         self.assertIsNone(err)
 
     def test_content_alias_for_append(self):
         body, alias, err = resolve_body_text(None, "hello", prefer="text")
         self.assertEqual(body, "hello")
-        self.assertTrue(alias)
+        self.assertEqual(alias, "content")
+        self.assertIsNone(err)
+
+    def test_body_alias_for_append(self):
+        body, alias, err = resolve_body_text(None, None, body="hello", prefer="text")
+        self.assertEqual(body, "hello")
+        self.assertEqual(alias, "body")
         self.assertIsNone(err)
 
     def test_text_alias_for_write(self):
         body, alias, err = resolve_body_text("hello", None, prefer="content")
         self.assertEqual(body, "hello")
-        self.assertTrue(alias)
+        self.assertEqual(alias, "text")
         self.assertIsNone(err)
 
     def test_both_equal(self):
         body, alias, err = resolve_body_text("same", "same", prefer="text")
         self.assertEqual(body, "same")
-        self.assertFalse(alias)
+        self.assertIsNone(alias)
         self.assertIsNone(err)
 
     def test_conflict(self):
         body, alias, err = resolve_body_text("a", "b", prefer="text")
         self.assertIsNone(body)
-        self.assertFalse(alias)
+        self.assertIsNone(alias)
         self.assertIn("conflicting", err or "")
 
     def test_missing(self):
         body, alias, err = resolve_body_text(None, None, prefer="content")
         self.assertIsNone(body)
         self.assertIn("missing content=", err or "")
-        self.assertIn("alias text=", err or "")
+        self.assertIn("body=", err or "")
 
     def test_empty_string_counts(self):
         body, alias, err = resolve_body_text("", None, prefer="text")
         self.assertEqual(body, "")
-        self.assertFalse(alias)
+        self.assertIsNone(alias)
         self.assertIsNone(err)
 
 
