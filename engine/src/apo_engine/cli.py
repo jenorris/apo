@@ -82,7 +82,7 @@ def _cmd_stats(args) -> int:
 
 
 def _cmd_tool_stats(args) -> int:
-    """Roll up MCP tool-use JSONL (privacy-safe; no note bodies)."""
+    """Roll up MCP tool-use metrics (privacy-safe; no note bodies)."""
     days = None if args.all else args.days
     coll = (args.collection or "").strip()
     if not coll:
@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
 
     pts = sub.add_parser(
         "tool-stats",
-        help="MCP tool-use rollups from ~/.apo/tool-metrics-*.jsonl",
+        help="MCP tool-use rollups from ~/.apo/metrics.duckdb",
     )
     pts.add_argument("--days", type=int, default=7, help="rollup window (default 7)")
     pts.add_argument("--all", action="store_true", help="include all events (ignore --days)")

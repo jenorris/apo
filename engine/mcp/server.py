@@ -278,7 +278,7 @@ async def tool_stats(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """MCP tool-use rollups from ~/.apo/tool-metrics-*.jsonl (admin). No note bodies/paths stored."""
+    """MCP tool-use rollups from ~/.apo/metrics.duckdb (admin). No note bodies/paths stored."""
     return await asyncio.to_thread(_tool_stats_sync, days, tool, vault)
 
 

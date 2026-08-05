@@ -1,6 +1,6 @@
 """Shared test isolation — no test may touch the real ~/.apo runtime directory.
 
-Redirects deferred queues, tool-metrics JSONL, and the watcher PID probe into a
+Redirects deferred queues, tool-metrics DuckDB, and the watcher PID probe into a
 per-test tmp dir. Applies to unittest.TestCase tests too (autouse side effects).
 """
 from __future__ import annotations

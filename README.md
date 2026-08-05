@@ -184,7 +184,7 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 Counts are contract-tested (`engine/tests/test_mcp_lean.py`) — if this table drifts from the code, CI fails.
 
-Admin analytics: `tool_stats` / CLI `apo-engine tool-stats` (JSONL under `~/.apo/tool-metrics-*.jsonl`; disable with `APO_TOOL_METRICS=0`).
+Admin analytics: `tool_stats` / CLI `apo-engine tool-stats` (DuckDB at `~/.apo/metrics.duckdb`; legacy JSONL auto-imported once; disable with `APO_TOOL_METRICS=0`).
 
 ## Configuration
 
@@ -199,7 +199,7 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | `APO_INDEX` | `engine/index.db` | sqlite-vec database path — recommend `~/.apo/index.db` (survives clean checkouts; multi-vault defaults there) |
 | `APO_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace |
 | `APO_DEFERRED_DIR` | `~/.apo` | Runtime dir for queues + tool metrics (tests/sandboxes override) |
-| `APO_TOOL_METRICS` | `1` | Append MCP tool-use JSONL under `~/.apo/` (`0` disables) |
+| `APO_TOOL_METRICS` | `1` | Record MCP tool-use events in `~/.apo/metrics.duckdb` (`0` disables) |
 | `APO_SEARCH_EXCLUDE` | (empty) | Default exclude globs for unscoped searches, e.g. `inbox/daily/* archives/*` (measured +8pts hit@5 on a noisy PARA vault) |
 | `APO_RERANK` | `0` | Opt-in local cross-encoder reranker (`pip install -e '.[rerank]'`) |
 | `APO_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder id |
