@@ -22,6 +22,8 @@ from okf_common import (
     rel_to_vault,
     split_frontmatter,
 )
+from lib.vault_env import resolve_under_vault
+
 
 OKF_LINKS_RE = re.compile(r"(?ms)^## OKF links\s*\n.*?(?=^## |\Z)")
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:\|[^\]]+)?\]\]")
@@ -121,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         print("okf_linkify: pass one or more paths (file or directory)", file=sys.stderr)
         return 2
 
-    targets = [Path(p) if Path(p).is_absolute() else root / p for p in args.paths]
+    targets = [resolve_under_vault(root, p) for p in args.paths]
     files: list[Path] = []
     for t in targets:
         files.extend(iter_markdown(t))

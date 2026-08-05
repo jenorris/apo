@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# vault-tools/ on sys.path so `lib` imports work when scripts run as files
+# Align sys.path so `lib` imports work when scripts run as files
 _TOOLS_ROOT = Path(__file__).resolve().parents[2]
 if str(_TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(_TOOLS_ROOT))

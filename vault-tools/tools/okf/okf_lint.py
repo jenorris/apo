@@ -33,6 +33,8 @@ from okf_common import (
     strip_frontmatter,
     utc_now,
 )
+from lib.vault_env import resolve_under_vault
+
 
 
 def lint_path(path: Path, strict: bool) -> list[str]:
@@ -280,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(raw)
 
-    targets = [Path(p) if Path(p).is_absolute() else root / p for p in args.paths]
+    targets = [resolve_under_vault(root, p) for p in args.paths]
     if not targets:
         targets = [root]
 
@@ -298,12 +300,17 @@ def main(argv: list[str] | None = None) -> int:
     for t in targets:
         files.extend(iter_markdown(t))
 
-    # De-dupe preserving order
+    # De-dupe preserving order; drop anything outside vault (symlink escape)
     seen: set[Path] = set()
     uniq: list[Path] = []
     for f in files:
         rp = f.resolve()
         if rp in seen:
+            continue
+        try:
+            rp.relative_to(root)
+        except ValueError:
+            print(f"vault-tools: skip path outside vault: {f}", file=sys.stderr)
             continue
         seen.add(rp)
         uniq.append(f)

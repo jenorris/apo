@@ -15,10 +15,14 @@ vault-tools/
 ## Requirements
 
 Each tool declares `requires_contracts` in `tools/<id>/tool.yaml`. Preflight
-reads `<vault>/system/contracts/*.schema.yaml` (and bare `.yaml`). Missing
-contract → non-zero exit with a clear message.
+discovers contracts the same way Apo does:
 
-OKF tools require **`okf-contract`** (file `okf-contract.schema.yaml`).
+- Preferred: `<vault>/system/contracts/*.yaml`
+- Legacy: `<vault>/system/config/*-contract.schema.yaml` and `okf-profile.schema.yaml`
+
+OKF tools require an OKF contract (`okf-contract` or legacy `okf-profile`).
+
+CLI path arguments must resolve **under** `VAULT_ROOT` (`..` / absolute escapes → exit 2).
 
 ## Invoke
 
