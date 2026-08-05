@@ -18,6 +18,11 @@ import duckdb
 
 from apo_engine import telemetry_contract as tc
 
+try:
+    from apo_engine import __version__ as _ENGINE_VERSION
+except ImportError:
+    _ENGINE_VERSION = "0.0.0"
+
 _JSONL_NAME = re.compile(r"^tool-metrics-(.+)\.jsonl$")
 _write_lock = threading.Lock()
 _FLAG_KEYS = (
@@ -35,7 +40,13 @@ _EXTRA_COLS = (
     ("path_hash", "VARCHAR"),
     ("heading", "VARCHAR"),
     ("chunk_hash", "VARCHAR"),
+    ("apo_version", "VARCHAR"),
 )
+
+
+def engine_version() -> str:
+    """Installed apo-engine semver (pyproject / ``apo_engine.__version__``)."""
+    return str(_ENGINE_VERSION).strip() or "0.0.0"
 
 
 def _runtime_dir() -> Path:
@@ -87,7 +98,11 @@ def extract_arg_flags(
     name = (tool or "").strip()
     if name == "append_note" and args.get("content") is not None:
         flags["used_alias"] = True
+    if name == "append_note" and args.get("body") is not None:
+        flags["used_alias"] = True
     if name == "write_note" and args.get("text") is not None:
+        flags["used_alias"] = True
+    if name == "write_note" and args.get("body") is not None:
         flags["used_alias"] = True
     if args.get("folder"):
         flags["folder_set"] = True
@@ -137,7 +152,8 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             note_path VARCHAR,
             path_hash VARCHAR,
             heading VARCHAR,
-            chunk_hash VARCHAR
+            chunk_hash VARCHAR,
+            apo_version VARCHAR
         )
         """
     )
@@ -227,8 +243,8 @@ def _insert_events(
             INSERT INTO tool_calls (
                 ts, collection, tool, ok, error, duration_ms, req_bytes, resp_bytes,
                 folder_set, fields_set, expected_mtime_set, used_alias, ops_count, error_shape,
-                vault_id, conversation_id, note_path, path_hash, heading, chunk_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                vault_id, conversation_id, note_path, path_hash, heading, chunk_hash, apo_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 event.get("ts"),
@@ -253,6 +269,7 @@ def _insert_events(
                 event.get("path_hash") or None,
                 event.get("heading") or None,
                 event.get("chunk_hash") or None,
+                event.get("apo_version") or None,
             ],
         )
 
@@ -322,7 +339,15 @@ def _row_to_event(row: tuple[Any, ...], columns: list[str]) -> dict[str, Any]:
                 event["error_shape"] = raw_shape
         else:
             event["error_shape"] = raw_shape
-    for key in ("vault_id", "conversation_id", "note_path", "path_hash", "heading", "chunk_hash"):
+    for key in (
+        "vault_id",
+        "conversation_id",
+        "note_path",
+        "path_hash",
+        "heading",
+        "chunk_hash",
+        "apo_version",
+    ):
         if data.get(key):
             event[key] = data[key]
     return event
@@ -360,6 +385,7 @@ def record_call(
         "req_bytes": int(req_bytes),
         "resp_bytes": int(resp_bytes),
         "vault_id": (vault_id or policy.vault_id or "").strip() or None,
+        "apo_version": engine_version(),
     }
     if flags:
         event.update(flags)
@@ -410,7 +436,7 @@ def read_events(
                     SELECT ts, tool, ok, error, duration_ms, req_bytes, resp_bytes,
                            folder_set, fields_set, expected_mtime_set, used_alias,
                            ops_count, error_shape, vault_id, conversation_id,
-                           note_path, path_hash, heading, chunk_hash
+                           note_path, path_hash, heading, chunk_hash, apo_version
                     FROM tool_calls
                     WHERE collection = ?
                 """
@@ -443,6 +469,7 @@ def rollup_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     by_error: dict[str, int] = defaultdict(int)
     by_error_shape: dict[str, int] = defaultdict(int)
     by_day: dict[str, int] = defaultdict(int)
+    by_version: dict[str, dict[str, int]] = {}
     flag_counts: dict[str, int] = defaultdict(int)
     total_ok = 0
     total_err = 0
@@ -510,6 +537,13 @@ def rollup_events(events: list[dict[str, Any]]) -> dict[str, Any]:
         ts = str(ev.get("ts") or "")
         day = ts[:10] if len(ts) >= 10 else "?"
         by_day[day] += 1
+        ver = str(ev.get("apo_version") or "").strip() or "unknown"
+        vslot = by_version.setdefault(ver, {"calls": 0, "ok": 0, "error": 0})
+        vslot["calls"] += 1
+        if ok:
+            vslot["ok"] += 1
+        else:
+            vslot["error"] += 1
 
     tools_out = []
     for name, slot in sorted(by_tool.items(), key=lambda x: (-x[1]["calls"], x[0])):
@@ -549,6 +583,9 @@ def rollup_events(events: list[dict[str, Any]]) -> dict[str, Any]:
             sorted(by_error_shape.items(), key=lambda x: (-x[1], x[0]))
         ),
         "by_day": dict(sorted(by_day.items())),
+        "by_version": dict(
+            sorted(by_version.items(), key=lambda x: (-x[1]["calls"], x[0]))
+        ),
         "flags": dict(sorted(flag_counts.items())),
     }
 
@@ -596,6 +633,7 @@ def tool_stats(
     out["tool_filter"] = tool or None
     out["metrics_path"] = str(metrics_db_path(path))
     out["enabled"] = metrics_enabled()
+    out["engine_version"] = engine_version()
     return out
 
 
@@ -630,6 +668,7 @@ def session_stats(
     out["conversation_id"] = cid
     out["metrics_path"] = str(metrics_db_path(path))
     out["enabled"] = metrics_enabled() and policy.enabled
+    out["engine_version"] = engine_version()
     if policy.expose_paths:
         out["by_path"] = rollup_by_path(events)
     if not cid:

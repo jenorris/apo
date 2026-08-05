@@ -13,7 +13,7 @@ store:
 # Engine records only dimensions listed under allow; strips deny keys at ingest.
 privacy:
   allow:
-    dimensions: [tool, ok, duration_ms, collection, conversation_id, vault_id]
+    dimensions: [tool, ok, duration_ms, collection, conversation_id, vault_id, apo_version]
     flags: [folder_set, expected_mtime_set, error_shape, used_alias, fields_set]
     paths: vault_relative # none | hash_only | vault_relative | absolute
     headings: true

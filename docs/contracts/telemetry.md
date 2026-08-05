@@ -13,6 +13,7 @@ Opt-in per vault. When present under `<vault>/system/contracts/`, Apo adjusts **
 | `privacy.allow.headings` / `chunk_hash` | Section-level optimization nodes when paths allowed |
 | `agent_access.expose_paths` | Lean MCP `session_stats` includes `by_path` rollups |
 | `agent_access.scope` | `session` (conversation_id) · `collection` · `desk` (operator) |
+| `privacy.allow.dimensions` | Includes `apo_version` (engine semver per row) for cross-version burn-down |
 
 ## Default without contract
 

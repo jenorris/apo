@@ -178,9 +178,9 @@ _MCP_INSTRUCTIONS = (
     "(summaries by default; full=true for YAML bodies; "
     "legacy system/config/*-contract.schema.yaml still discovered; merge adds "
     "~/.apo/desk.yaml; project emits apo-desk Cursor/Claude artifacts). "
-    "Routing: write_note=create/overwrite only (body=content; text alias; no append); "
+    "Routing: write_note=create/overwrite only (content= canonical; text/body alias; no append); "
     "append_note=Markdown session log / History / post-search add "
-    "(body=text; content alias; prefer over patch_note append; unsupported on .yaml); "
+    "(text= canonical; content/body alias; prefer over patch_note append; unsupported on .yaml); "
     "patch_note=frontmatter/YAML fields + MD section mutate — one path (path+ops) or multi-path (items[]); "
     "YAML notes: set_field/delete_field (dotted nested paths); whole file is the catalog row; "
     "parallel mutators in one turn use the same vault=; "
@@ -423,11 +423,15 @@ async def write_note(
     path: str,
     content: Annotated[
         str | None,
-        Field(description="Note body (canonical). Alias: text=."),
+        Field(description="Note body (canonical). Aliases: text=, body=."),
     ] = None,
     text: Annotated[
         str | None,
         Field(description="Alias for content. Prefer content=; conflicting values → bad_request."),
+    ] = None,
+    body: Annotated[
+        str | None,
+        Field(description="Legacy alias for content. Prefer content=."),
     ] = None,
     expected_mtime: Annotated[
         float | None,
@@ -452,12 +456,13 @@ async def write_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Create or overwrite a note. Body=`content` (alias `text`). Prefer append_note / patch_note for edits."""
+    """Create or overwrite a note. Use content= (aliases text=, body=). Prefer append_note / patch_note for edits."""
     return await asyncio.to_thread(
         apo_ops.write_note,
         path,
         content,
         text=text,
+        body=body,
         expected_mtime=expected_mtime,
         expected_frontmatter_hash=expected_frontmatter_hash,
         expected_body_hash=expected_body_hash,
@@ -470,7 +475,7 @@ async def write_note(
 async def append_note(
     text: Annotated[
         str | None,
-        Field(description="Body to append (canonical). Alias: content=. Do not repeat the heading."),
+        Field(description="Body to append (canonical). Aliases: content=, body=. Do not repeat the heading."),
     ] = None,
     path: str = "",
     heading: str | None = None,
@@ -480,6 +485,10 @@ async def append_note(
     content: Annotated[
         str | None,
         Field(description="Alias for text. Prefer text=; conflicting values → bad_request."),
+    ] = None,
+    body: Annotated[
+        str | None,
+        Field(description="Legacy alias for text (often confused with note body). Prefer text=."),
     ] = None,
     expected_mtime: Annotated[
         float | None,
@@ -504,12 +513,13 @@ async def append_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Preferred add for session log / History / post-search text. Body=`text` (alias `content`). Anchor: chunk_hash (path optional) → heading → EOF. Stale hash + path+heading falls back with tip. ``text`` is body only (do not repeat the heading — a leading duplicate of the anchor is stripped). Batch with other mutators → patch_note."""
+    """Preferred add for session log / History / post-search text. Use text= (aliases content=, body=). Anchor: chunk_hash (path optional) → heading → EOF. ``text`` is body only (do not repeat the heading — a leading duplicate of the anchor is stripped). Batch with other mutators → patch_note."""
     return await asyncio.to_thread(
         apo_ops.append_note,
         path,
         text,
         content=content,
+        body=body,
         heading=heading,
         chunk_hash=chunk_hash,
         position=position,

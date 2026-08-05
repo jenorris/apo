@@ -243,6 +243,7 @@ def _write(body: dict[str, Any]) -> dict[str, Any]:
         path,
         content if isinstance(content, str) else None,
         text=text if isinstance(text, str) else None,
+        body=body.get("body") if isinstance(body.get("body"), str) else None,
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
         **_region_kwargs(body),
@@ -279,6 +280,7 @@ def _append(body: dict[str, Any]) -> dict[str, Any]:
         path_s,
         text if isinstance(text, str) else None,
         content=content if isinstance(content, str) else None,
+        body=body.get("body") if isinstance(body.get("body"), str) else None,
         heading=heading,
         chunk_hash=ch_s or None,
         position=position,  # type: ignore[arg-type]

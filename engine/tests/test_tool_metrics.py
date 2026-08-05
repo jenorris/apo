@@ -62,11 +62,17 @@ class ToolMetricsTest(unittest.TestCase):
             row = events[0]
             self.assertEqual(row["tool"], "search_notes")
             self.assertTrue(row["ok"])
+            self.assertEqual(row["apo_version"], tool_metrics.engine_version())
             self.assertNotIn("path", row)
             self.assertNotIn("content", row)
 
             stats = tool_metrics.tool_stats("test", days=None, path=db_path)
             self.assertEqual(stats["calls"], 4)
+            self.assertEqual(stats["engine_version"], tool_metrics.engine_version())
+            self.assertIn(tool_metrics.engine_version(), stats["by_version"])
+            self.assertEqual(
+                stats["by_version"][tool_metrics.engine_version()]["calls"], 4
+            )
             self.assertEqual(stats["ok_count"], 2)
             self.assertEqual(stats["error_count"], 2)
             self.assertEqual(stats["by_error"]["bad_query"], 1)
