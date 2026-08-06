@@ -38,11 +38,16 @@ frontmatter_floor:
   # - description
   # - timestamp
 
-# Enum-ish habit ids (documented in docs/agent-throughput.md / desk habits).
+# Enum-ish habit ids (documented in docs/agent-throughput.md; projected into apo-desk § Apo throughput).
 write_habits:
   - prefer_append_patch
   - folder_on_search
   - expected_mtime_on_followup
+  - filter_okf_type
+  - patch_note_wire
+  - chunk_hash_surgical
+  - dedupe_search
+  - vault_api_routing
 
 # Authoring dialect + optional render profile (harness / desk projection).
 # Dialect = what agents may put in .md bodies. Render = export/publish only

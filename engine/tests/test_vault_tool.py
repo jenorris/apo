@@ -45,6 +45,44 @@ class IntegrationsFormatTest(unittest.TestCase):
         self.assertIn("cli=`gws`", line)
 
 
+class WriteHabitsProjectTest(unittest.TestCase):
+    def test_render_write_habit_lines_known_ids(self):
+        lines = vault_project._render_write_habit_lines(
+            ["folder_on_search", "patch_note_wire", "vault_api_routing"]
+        )
+        self.assertEqual(len(lines), 3)
+        self.assertIn("folder=", lines[0])
+        self.assertIn("patch_note", lines[1])
+        self.assertIn("vault(action=", lines[2])
+
+    def test_render_desk_body_includes_apo_throughput(self):
+        merge = {
+            "default_vault": "meta",
+            "vaults": {
+                "meta": {
+                    "root": "/Users/jnorris/Notes/Meta",
+                    "default": True,
+                    "contracts": {
+                        "usage-contract": {
+                            "ok": True,
+                            "data": {
+                                "write_habits": [
+                                    "folder_on_search",
+                                    "dedupe_search",
+                                ],
+                            },
+                        },
+                    },
+                },
+            },
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertIn("## Apo throughput", body)
+        self.assertIn("Hard gate", body)
+        self.assertIn("**One** `search_notes`", body)
+
+
 class DiscoverContractsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="apo-vcontracts-"))
