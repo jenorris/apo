@@ -46,8 +46,8 @@ stats:
 tool-stats *ARGS:
     {{eng}} tool-stats {{ARGS}}
 
-# Project apo-desk Cursor/Claude/Hermes artifacts from ~/.apo/desk.yaml + vault contracts.
-# Also auto-runs (debounced) from `apo-engine watch` when desk.yaml or system/contracts/ change.
+# Render apo-desk text from ~/.apo/desk.yaml + vault contracts (JSON to stdout).
+# Watcher logs when desk/contracts change — re-run desk-project to render.
 desk-project *ARGS:
     {{eng}} desk-project {{ARGS}}
 

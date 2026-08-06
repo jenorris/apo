@@ -6,6 +6,10 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share (cut as **v0.4.0** when ready). **Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads.
 
+### Changed
+
+- **`vault(action=project)` return-only** — removed `write`, CLI `--dry-run`, and `host`. Returns shared `body` + short `guidance` (non-prescriptive placement hint); agent chooses surface and frontmatter. Watcher no longer writes skill/rule files (logs when desk/contracts drift).
+
 ### Added
 
 - **Agent-habit wire compat** — `append_note`/`write_note` accept legacy `body=` alias; MCP instructions no longer say `body=text` (misread as kwarg). `patch_note` ops accept `set_field.path`→`field`, `replace_text.old_text`/`new_text`→`find`/`replace`. Validation hints + `agent-throughput.md` updated.
