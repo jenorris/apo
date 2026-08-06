@@ -247,6 +247,34 @@ def _attach_tip(out: dict[str, Any], tip: str) -> dict[str, Any]:
     return out
 
 
+
+
+def _attach_search_size_tips(out: dict[str, Any]) -> dict[str, Any]:
+    """Soft hints when search hits include large files/sections or fat preambles."""
+    if not out.get("ok"):
+        return out
+    results = out.get("results") or []
+    if not results:
+        return out
+    tips: list[str] = []
+    if any(int(r.get("file_bytes") or 0) > config.FILE_TIP_BYTES for r in results):
+        tips.append(
+            "large note(s) in results — use expand_section(chunk_hash), not full read_note"
+        )
+    if any(int(r.get("section_bytes") or 0) > config.SECTION_PREVIEW_BYTES for r in results):
+        tips.append(
+            "large section(s) in results — check section_bytes before expand; add subheadings if recurring"
+        )
+    if any(
+        int(r.get("heading_level") or 0) == 0
+        and int(r.get("section_bytes") or 0) > config.PREAMBLE_WARN_BYTES
+        for r in results
+    ):
+        tips.append("large preamble — consider promoting content under a # heading")
+    for tip in tips:
+        out = _attach_tip(out, tip)
+    return out
+
 def _attach_folder_tip(
     out: dict[str, Any],
     folder_clean: str,
@@ -702,7 +730,7 @@ def search(
         out["reranked"] = True
     if warnings:
         out["warning"] = "; ".join(warnings)
-    return _attach_folder_tip(out, folder_clean, root=tip_root)
+    return _attach_search_size_tips(_attach_folder_tip(out, folder_clean, root=tip_root))
 
 
 def read_note(
@@ -825,20 +853,20 @@ def filter_notes(
     return out
 
 
-def expand_chunk(
+def expand_section(
     chunk_hash: str,
     *,
     vault: str = "",
-    scope: Literal["section", "chunk"] = "section",
+    force: bool = False,
 ) -> dict[str, Any]:
+    """Return a indexed markdown section by search hit chunk_hash."""
     try:
         b = _binding(vault)
     except OpsError as e:
         return _err(error=e.code, message=e.message)
 
-    need_text = scope == "chunk"
     with vaults.bind(b):
-        chunk = core.lookup_chunk(chunk_hash, include_text=need_text)
+        chunk = core.lookup_chunk(chunk_hash, include_text=True)
     if not chunk:
         return _err(
             error="anchor_not_found",
@@ -854,65 +882,67 @@ def expand_chunk(
     except ValueError as e:
         return _err(error="anchor_not_found", message=str(e))
 
-    if scope == "chunk":
-        heading = chunk.get("heading") or ""
-        hlevel = int(chunk.get("heading_level") or 0)
-        body = chunk.get("content") or ""
-        out_chunk: dict[str, Any] = {
-            "ok": True,
-            "path": rel,
-            "heading": f"{'#' * hlevel} {heading}".strip() if heading else "",
-            "start_line": int(chunk.get("start_line") or 1),
-            "end_line": int(chunk.get("end_line") or 1),
-            "content": body,
-            "content_hash": region_content_hash(body) if body else "",
-            "scope": "chunk",
-            "vault": b.name,
-        }
-        if full.exists():
-            file_text = full.read_text(encoding="utf-8")
-            out_chunk["mtime"] = _mtime(full)
-            attach_region_hashes(out_chunk, file_text)
-            if body:
-                out_chunk["content_hash"] = region_content_hash(body)
-            _record_path_touch(
-                b.name,
-                rel,
-                float(out_chunk["mtime"]),
-                file_text,
-                heading=out_chunk["heading"] or None,
-            )
-        return out_chunk
+    body = chunk.get("content") or ""
+    hlevel = int(chunk.get("heading_level") or 0)
+    heading_raw = chunk.get("heading") or ""
+    heading_label = f"{'#' * hlevel} {heading_raw.split(' › ')[-1]}".strip() if heading_raw else ""
+    if hlevel > 0 and heading_raw and not heading_label.startswith("#"):
+        title = heading_raw.split(" › ")[-1]
+        heading_label = f"{'#' * hlevel} {title}".strip()
 
-    if not full.exists():
-        return _err(error="stale_index", message=f"source file missing: {rel}")
+    section_bytes = len(body.encode("utf-8"))
+    preview_limit = config.SECTION_PREVIEW_BYTES
+    preview_chars = config.SECTION_PREVIEW_CHARS
+    truncated = section_bytes > preview_limit and not force
+    display = body[:preview_chars] if truncated else body
 
-    file_text = full.read_text(encoding="utf-8")
-    lines = normalize_lines(file_text)
-    section = section_from_chunk(
-        lines,
-        int(chunk.get("start_line", 1)),
-        int(chunk.get("heading_level", 0)),
-    )
-    start = section.heading_line if section.title else section.body_start
-    file_mtime = _mtime(full)
-    heading_label = f"{'#' * section.level} {section.title}" if section.title else ""
     out_sec: dict[str, Any] = {
         "ok": True,
         "path": rel,
         "heading": heading_label,
-        "start_line": start + 1,
-        "end_line": section.body_end,
-        "content": "\n".join(lines[start : section.body_end]),
+        "content": display,
+        "section_bytes": section_bytes,
         "scope": "section",
-        "mtime": file_mtime,
         "vault": b.name,
     }
-    attach_region_hashes(out_sec, file_text, section=section)
-    _record_path_touch(
-        b.name, rel, float(file_mtime), file_text, heading=heading_label or None
-    )
+    if truncated:
+        out_sec["preview_truncated"] = True
+        out_sec["tip"] = (
+            f"section is {section_bytes} bytes — add ### subheadings or "
+            "read_note(path, heading=, max_chars=) for a sub-range; pass force=true to expand full body"
+        )
+
+    if full.exists():
+        file_text = full.read_text(encoding="utf-8")
+        file_mtime = _mtime(full)
+        out_sec["mtime"] = file_mtime
+        lines = normalize_lines(file_text)
+        section = section_from_chunk(
+            lines,
+            int(chunk.get("start_line", 1)),
+            hlevel,
+        )
+        attach_region_hashes(out_sec, file_text, section=section)
+        _record_path_touch(
+            b.name, rel, float(file_mtime), file_text, heading=heading_label or None
+        )
+    else:
+        out_sec["content_hash"] = region_content_hash(body) if body else ""
+
     return out_sec
+
+
+def expand_chunk(
+    chunk_hash: str,
+    *,
+    vault: str = "",
+    scope: Literal["section", "chunk"] = "section",
+) -> dict[str, Any]:
+    """Deprecated alias — prefer expand_section(chunk_hash=)."""
+    del scope
+    return expand_section(chunk_hash, vault=vault)
+
+
 
 
 def backlinks(path: str, *, limit: int = 100, vault: str = "") -> dict[str, Any]:

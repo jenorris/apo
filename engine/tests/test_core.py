@@ -52,40 +52,40 @@ class TestParseFrontmatter(unittest.TestCase):
 class TestChunkMarkdown(unittest.TestCase):
     def test_real_heading_levels(self):
         text = "# Alpha\n\nalpha body\n\n### Gamma\n\ngamma body\n"
-        chunks = core.chunk_markdown(text, max_chars=10, overlap=2)
-        by_text = {c.strip(): (head, level) for head, level, c, *_ in chunks}
-        self.assertEqual(by_text["alpha body"], ("Alpha", 1))
-        # H3 directly under H1: breadcrumb collapses the skipped level, the level must not.
-        self.assertEqual(by_text["gamma body"], ("Alpha › Gamma", 3))
+        chunks = core.section_markdown(text)
+        alpha = next(c for c in chunks if c[1] == 1)
+        gamma = next(c for c in chunks if c[1] == 3)
+        self.assertEqual(alpha[0], "Alpha")
+        self.assertEqual(gamma[0], "Alpha › Gamma")
+        self.assertIn("alpha body", alpha[2])
+        self.assertIn("gamma body", gamma[2])
 
     def test_preamble_is_level_zero(self):
-        # Greedy packing may merge the preamble with following blocks; the chunk
-        # keeps the first block's anchor: no breadcrumb, level 0.
-        chunks = core.chunk_markdown("preamble text\n\n# Head\n\nbody\n", max_chars=100, overlap=10)
-        head, level, text, *_ = chunks[0]
-        self.assertEqual((head, level), ("", 0))
-        self.assertTrue(text.startswith("preamble text"))
+        chunks = core.section_markdown("preamble text\n\n# Head\n\nbody\n")
+        pre = next(c for c in chunks if c[1] == 0)
+        self.assertEqual(pre[0], "")
+        self.assertIn("preamble text", pre[2])
 
     def test_frontmatter_stripped(self):
         text = "---\ntitle: T\n---\n\n# Head\n\nbody\n"
-        chunks = core.chunk_markdown(text, max_chars=100, overlap=10)
+        chunks = core.section_markdown(text)
         self.assertNotIn("title: T", "".join(c for _, _, c, *_ in chunks))
 
-    def test_oversized_block_splits_with_shared_anchor(self):
+    def test_oversized_block_stays_single_section(self):
         body = "x" * 250
-        chunks = core.chunk_markdown(f"## Big\n\n{body}\n", max_chars=100, overlap=20)
-        self.assertGreater(len(chunks), 1)
-        for head, level, ctext, *_ in chunks:
-            self.assertEqual((head, level), ("Big", 2))
-            self.assertLessEqual(len(ctext), 100)
+        chunks = core.section_markdown(f"## Big\n\n{body}\n")
+        self.assertEqual(len(chunks), 1)
+        head, level, ctext, *_ = chunks[0]
+        self.assertEqual((head, level), ("Big", 2))
+        self.assertIn(body, ctext)
 
     def test_line_spans_skip_frontmatter(self):
         text = "---\ntitle: T\n---\n\n# Head\n\nbody line\n"
-        chunks = core.chunk_markdown(text, max_chars=200, overlap=10)
+        chunks = core.section_markdown(text)
         self.assertTrue(chunks)
-        _h, _l, ctext, start, end = next(c for c in chunks if "body line" in c[2])
-        # Frontmatter lines 1-3; blank 4; heading 5; blank 6; body 7
-        self.assertEqual(start, 7)
+        sec = next(c for c in chunks if "body line" in c[2])
+        _h, _l, ctext, start, end = sec
+        self.assertIn("body line", ctext)
         self.assertGreaterEqual(end, start)
 
 

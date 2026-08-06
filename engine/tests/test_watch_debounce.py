@@ -88,8 +88,7 @@ class IndexFileUnchangedTest(unittest.TestCase):
         self.assertEqual(core.index_file(note), 0)
         self.assertEqual(self.calls, 1)
 
-    def test_partial_reembed_reuses_unchanged_chunks(self):
-        config.MAX_CHARS = 40
+    def test_partial_reembed_reuses_unchanged_sections(self):
         self.n_texts = 0
 
         def counting(texts, **kwargs):
@@ -99,22 +98,16 @@ class IndexFileUnchangedTest(unittest.TestCase):
 
         core.embed = counting
         note = self.vault / "partial.md"
-        note.write_text(
-            "# Keep\n\nstable alpha body text here\n\n## Tail\n\nold omega trailer here\n",
-            encoding="utf-8",
-        )
+        body_v1 = "## Keep\n\nstable alpha body text here\n\n## Tail\n\nold omega trailer here\n"
+        body_v2 = "## Keep\n\nstable alpha body text here\n\n## Tail\n\nnew omega trailer here\n"
+        note.write_text(body_v1, encoding="utf-8")
         self.assertEqual(core.index_file(note), 1)
         first_texts = self.n_texts
-        self.assertGreaterEqual(first_texts, 2)
-        note.write_text(
-            "# Keep\n\nstable alpha body text here\n\n## Tail\n\nnew omega trailer here\n",
-            encoding="utf-8",
-        )
+        self.assertEqual(first_texts, 2)
+        note.write_text(body_v2, encoding="utf-8")
         self.assertEqual(core.index_file(note), 1)
-        # Second pass embeds only changed chunk bodies (fewer texts than a full re-embed).
         self.assertEqual(self.calls, 2)
-        self.assertLess(self.n_texts - first_texts, first_texts)
-
+        self.assertEqual(self.n_texts - first_texts, 1)
     def test_index_files_batches_embed(self):
         a = self.vault / "a.md"
         b = self.vault / "b.md"

@@ -1,3 +1,17 @@
+
+## Unreleased
+
+### Added
+- **Section-first markdown index** — one embed per heading section (no sub-chunk splits); search hits expose `file_bytes` / `section_bytes`; soft tips for large notes, sections, and preambles.
+- **`expand_section(chunk_hash, force=false)`** — canonical read-more path with preview mode above `APO_SECTION_PREVIEW_BYTES` (8 KB default). `expand_chunk` remains a deprecated alias.
+
+### Changed
+- **`APO_YAML_MAX_CHARS` / `APO_YAML_OVERLAP`** — YAML catalog chunking only; markdown ignores legacy `APO_MAX_CHARS` splits.
+- Search hits omit `start_line` / `end_line` from the agent-facing payload (still stored internally).
+
+### Migration
+- **Force reindex** required after upgrade (`apo_admin` → `reindex` with `force=true`).
+
 # Changelog
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
