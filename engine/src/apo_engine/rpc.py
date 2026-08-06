@@ -406,9 +406,15 @@ def _vault(body: dict[str, Any]) -> dict[str, Any]:
     full = body.get("full", False)
     if not isinstance(full, bool):
         return {"ok": False, "error": "bad_request", "message": "`full` must be a boolean"}
+    vaults_raw = body.get("vaults")
+    if vaults_raw is not None and not (
+        isinstance(vaults_raw, list) and all(isinstance(v, str) for v in vaults_raw)
+    ):
+        return {"ok": False, "error": "bad_request", "message": "`vaults` must be a list of strings"}
     return ops.vault_op(
         action.strip(),
         vault=str(body.get("vault") or ""),
+        vaults=vaults_raw,
         full=full,
     )
 

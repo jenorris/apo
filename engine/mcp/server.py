@@ -892,6 +892,16 @@ async def vault(
             ),
         ),
     ] = "",
+    vaults: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "Scope every action to a named subset of the registry (e.g. a "
+                "workspace desk projection limited to two of six vaults). "
+                "Do not combine with vault=. Unknown names → bad_vault."
+            ),
+        ),
+    ] = None,
     full: Annotated[
         bool,
         Field(
@@ -908,6 +918,7 @@ async def vault(
         apo_ops.vault_op,
         action,
         vault=vault,
+        vaults=vaults,
         full=full,
     )
 

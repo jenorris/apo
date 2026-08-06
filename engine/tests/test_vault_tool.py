@@ -264,6 +264,47 @@ class VaultOpTest(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"], "bad_action")
 
+    def test_vaults_filter_scopes_list(self):
+        out = ops.vault_op("list", vaults=["alpha"])
+        self.assertTrue(out["ok"])
+        self.assertEqual(set(out["vaults"]), {"alpha"})
+        self.assertEqual(out["default_vault"], "alpha")
+
+    def test_vaults_filter_scopes_merge_and_project(self):
+        merged = ops.vault_op("merge", vaults=["alpha"])
+        self.assertTrue(merged["ok"])
+        self.assertEqual(set(merged["vaults"]), {"alpha"})
+        projected = ops.vault_op("project", vaults=["alpha"])
+        self.assertTrue(projected["ok"])
+        self.assertIn("`alpha`", projected["body"])
+        self.assertNotIn("`beta`", projected["body"])
+
+    def test_vaults_filter_reassigns_default_when_dropped(self):
+        # beta is never the registry default (alpha is) — filtering to just
+        # beta must not silently keep pointing "default" at the excluded alpha.
+        out = ops.vault_op("list", vaults=["beta"])
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["default_vault"], "beta")
+        self.assertTrue(out["vaults"]["beta"]["default"])
+
+    def test_vaults_filter_scopes_describe_default(self):
+        # No vault= given — describe's "default when empty" must resolve
+        # against the filtered set, not the registry's true default (alpha).
+        out = ops.vault_op("describe", vaults=["beta"])
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["vault"], "beta")
+
+    def test_vaults_filter_rejects_unknown_name(self):
+        out = ops.vault_op("list", vaults=["alpha", "ghost"])
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_vault")
+        self.assertIn("ghost", out["message"])
+
+    def test_vaults_filter_rejects_combo_with_vault(self):
+        out = ops.vault_op("list", vault="alpha", vaults=["alpha", "beta"])
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_request")
+
     def test_project_returns_text(self):
         desk = self.tmp / "desk.yaml"
         desk.write_text(

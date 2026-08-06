@@ -81,6 +81,12 @@ def _binding(vault: str = "") -> vaults.VaultBinding:
     return bindings[key]
 
 
+def _load_bindings():
+    """Thin indirection so callers can name a local param ``vaults`` without
+    shadowing the ``apo_engine.vaults`` module import."""
+    return vaults.load_bindings()
+
+
 def _safe_resolve(root: Path, relative_path: str) -> Path:
     full = (root / relative_path).resolve()
     full.relative_to(root)  # raises ValueError on traversal
@@ -2148,11 +2154,15 @@ def vault_op(
     action: str = "list",
     *,
     vault: str = "",
+    vaults: list[str] | None = None,
     full: bool = False,
 ) -> dict[str, Any]:
     """Vault management: list | contracts | describe | merge | project.
 
     Read-only. ``project`` returns desk ``body`` + ``guidance`` (agent chooses placement).
+    ``vaults=`` scopes every action to a named subset of the registry (do not
+    combine with ``vault=``) — e.g. a workspace whose desk projection should
+    only ever mention two of six registered vaults.
     """
     act = (action or "list").strip().lower()
     if act not in ("list", "contracts", "describe", "merge", "project"):
@@ -2162,9 +2172,23 @@ def vault_op(
         )
 
     try:
-        default_name, bindings = vaults.load_bindings()
+        default_name, bindings = _load_bindings()
     except Exception as e:
         return _err(error="bad_vault", message=str(e))
+
+    if vaults:
+        if vault:
+            return _err(error="bad_request", message="pass vault= or vaults=, not both")
+        names = [v.strip() for v in vaults if isinstance(v, str) and v.strip()]
+        unknown = [n for n in names if n not in bindings]
+        if unknown:
+            return _err(
+                error="bad_vault",
+                message=f"unknown vault(s) {unknown!r}; available: {sorted(bindings)}",
+            )
+        bindings = {k: b for k, b in bindings.items() if k in names}
+        if default_name not in bindings:
+            default_name = sorted(bindings)[0] if bindings else default_name
 
     want_full = bool(full)
 
@@ -2279,11 +2303,16 @@ def vault_op(
         projected["desk_meta"] = merge.get("desk_meta")
         return projected
 
-    # describe — single vault (default when vault empty)
-    try:
-        b = _binding(vault)
-    except OpsError as e:
-        return _err(error=e.code, message=e.message)
+    # describe — single vault (default when vault empty). Resolve against the
+    # (possibly vaults=-filtered) bindings loaded above, not a fresh _binding()
+    # call, so a subset filter actually constrains which vault "default" means.
+    key = (vault or "").strip() or default_name
+    if key not in bindings:
+        return _err(
+            error="bad_vault",
+            message=f"unknown vault {key!r}; available: {sorted(bindings)}",
+        )
+    b = bindings[key]
     root = b.resolved().root
     found = vault_contracts.discover_contracts(root)
     return {

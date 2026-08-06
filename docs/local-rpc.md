@@ -37,7 +37,7 @@ Arg names match MCP where possible. Prefer **`limit`** / **`where`** (aliases `t
 | POST | `/v1/expand` | `{chunk_hash, scope?, vault?}` | section or chunk |
 | POST | `/v1/backlinks` | `{path, limit?, vault?}` | wiki-link backlinks |
 | POST | `/v1/history` | `{limit?, folder?, path?, vault?, since?, until?, preview?, heading?, exclude?, fields?}` | browse by mtime (digest filters), or file git log when `path` + git contract |
-| GET/POST | `/v1/vault` | `{action, vault?, full?}` | registry + contracts + desk merge/project (`list` \| `contracts` \| `describe` \| `merge` \| `project`) |
+| GET/POST | `/v1/vault` | `{action, vault?, vaults?, full?}` | registry + contracts + desk merge/project (`list` \| `contracts` \| `describe` \| `merge` \| `project`); `vaults=[...]` scopes to a named subset (not combined with `vault`) |
 | POST | `/v1/git_sync` | `{action, message?, vault?}` | git contract sync: `status` \| `run` \| `pull` \| `clear_block` |
 
 ### Write

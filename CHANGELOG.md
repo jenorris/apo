@@ -12,6 +12,7 @@ Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share 
 
 ### Added
 
+- **`vault(action=..., vaults=[…])` subset filter** — `list` / `contracts` / `describe` / `merge` / `project` all scope to a named subset of the registry (mutual exclusion with `vault=`; unknown names → `bad_vault`). `describe`'s empty-`vault=` default resolves against the filtered set, not the registry's true default. For a workspace whose desk projection should only ever mention some of the registered vaults (e.g. a persona workspace scoped to its own vault + one shared one). MCP `vault` tool + RPC `POST /v1/vault`.
 - **Agent-habit wire compat** — `append_note`/`write_note` accept legacy `body=` alias; MCP instructions no longer say `body=text` (misread as kwarg). `patch_note` ops accept `set_field.path`→`field`, `replace_text.old_text`/`new_text`→`find`/`replace`. Validation hints + `agent-throughput.md` updated.
 - **Telemetry `apo_version`** — each tool-call row stamps engine semver; `tool_stats` / `session_stats` expose `engine_version` + `by_version` rollups for cross-version burn-down.
 
