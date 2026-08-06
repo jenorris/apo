@@ -177,7 +177,7 @@ _MCP_INSTRUCTIONS = (
     "vault(action=list|contracts|describe|merge|project): registry + system/contracts/ "
     "(summaries by default; full=true for YAML bodies; "
     "legacy system/config/*-contract.schema.yaml still discovered; merge adds "
-    "~/.apo/desk.yaml; project emits apo-desk Cursor/Claude artifacts). "
+    "~/.apo/desk.yaml; project returns desk body + guidance — agent places output). "
     "Routing: write_note=create/overwrite only (content= canonical; text/body alias; no append); "
     "append_note=Markdown session log / History / post-search add "
     "(text= canonical; content/body alias; prefer over patch_note append; unsupported on .yaml); "
@@ -892,20 +892,6 @@ async def vault(
             ),
         ),
     ] = "",
-    host: Annotated[
-        str,
-        Field(description="project only: cursor | claude | both (default both)"),
-    ] = "both",
-    write: Annotated[
-        bool,
-        Field(
-            description=(
-                "project only: when true, write ~/.cursor/rules/apo-desk.mdc and/or "
-                "~/.claude/skills/apo-desk/SKILL.md (plus ~/.apo/projected/ copies). "
-                "When false, return rendered text in the response."
-            ),
-        ),
-    ] = False,
     full: Annotated[
         bool,
         Field(
@@ -917,13 +903,11 @@ async def vault(
         ),
     ] = False,
 ) -> dict:
-    """Vault registry, contracts, desk merge, and host skill projection."""
+    """Vault registry, contracts, desk merge, and return-only desk projection."""
     return await asyncio.to_thread(
         apo_ops.vault_op,
         action,
         vault=vault,
-        host=host,
-        write=write,
         full=full,
     )
 

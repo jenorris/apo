@@ -112,15 +112,10 @@ def _cmd_serve(args) -> int:
 
 
 def _cmd_desk_project(args) -> int:
-    """Render apo-desk Cursor/Claude artifacts from live desk + vault contracts."""
+    """Render desk policy body + guidance from live desk + vault contracts."""
     from . import vault_project
 
-    host = (getattr(args, "host", None) or "both").strip() or "both"
-    write = not bool(getattr(args, "dry_run", False))
-    if write:
-        out = vault_project.project_live(host=host, write=True)
-    else:
-        out = vault_project.project_live(host=host, write=False)
+    out = vault_project.project_live()
     print(json.dumps(out, indent=2))
     return 0 if out.get("ok") else 1
 
@@ -182,17 +177,7 @@ def main(argv: list[str] | None = None) -> int:
 
     pd = sub.add_parser(
         "desk-project",
-        help="project apo-desk Cursor/Claude/Hermes artifacts from ~/.apo/desk.yaml + vault contracts",
-    )
-    pd.add_argument(
-        "--host",
-        default="both",
-        help="cursor | claude | hermes | both (cursor+claude) | all (default both)",
-    )
-    pd.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="return rendered text without writing host files",
+        help="project desk policy body + guidance from ~/.apo/desk.yaml + vault contracts",
     )
     pd.set_defaults(func=_cmd_desk_project)
 

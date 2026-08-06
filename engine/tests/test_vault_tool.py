@@ -262,7 +262,7 @@ class VaultOpTest(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"], "bad_action")
 
-    def test_project_dry_and_write(self):
+    def test_project_returns_text(self):
         desk = self.tmp / "desk.yaml"
         desk.write_text(
             "desk_version: '0.1'\n"
@@ -279,78 +279,30 @@ class VaultOpTest(unittest.TestCase):
             "  new_durable_facts: true\n",
             encoding="utf-8",
         )
-        out_dir = self.tmp / "projected"
-        cursor_out = out_dir / "apo-desk.mdc"
-        claude_out = out_dir / "claude" / "SKILL.md"
         with unittest.mock.patch.dict(
             os.environ,
-            {
-                "APO_DESK_CONFIG": str(desk),
-                "APO_PROJECT_CURSOR": str(cursor_out),
-                "APO_PROJECT_CLAUDE": str(claude_out),
-            },
+            {"APO_DESK_CONFIG": str(desk)},
         ):
-            dry = ops.vault_op("project", host="cursor", write=False)
-            self.assertTrue(dry["ok"])
-            text = dry["files"]["cursor"]["text"]
-            self.assertIn("alwaysApply: true", text)
-            self.assertIn("`alpha`", text)
-            self.assertIn("pkb", text)
-            self.assertIn("/tmp/desk.code-workspace", text)
-            self.assertIn("Do not hand-edit", text)
-            # pointer expanded using alpha root
-            self.assertIn(str(self.a), text)
-            # contribution from usage-contract body
-            self.assertIn("## Contribution", text)
-            self.assertIn("obsidian-ofm", text)
-            self.assertIn("callouts preferred", text)
-            self.assertIn("session_log=gfm/callouts never", text)
-            self.assertIn("render `htmlize`", text)
-            self.assertIn("`alpha`: `obsidian-ofm`", text)
-            # integrations from usage-contract body
-            self.assertIn("## Expected integrations", text)
-            self.assertIn("required=`apo`", text)
-            self.assertIn("expected=`context7`", text)
-            self.assertIn("optional=`granola`", text)
-            self.assertIn("never=`slack`", text)
-            self.assertIn("cli=`gws`", text)
-            self.assertIn("source-routing", text)
-            self.assertIn("## MCP proxy", text)
-            self.assertIn("use Cursor MCP host `lazy-mcp`", text)
-            self.assertIn("via `lazy-mcp`: `bugsnag`, `gtm`", text)
-            self.assertIn("parked (off until enabled): `metabase`, `stape`", text)
-            self.assertIn("alpha:system/config/lazy-mcp/servers.json", text)
-            self.assertIn("Flip enabled in catalog then SIGHUP", text)
-            self.assertIn("invoke_command", text)
+            projected = ops.vault_op("project")
+            self.assertTrue(projected["ok"])
+            body = projected["body"]
+            self.assertNotIn("suggested_paths", projected)
+            self.assertNotIn("envelope", projected)
+            self.assertNotIn("alwaysApply", body)
+            self.assertIn("`alpha`", body)
+            self.assertIn("pkb", body)
+            self.assertIn("/tmp/desk.code-workspace", body)
+            self.assertIn("Return-only", body)
+            self.assertIn(str(self.a), body)
+            self.assertIn("## Contribution", body)
+            self.assertIn("obsidian-ofm", body)
+            self.assertIn("## Expected integrations", body)
+            self.assertIn("## MCP proxy", body)
 
-            written = ops.vault_op("project", host="both", write=True)
-            self.assertTrue(written["ok"])
-            self.assertTrue(written["files"]["cursor"]["written"])
-            self.assertTrue(written["files"]["claude"]["written"])
-            self.assertTrue(cursor_out.is_file())
-            self.assertTrue(claude_out.is_file())
-            claude_body = claude_out.read_text(encoding="utf-8")
-            self.assertIn("name: apo-desk", claude_body)
-            self.assertNotIn("alwaysApply", claude_body)
-
-            hermes_out = out_dir / "hermes" / "SKILL.md"
-            with unittest.mock.patch.dict(
-                os.environ,
-                {"APO_PROJECT_HERMES": str(hermes_out)},
-            ):
-                hermes = ops.vault_op("project", host="hermes", write=True)
-            self.assertTrue(hermes["ok"], hermes)
-            self.assertTrue(hermes["files"]["hermes"]["written"])
-            hermes_body = hermes_out.read_text(encoding="utf-8")
-            self.assertIn("name: apo-desk", hermes_body)
-            self.assertIn("Mnemosyne", hermes_body)
-            self.assertNotIn("alwaysApply", hermes_body)
-
-            all_hosts = ops.vault_op("project", host="all", write=False)
-            self.assertTrue(all_hosts["ok"], all_hosts)
-            self.assertEqual(
-                set(all_hosts["files"]), {"cursor", "claude", "hermes"}
-            )
+            guidance = projected["guidance"]
+            self.assertIn("Return-only", guidance)
+            self.assertNotIn("cursor_mdc", guidance)
+            self.assertGreater(projected["bytes"], 100)
 
     def test_merge_with_desk_file(self):
         desk = self.tmp / "desk.yaml"

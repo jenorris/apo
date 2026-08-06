@@ -232,7 +232,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
 | [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_VAULTS`) |
 | [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC for local gateways (out-of-repo clients) |
-| [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection `host=hermes` |
+| [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection (`body` + `guidance`) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |
 

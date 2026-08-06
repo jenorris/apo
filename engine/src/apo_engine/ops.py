@@ -2148,19 +2148,11 @@ def vault_op(
     action: str = "list",
     *,
     vault: str = "",
-    host: str = "both",
-    write: bool = False,
     full: bool = False,
 ) -> dict[str, Any]:
     """Vault management: list | contracts | describe | merge | project.
 
-    Read-only except ``project`` with ``write=True`` (writes host skill/rule files).
-    Live IR preferred under ``system/contracts/``; legacy
-    ``system/config/*-contract.schema.yaml`` still discovered.
-    ``merge`` / ``contracts`` / ``describe`` default to contract summaries
-    (no YAML bodies); pass ``full=True`` for parsed ``data``.
-    ``merge`` unions the registry with per-vault contracts and ``~/.apo/desk.yaml``.
-    ``project`` renders desk Cursor/Claude artifacts from merge IR.
+    Read-only. ``project`` returns desk ``body`` + ``guidance`` (agent chooses placement).
     """
     act = (action or "list").strip().lower()
     if act not in ("list", "contracts", "describe", "merge", "project"):
@@ -2280,9 +2272,7 @@ def vault_op(
         if not merge.get("ok"):
             return merge
         vault_project.attach_usage_contribution_bodies(merge)
-        projected = vault_project.project(
-            merge, host=host or "both", write=bool(write)
-        )
+        projected = vault_project.project(merge)
         if not projected.get("ok"):
             return projected
         projected["default_vault"] = merge.get("default_vault")

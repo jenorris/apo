@@ -20,14 +20,12 @@ and Claude Code keep stdio MCP.
 ## Desk projection
 
 ```bash
-just desk-project --host hermes
-# or: apo-engine desk-project --host all
-# or: vault(action=project, host=hermes, write=true)
+just desk-project
+# or: vault(action=project)
 ```
 
-Writes `~/.apo/projected/hermes/apo-desk/SKILL.md` (override with
-`APO_PROJECT_HERMES`). Same merge IR as Cursor/Claude (`~/.apo/desk.yaml` +
-per-vault `system/contracts/`). Deterministic — no LLM.
+Returns shared `body` + `guidance`. Same merge IR as any host (`~/.apo/desk.yaml` +
+per-vault `system/contracts/`). Deterministic — no LLM. Agent chooses placement.
 
 Per-vault usage IR (optional): copy
 [`contracts/usage-contract.schema.yaml`](./contracts/usage-contract.schema.yaml)
