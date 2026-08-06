@@ -115,7 +115,7 @@ def _cmd_desk_project(args) -> int:
     """Render desk policy body + guidance from live desk + vault contracts."""
     from . import vault_project
 
-    out = vault_project.project_live()
+    out = vault_project.project_live(vaults=args.vaults or None)
     print(json.dumps(out, indent=2))
     return 0 if out.get("ok") else 1
 
@@ -178,6 +178,12 @@ def main(argv: list[str] | None = None) -> int:
     pd = sub.add_parser(
         "desk-project",
         help="project desk policy body + guidance from ~/.apo/desk.yaml + vault contracts",
+    )
+    pd.add_argument(
+        "--vaults",
+        nargs="*",
+        default=[],
+        help="scope projection to these vault names (default: all registered)",
     )
     pd.set_defaults(func=_cmd_desk_project)
 

@@ -649,11 +649,15 @@ def is_contracts_rel(rel: str) -> bool:
     return r == "system/contracts" or r.startswith("system/contracts/")
 
 
-def project_live() -> dict[str, Any]:
-    """Build merge IR from the live registry/desk and project (CLI)."""
+def project_live(vaults: list[str] | None = None) -> dict[str, Any]:
+    """Build merge IR from the live registry/desk and project (CLI).
+
+    ``vaults`` scopes to a named subset of the registry — see
+    ``vault_op``'s docstring.
+    """
     from . import ops
 
-    return ops.vault_op("project")
+    return ops.vault_op("project", vaults=vaults)
 
 
 def maybe_reproject(
