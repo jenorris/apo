@@ -1,24 +1,12 @@
-
-## Unreleased
-
-### Added
-- **Section-first markdown index** — one embed per heading section (no sub-chunk splits); search hits expose `file_bytes` / `section_bytes`; soft tips for large notes, sections, and preambles.
-- **`expand_section(chunk_hash, force=false)`** — canonical read-more path with preview mode above `APO_SECTION_PREVIEW_BYTES` (8 KB default). `expand_chunk` remains a deprecated alias.
-
-### Changed
-- **`APO_YAML_MAX_CHARS` / `APO_YAML_OVERLAP`** — YAML catalog chunking only; markdown ignores legacy `APO_MAX_CHARS` splits.
-- Search hits omit `start_line` / `end_line` from the agent-facing payload (still stored internally).
-
-### Migration
-- **Force reindex** required after upgrade (`apo_admin` → `reindex` with `force=true`).
-
 # Changelog
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
 ## [Unreleased]
 
-Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share (cut as **v0.4.0** when ready). **Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads.
+## [0.4.0] — 2026-08-06
+
+Desk agents + telemetry semver bump. **Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads. **Force reindex** all vaults after upgrade (`apo_admin` → `reindex` with `force=true`).
 
 ### Changed
 
@@ -26,7 +14,9 @@ Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share 
 
 ### Added
 
-- **`apo_admin` meta-tool** — `list` / `describe` / `invoke` for engine ops (`memory_status`, `reindex*`, `reload_config`, `delete_note`, `tool_stats`, `git_sync`). Destructive invoke requires `confirm=true`. Replaces top-level admin tools and **`APO_MCP_LEAN`** (removed). Top-level MCP count: **14**. Tests: `engine/tests/test_apo_admin.py`.
+- **`apo_admin` meta-tool** — `list` / `describe` / `invoke` for engine ops (`memory_status`, `reindex*`, `reload_config`, `delete_note`, `tool_stats`, `git_sync`). Destructive invoke requires `confirm=true`. Replaces top-level admin tools and **`APO_MCP_LEAN`** (removed). Top-level MCP count: **15** (adds `expand_section`; `expand_chunk` deprecated alias). Tests: `engine/tests/test_apo_admin.py`.
+- **Section-first markdown index** — one embed per heading section (no sub-chunk splits); search hits expose `file_bytes` / `section_bytes`; soft tips for large notes, sections, and preambles.
+- **`expand_section(chunk_hash, force=false)`** — canonical read-more path with preview mode above `APO_SECTION_PREVIEW_BYTES` (8 KB default). `expand_chunk` remains a deprecated alias.
 - **`vault(action=..., vaults=[…])` subset filter** — `list` / `contracts` / `describe` / `merge` / `project` all scope to a named subset of the registry (mutual exclusion with `vault=`; unknown names → `bad_vault`). `describe`'s empty-`vault=` default resolves against the filtered set, not the registry's true default. For a workspace whose desk projection should only ever mention some of the registered vaults (e.g. a persona workspace scoped to its own vault + one shared one). MCP `vault` tool + RPC `POST /v1/vault`.
 - **Agent-habit wire compat** — `append_note`/`write_note` accept legacy `body=` alias; MCP instructions no longer say `body=text` (misread as kwarg). `patch_note` ops accept `set_field.path`→`field`, `replace_text.old_text`/`new_text`→`find`/`replace`. Validation hints + `agent-throughput.md` updated.
 - **Telemetry `apo_version`** — each tool-call row stamps engine semver; `tool_stats` / `session_stats` expose `engine_version` + `by_version` rollups for cross-version burn-down.
@@ -54,6 +44,8 @@ Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share 
 
 - **Tool metrics storage** — MCP tool-use analytics now live in `~/.apo/metrics.duckdb` (DuckDB). Legacy `~/.apo/tool-metrics-*.jsonl` files are imported once on first open, then deleted. `just tool-stats` / admin `tool_stats` rollups unchanged.
 - **Git sync commit subjects** — empty/`auto` messages expand path-aware templates (`{path_count}`, `{top_folders}` / `{paths_summary}` plus time tokens). Agent `git_sync` `message` still wins as subject. Commits always include a capped `Paths:` body trailer.
+- **`APO_YAML_MAX_CHARS` / `APO_YAML_OVERLAP`** — YAML catalog chunking only; markdown ignores legacy `APO_MAX_CHARS` splits.
+- Search hits omit `start_line` / `end_line` from the agent-facing payload (still stored internally).
 - Tool counts: lean **13** / full **20** (adds `session_stats`, `active_session`).
 - **`APO_SEARCH_EXCLUDE`** — deprecated desk-wide fallback; per-vault search-contract preferred.
 - `launchd-watch.sh` default embed backend aligned with engine (`ollama`).
