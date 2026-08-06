@@ -14,6 +14,39 @@ from apo_engine import tool_metrics
 _ENGINE = Path(__file__).resolve().parents[1]
 _SERVER = _ENGINE / "mcp" / "server.py"
 
+# Snapshot pre-test state so tearDownModule can restore it exactly.
+# _load_server both (a) mutates os.environ directly with no per-call cleanup
+# and (b) deletes+re-execs every already-imported apo_engine.*/apo_mcp*
+# sys.modules entry to force a fresh env-driven load. (b) is the sharper bug:
+# later test files' own `from apo_engine import vaults` name bindings (taken
+# at collection time) still point at the *original* module objects, but a
+# string-target `mock.patch("apo_engine.vaults.config")` resolves fresh
+# through sys.modules — so it silently patches this file's reloaded copy
+# instead of the object the test actually calls, and the mock has no effect
+# (see test_multi_vault.py::test_legacy_single_vault, which read the config
+# default "notes_global" instead of its patched "coll_a" when run after this
+# file, with no exception raised to hint at the mismatch).
+import sys as _sys
+
+_ENV_KEYS = ("APO_NOTES_ROOT", "APO_INDEX", "APO_COLLECTION", "APO_TOOL_METRICS")
+_ORIG_ENV = {k: os.environ.get(k) for k in _ENV_KEYS}
+_ORIG_MODULES = {
+    k: v for k, v in _sys.modules.items() if k == "apo_engine" or k.startswith("apo_engine.")
+}
+
+
+def tearDownModule():
+    for k, orig in _ORIG_ENV.items():
+        if orig is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = orig
+    for name in [k for k in _sys.modules if k == "apo_engine" or k.startswith("apo_engine.")]:
+        if name in _ORIG_MODULES:
+            _sys.modules[name] = _ORIG_MODULES[name]
+        else:
+            del _sys.modules[name]
+
 
 def _load_server(vault: Path, tmp: Path):
     import sys
