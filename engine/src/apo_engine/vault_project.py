@@ -461,7 +461,10 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.append("")
         if habits.get("new_durable_facts", True):
             lines.append(
-                "- Capture **new durable facts** when learned (dates, people, equipment, schedule, preferences, decisions) — do not defer to end of turn."
+                "- **Write as you go, not at the end.** Capture new durable facts "
+                "(dates, people, equipment, schedule, preferences, decisions) the moment "
+                "they're learned. A turn that ends without a write it owed is a policy "
+                "violation, not a wrap-up step skipped for later."
             )
         if habits.get("prefer_append_patch", True):
             lines.append("- Prefer `append_note` / `patch_note` over full-file rewrites; archive via `place_note`.")

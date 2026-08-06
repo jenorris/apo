@@ -51,6 +51,11 @@ tool-stats *ARGS:
 desk-project *ARGS:
     {{eng}} desk-project {{ARGS}}
 
+# Return-only as of #21 — place the body into the Claude Code skill file
+# (the host now owns placement; nothing does this automatically).
+desk-project-claude:
+    ./scripts/write-claude-skill.sh
+
 # Contract-gated vault batch tools (OKF lint/fix/…). See vault-tools/README.md
 vault-tools *ARGS:
     just --justfile "{{ justfile_directory() }}/vault-tools/justfile" {{ARGS}}
