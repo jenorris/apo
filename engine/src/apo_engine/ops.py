@@ -366,7 +366,7 @@ def watcher_status() -> dict[str, Any]:
 
 
 def _attach_watcher_tip(out: dict[str, Any]) -> dict[str, Any]:
-    """Surface missing watcher on successful writes (lean has no memory_status)."""
+    """Surface missing watcher on successful writes."""
     if not out.get("ok"):
         return out
     if watcher_status().get("running"):

@@ -74,7 +74,7 @@ No separate issue tracker required for “show me open X in folder Y.” Prefer 
 |--|--|
 | **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown (+ YAML title/description fields) |
 | **Frontmatter catalogs** | `filter_notes` on any YAML property (`okf_type`, `status`, tags, …) — MD frontmatter or whole-file YAML notes |
-| **MCP surface** | 20 tools (13 lean default) for Cursor and Claude Code |
+| **MCP surface** | 14 top-level tools + 7 admin capabilities via `apo_admin` |
 | **Surgical writes** | `append_note` / `patch_note` with heading / `chunk_hash` anchors and `expected_mtime` |
 | **Index-backed graphs** | `backlinks` + `history` (mtime browse; file git log when git contract active) hit sqlite / git — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
@@ -177,15 +177,14 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 ## MCP tools
 
-| Mode | Count | Includes |
-|------|------:|----------|
-| Lean (**default**) | **13** | Core search/write + `vault` + **`session_stats`** + **`active_session`** |
-| Full (`APO_MCP_LEAN=0`) | **20** | Lean + admin: `memory_status`, `reindex`, `reindex_deferred`, `reload_config`, `delete_note`, `tool_stats`, `git_sync` |
-| Lean (default) | **13** | Core search/write + `vault` + **`session_stats`** + **`active_session`** |
+| Surface | Count | Notes |
+|---------|------:|-------|
+| Top-level | **14** | Core search/write + `vault` + `apo_admin` + `session_stats` + `active_session` |
+| Via `apo_admin` | **7** | `memory_status`, `reindex*`, `reload_config`, `delete_note`, `tool_stats`, `git_sync` |
 
-Counts are contract-tested (`engine/tests/test_mcp_lean.py`) — if this table drifts from the code, CI fails.
+Counts are contract-tested (`engine/tests/test_apo_admin.py`) — if this table drifts from the code, CI fails.
 
-Admin analytics: `tool_stats` / CLI `apo-engine tool-stats` (DuckDB at `~/.apo/metrics.duckdb`; legacy JSONL auto-imported once; disable with `APO_TOOL_METRICS=0`).
+Admin analytics: `apo_admin(action=invoke, name=tool_stats, …)` or CLI `just tool-stats` (DuckDB at `~/.apo/metrics.duckdb`; legacy JSONL auto-imported once; disable with `APO_TOOL_METRICS=0`).
 
 ## Configuration
 

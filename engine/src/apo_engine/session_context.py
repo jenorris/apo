@@ -31,15 +31,9 @@ APO_MCP_TOOL_NAMES = frozenset(
         "backlinks",
         "history",
         "vault",
+        "apo_admin",
         "session_stats",
         "active_session",
-        "reload_config",
-        "memory_status",
-        "reindex_deferred",
-        "reindex",
-        "delete_note",
-        "tool_stats",
-        "git_sync",
     }
 )
 

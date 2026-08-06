@@ -10,16 +10,15 @@ import unittest
 from pathlib import Path
 
 from apo_engine import tool_metrics
-from apo_engine.agent_validation import AgentValidationMiddleware
-from apo_engine.tool_metrics_middleware import ToolMetricsMiddleware
 
 _ENGINE = Path(__file__).resolve().parents[1]
 _SERVER = _ENGINE / "mcp" / "server.py"
 
 
 def _load_server(vault: Path, tmp: Path):
+    import sys
+
     env_keys = {
-        "APO_MCP_LEAN": "1",
         "APO_NOTES_ROOT": str(vault),
         "APO_INDEX": str(tmp / "index.db"),
         "APO_COLLECTION": "hint_test",
@@ -27,9 +26,15 @@ def _load_server(vault: Path, tmp: Path):
     }
     for k, v in env_keys.items():
         os.environ[k] = v
-    # Fresh import each time — lean/env are read at module load.
+    # Fresh import each time — env is read at module load.
     for name in list(sys_modules_apo()):
-        pass
+        del sys.modules[name]
+    src = str(_ENGINE / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    for name in list(sys.modules):
+        if name == "apo_engine" or name.startswith("apo_engine."):
+            del sys.modules[name]
     spec = importlib.util.spec_from_file_location("apo_mcp_hints", _SERVER)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
@@ -50,6 +55,9 @@ class McpValidationHintTest(unittest.TestCase):
             vault = tmp / "vault"
             vault.mkdir()
             mod = _load_server(vault, tmp)
+            from apo_engine.agent_validation import AgentValidationMiddleware
+            from apo_engine.tool_metrics_middleware import ToolMetricsMiddleware
+
             chain = list(mod.mcp.middleware)
             # FastMCP may prepend DereferenceRefsMiddleware; among our two,
             # metrics must be listed before validation (first = outermost).

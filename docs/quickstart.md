@@ -55,7 +55,7 @@ Add an `apo` block to `~/.cursor/mcp.json` (merge into existing `mcpServers`):
 
 Per-vault search noise filters live in `<vault>/system/contracts/search-contract.schema.yaml` — not MCP env.
 
-Lean desk is **default** (admin tools + `delete_note` hidden). Set `"APO_MCP_LEAN": "0"` only when you need admin tools (`reload_config`, `memory_status`, `tool_stats`, `delete_note`, `git_sync`, `reindex_deferred`, `reindex`).
+Engine admin ops (`memory_status`, `reindex*`, `delete_note`, `git_sync`, `tool_stats`, `reload_config`) are reached via **`apo_admin(action=list|describe|invoke)`**. Destructive invoke requires **`confirm=true`** (`delete_note` always; `reindex` when `force=true`; `git_sync` for `run`/`pull`).
 
 **Quit Cursor fully** (Cmd+Q on macOS) and reopen. MCP subprocesses do not reliably hot-reload.
 
@@ -80,7 +80,7 @@ Then put the same env block as Cursor into `~/.claude.json` under the `apo` serv
 }
 ```
 
-Omit `APO_MCP_LEAN` (lean default) unless you need admin tools → set `APO_MCP_LEAN=0`.
+Expect **14** top-level tools (includes `vault`, `apo_admin`, `session_stats`, `active_session`). Admin ops drill down through `apo_admin`.
 
 ## 4. Verify
 
@@ -89,8 +89,6 @@ cd /ABSOLUTE/PATH/TO/apo
 just tool-list    # pure Python — no Node required
 # or: just inspect   # needs npx + rg
 ```
-
-Lean default: expect **13** tools (includes `vault`, `session_stats`, `active_session`). With `APO_MCP_LEAN=0`, expect **20**.
 
 In the agent, run a known `search_notes` query — the right note should land near the top.
 

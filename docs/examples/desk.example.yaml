@@ -14,12 +14,12 @@ citations: absolute_markdown  # absolute_markdown | wiki
 # Optional multi-root workspace path shown in projected desk skill.
 workspace: ""
 
-dual_write:
-  session_vault: sessions
-  session_path_template: "inbox/daily/{date}.md"
-  session_heading: "Session log"
-  # Optional explicit domain vaults (else inferred from vault_roles ≠ audit)
-  # domain_vaults: [meta, norris, work, contracts]
+# Legacy manual session-log dual-write (retired — use session telemetry + Cursor hooks).
+# dual_write:
+#   enabled: true
+#   session_vault: sessions
+#   session_path_template: "inbox/daily/{date}.md"
+#   session_heading: "Session log"
 
 vault_roles:
   meta: pkb
@@ -40,7 +40,6 @@ role_notes: {}
 # Deep policy docs — use vault_id:relative/path (expanded to absolute .md links on project).
 # pointers:
 #   memory_policy: "meta:system/config/agent-memory-policy"
-#   session_log: "meta:system/config/daily-session-log"
 #   write_api: "meta:system/config/apo-write-api"
 #   source_routing: "meta:system/config/source-routing"
 pointers: {}

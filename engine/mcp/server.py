@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from pydantic import Field
+from apo_engine import apo_admin as apo_admin_ops
 from apo_engine import config as apo_config
 from apo_engine import deferred as index_deferred
 from apo_engine import ops as apo_ops
@@ -151,14 +152,6 @@ def _err(**kw: Any) -> dict:
     return {"ok": False, **kw}
 
 
-def _lean_enabled() -> bool:
-    """Lean desk is the default. Set APO_MCP_LEAN=0/false/no/off for admin tools."""
-    raw = os.environ.get("APO_MCP_LEAN")
-    if raw is None or str(raw).strip() == "":
-        return True
-    return str(raw).strip().lower() not in ("0", "false", "no", "off")
-
-
 def _top_level_dirs(v: Vault) -> list[str]:
     if not v.root.exists():
         return []
@@ -169,11 +162,12 @@ def _top_level_dirs(v: Vault) -> list[str]:
 # Server
 ###############################################################################
 
-_LEAN_BOOT = _lean_enabled()
 _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown + YAML catalog notes; sqlite-vec hybrid search; "
     "files are source of truth. "
-    "Lean desk is default (APO_MCP_LEAN=0 exposes admin + delete_note + git_sync). "
+    "apo_admin(action=list|describe|invoke): engine ops (memory_status, reindex*, "
+    "delete_note, git_sync, tool_stats, reload_config). Destructive invoke requires "
+    "confirm=true (delete_note always; reindex when force=true; git_sync run/pull). "
     "vault(action=list|contracts|describe|merge|project): registry + system/contracts/ "
     "(summaries by default; full=true for YAML bodies; "
     "legacy system/config/*-contract.schema.yaml still discovered; merge adds "
@@ -184,7 +178,7 @@ _MCP_INSTRUCTIONS = (
     "patch_note=frontmatter/YAML fields + MD section mutate — one path (path+ops) or multi-path (items[]); "
     "YAML notes: set_field/delete_field (dotted nested paths); whole file is the catalog row; "
     "parallel mutators in one turn use the same vault=; "
-    "place_note=move if src in vault else copy host .md into vault (delete_note is admin-only). "
+    "place_note=move if src in vault else copy host .md into vault (prefer over delete_note). "
     "Thread mtime → expected_mtime on follow-up writes; when mtime is stale, "
     "scoped writes may still proceed if expected_frontmatter_hash / expected_body_hash / "
     "expected_content_hash (or a same-process prior read) still matches the untouched region. "
@@ -204,13 +198,6 @@ _MCP_INSTRUCTIONS = (
     "index.db writer and wakes on enqueue. Multi-vault: pass vault= or "
     "search_notes(vaults=[…]) (APO_VAULTS registry); each vault has its own "
     "index + deferred collection."
-) + (
-    ""
-    if _LEAN_BOOT
-    else (
-        " Admin (APO_MCP_LEAN=0): reload_config, memory_status, reindex_deferred, "
-        "reindex, delete_note, tool_stats, git_sync."
-    )
 )
 mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
 
@@ -250,17 +237,8 @@ mcp.add_middleware(AgentValidationMiddleware())
 
 
 ###############################################################################
-# Tools — config & status (admin)
+# Admin ops (invoked via apo_admin — not top-level MCP tools)
 ###############################################################################
-
-
-@mcp.tool(
-    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
-    tags={"admin"},
-)
-async def reload_config() -> dict:
-    """Reload runtime JSON overrides (APO_RUNTIME_CONFIG) without restarting the host. Vault root / APO_INDEX still need a process restart."""
-    return await asyncio.to_thread(_reload_config_sync)
 
 
 def _reload_config_sync() -> dict:
@@ -281,28 +259,6 @@ def _reload_config_sync() -> dict:
     }
 
 
-@mcp.tool(annotations=_RO, tags={"admin"})
-async def memory_status() -> dict:
-    """Vault roots, index health, deferred queues, watcher state — diagnose before retrying failures."""
-    return await asyncio.to_thread(_memory_status_sync)
-
-
-@mcp.tool(annotations=_RO, tags={"admin"})
-async def tool_stats(
-    days: Annotated[
-        int | None,
-        Field(description="Rollup window in days (default 7). Pass null for all events."),
-    ] = 7,
-    tool: Annotated[
-        str | None,
-        Field(description="Optional tool name filter (e.g. filter_notes)."),
-    ] = None,
-    vault: str = "",
-) -> dict:
-    """MCP tool-use rollups from ~/.apo/metrics.duckdb (admin). Note paths only when vault telemetry contract allows."""
-    return await asyncio.to_thread(_tool_stats_sync, days, tool, vault)
-
-
 def _tool_stats_sync(
     days: int | None = 7,
     tool: str | None = None,
@@ -317,6 +273,15 @@ def _tool_stats_sync(
     if days is not None and days < 0:
         return _err(error="bad_request", message="days must be >= 0 or null")
     return apo_metrics.tool_stats(v.collection, days=days, tool=tool)
+
+
+def _delete_note_sync(path: str, vault: str = "") -> dict:
+    return apo_ops.delete_note(path, vault=vault)
+
+
+###############################################################################
+# Tools — session metrics (agent-facing)
+###############################################################################
 
 
 @mcp.tool(annotations=_RO)
@@ -404,6 +369,121 @@ def _memory_status_sync() -> dict:
         "watcher": apo_ops.watcher_status(),
         "runtime_file": str(_runtime_config_path()),
     }
+
+
+def _reindex_deferred_sync(vault: str = "") -> dict:
+    try:
+        targets = list(VAULTS.values()) if not vault.strip() else [_vault(vault)]
+    except VaultError as e:
+        return _err(error="bad_vault", message=str(e))
+
+    queued = 0
+    for v in targets:
+        index_deferred.touch_wake(v.collection)
+        v.deferred = index_deferred.load_index_queue(v.collection)
+        queued += len(v.deferred)
+
+    watcher = apo_ops.watcher_status()
+    out: dict[str, Any] = {
+        "ok": True,
+        "queued": queued,
+        "signaled": True,
+        "watcher_running": watcher["running"],
+    }
+    if not watcher["running"]:
+        out["warning"] = (
+            "no watcher detected — the deferred queue is signaled but nothing will consume it "
+            "until apo-engine watch is running (just watch-status)"
+        )
+    return out
+
+
+def _reindex_sync(force: bool = False, vault: str = "") -> dict:
+    try:
+        v = _vault(vault)
+        index_deferred.signal_rebuild(v.collection, force=force)
+        v.deferred.clear()
+        index_deferred.save_index_queue(v.collection, set())
+        watcher = apo_ops.watcher_status()
+        out: dict[str, Any] = {
+            "ok": True,
+            "vault": v.name,
+            "rebuild_signaled": True,
+            "force": force,
+            "watcher_running": watcher["running"],
+        }
+        if not watcher["running"]:
+            out["warning"] = (
+                "no watcher detected — the rebuild is signaled but will never run "
+                "until apo-engine watch is running (just watch-status)"
+            )
+        return out
+    except VaultError as e:
+        return _err(error="bad_vault", message=str(e))
+    except Exception as e:
+        return _err(error="reindex_failed", message=str(e))
+
+
+def _git_sync_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    action = str(params.get("action") or "status").strip()
+    message = str(params.get("message") or "")
+    v = vault or str(params.get("vault") or "")
+    return apo_ops.git_sync_op(action, message=message, vault=v)
+
+
+def _delete_note_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    path = params.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return _err(error="bad_request", message="parameters.path string required")
+    v = vault or str(params.get("vault") or "")
+    return _delete_note_sync(path.strip(), vault=v)
+
+
+def _tool_stats_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    days = params.get("days", 7)
+    tool = params.get("tool")
+    v = vault or str(params.get("vault") or "")
+    if days is not None and not isinstance(days, int):
+        return _err(error="bad_request", message="parameters.days must be int or null")
+    if tool is not None and not isinstance(tool, str):
+        return _err(error="bad_request", message="parameters.tool must be a string")
+    return _tool_stats_sync(
+        days if days is None or isinstance(days, int) else 7,
+        tool if isinstance(tool, str) else None,
+        v,
+    )
+
+
+def _reindex_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    force = bool(params.get("force"))
+    v = vault or str(params.get("vault") or "")
+    return _reindex_sync(force=force, vault=v)
+
+
+def _reindex_deferred_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    v = vault or str(params.get("vault") or "")
+    return _reindex_deferred_sync(vault=v)
+
+
+def _memory_status_admin(_params: dict[str, Any], *, vault: str = "") -> dict:
+    del vault
+    return _memory_status_sync()
+
+
+def _reload_config_admin(_params: dict[str, Any], *, vault: str = "") -> dict:
+    del vault
+    return _reload_config_sync()
+
+
+_ADMIN_HANDLERS: dict[str, apo_admin_ops.AdminHandler] = {
+    "reload_config": _reload_config_admin,
+    "memory_status": _memory_status_admin,
+    "tool_stats": _tool_stats_admin,
+    "reindex_deferred": _reindex_deferred_admin,
+    "reindex": _reindex_admin,
+    "delete_note": _delete_note_admin,
+    "git_sync": _git_sync_admin,
+}
 
 
 ###############################################################################
@@ -636,20 +716,6 @@ async def place_note(
         expected_mtime=expected_mtime,
         vault=vault,
     )
-
-
-@mcp.tool(
-    annotations={
-        "readOnlyHint": False,
-        "destructiveHint": True,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
-    tags={"admin"},
-)
-async def delete_note(path: str, vault: str = "") -> dict:
-    """Irreversible delete + index purge (admin / APO_MCP_LEAN=0). Prefer place_note to archives/."""
-    return await asyncio.to_thread(apo_ops.delete_note, path, vault=vault)
 
 
 ###############################################################################
@@ -923,112 +989,62 @@ async def vault(
     )
 
 
-@mcp.tool(
-    annotations={
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": True,
-    },
-    tags={"admin"},
-)
-async def git_sync(
+@mcp.tool(annotations=_RO)
+async def apo_admin(
     action: Annotated[
         str,
-        Field(description="status | run | pull | clear_block"),
-    ] = "status",
-    message: Annotated[
-        str,
+        Field(description="list | describe | invoke"),
+    ] = "list",
+    name: Annotated[
+        str | None,
+        Field(description="Admin capability id (required for describe / invoke)."),
+    ] = None,
+    parameters: Annotated[
+        dict[str, Any] | None,
         Field(
             description=(
-                "Commit message for action=run (subject). Empty → path-aware "
-                "template from git contract; always attaches a Paths body trailer. "
-                "Agents should pass a one-line outcome when available."
+                "invoke only: nested args for the target capability (not alongside "
+                "top-level invoke fields except vault)."
             ),
         ),
+    ] = None,
+    confirm: Annotated[
+        bool,
+        Field(
+            description=(
+                "invoke only: required true for delete_note, reindex(force=true), "
+                "and git_sync(action=run|pull)."
+            ),
+        ),
+    ] = False,
+    vault: Annotated[
+        str,
+        Field(description="Optional vault name for invoke (overrides parameters.vault)."),
     ] = "",
-    vault: str = "",
 ) -> dict:
-    """Git contract sync: status, commit+push (run), ff-only pull, or clear_block. Opt-in via sync.enabled."""
-    return await asyncio.to_thread(
-        apo_ops.git_sync_op, action, message=message, vault=vault
-    )
-
-
-###############################################################################
-# Tools — indexing (admin)
-###############################################################################
-
-
-def _reindex_deferred_sync(vault: str = "") -> dict:
-    try:
-        targets = list(VAULTS.values()) if not vault.strip() else [_vault(vault)]
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-
-    queued = 0
-    for v in targets:
-        index_deferred.touch_wake(v.collection)
-        v.deferred = index_deferred.load_index_queue(v.collection)
-        queued += len(v.deferred)
-
-    watcher = apo_ops.watcher_status()
-    out: dict[str, Any] = {
-        "ok": True,
-        "queued": queued,
-        "signaled": True,
-        "watcher_running": watcher["running"],
-    }
-    if not watcher["running"]:
-        out["warning"] = (
-            "no watcher detected — the deferred queue is signaled but nothing will consume it "
-            "until apo-engine watch is running (just watch-status)"
+    """Engine admin ops: list/describe capabilities; invoke with confirm=true when destructive."""
+    act = (action or "list").strip().lower()
+    if act == "list":
+        return await asyncio.to_thread(apo_admin_ops.admin_list)
+    if act == "describe":
+        if not (name or "").strip():
+            return _err(error="bad_request", message="name required for action=describe")
+        return await asyncio.to_thread(apo_admin_ops.admin_describe, name.strip())
+    if act == "invoke":
+        if not (name or "").strip():
+            return _err(error="bad_request", message="name required for action=invoke")
+        return await asyncio.to_thread(
+            apo_admin_ops.admin_invoke,
+            name.strip(),
+            parameters=parameters,
+            confirm=confirm,
+            vault=vault,
+            handlers=_ADMIN_HANDLERS,
         )
-    return out
-
-
-@mcp.tool(
-    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
-    tags={"admin"},
-)
-async def reindex_deferred(vault: str = "") -> dict:
-    """Wake watcher to flush deferred queue. Check watcher_running; enqueue already wakes on write."""
-    return await asyncio.to_thread(_reindex_deferred_sync, vault)
-
-
-def _reindex_sync(force: bool = False, vault: str = "") -> dict:
-    try:
-        v = _vault(vault)
-        index_deferred.signal_rebuild(v.collection, force=force)
-        v.deferred.clear()
-        index_deferred.save_index_queue(v.collection, set())
-        watcher = apo_ops.watcher_status()
-        out: dict[str, Any] = {
-            "ok": True,
-            "vault": v.name,
-            "rebuild_signaled": True,
-            "force": force,
-            "watcher_running": watcher["running"],
-        }
-        if not watcher["running"]:
-            out["warning"] = (
-                "no watcher detected — the rebuild is signaled but will never run "
-                "until apo-engine watch is running (just watch-status)"
-            )
-        return out
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-    except Exception as e:
-        return _err(error="reindex_failed", message=str(e))
-
-
-@mcp.tool(
-    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
-    tags={"admin"},
-)
-async def reindex(force: bool = False, vault: str = "") -> dict:
-    """Signal full index rebuild (prunes deleted). force=True re-embeds all. Check watcher_running."""
-    return await asyncio.to_thread(_reindex_sync, force, vault)
+    return _err(
+        error="bad_action",
+        message="action must be list|describe|invoke",
+    )
 
 
 ###############################################################################
@@ -1061,31 +1077,6 @@ def vaults_resource() -> dict:
             for name, v in VAULTS.items()
         },
     }
-
-
-###############################################################################
-# Lean mode — hide admin tools from list_tools / schema (default on)
-###############################################################################
-
-_ADMIN_TOOLS = frozenset({
-    "reload_config",
-    "memory_status",
-    "reindex_deferred",
-    "reindex",
-    "delete_note",
-    "tool_stats",
-})
-
-
-def _apply_lean_mode() -> bool:
-    """Lean (default) disables admin-tagged tools. Returns whether lean applied."""
-    if not _lean_enabled():
-        return False
-    mcp.disable(tags={"admin"})
-    return True
-
-
-_LEAN_ACTIVE = _apply_lean_mode()
 
 
 ###############################################################################

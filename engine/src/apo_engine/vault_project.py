@@ -47,6 +47,15 @@ _WRITE_HABIT_LINES: dict[str, str] = {
         "- **`vault` tool:** `vault(action=list|contracts|describe|merge|project)` — never "
         "`vault(name=…)` (`unexpected_keyword_argument:name`)."
     ),
+    "end_of_turn_domain_writes": (
+        "- **End-of-turn gate:** on consequential turns (decisions, status changes, new/corrected "
+        "facts, completed tasks), write the **domain note** in the default/owning vault before the "
+        "final reply — do not defer to end-of-session."
+    ),
+    "session_audit_telemetry_only": (
+        "- Session audit is **telemetry only** (`session_stats` / `active_session`) — do **not** "
+        "`append_note` to `vault=sessions` unless desk `dual_write.enabled` is explicitly true."
+    ),
 }
 
 # Watch / multi-caller debounce for auto-reproject.
@@ -418,8 +427,6 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.extend(proxy_lines)
         lines.append("")
 
-    lines.append("## Dual-write")
-    lines.append("")
     sv = dual.get("session_vault") or "sessions"
     sp = dual.get("session_path_template") or "inbox/daily/{date}.md"
     sh = dual.get("session_heading") or "Session log"
@@ -434,12 +441,28 @@ def render_desk_body(merge: dict[str, Any]) -> str:
             if isinstance(r, dict) and r.get("role") not in {"audit", None}
             and n != sv
         ) or "`meta` / `norris` / `work` / `contracts`"
-    lines.append(
-        f"On consequential turns (and new durable facts when enabled): domain note in the owning vault "
-        f"({domain_s}); **always** `append_note(..., vault=\"{sv}\")` on `{sp}` → `## {sh}` "
-        f"with `YYYY-MM-DD HH:MM ET` (process turns: `Tooling:`). "
-        f"Never write session logs to Meta/Norris/Work/Contracts dailies."
-    )
+    dual_enabled = bool(dual.get("enabled"))
+    if dual_enabled:
+        lines.append("## Dual-write")
+        lines.append("")
+        lines.append(
+            f"On consequential turns (and new durable facts when enabled): domain note in the owning vault "
+            f"({domain_s}); **also** `append_note(..., vault=\"{sv}\")` on `{sp}` → `## {sh}` "
+            f"with `YYYY-MM-DD HH:MM ET` (process turns: `Tooling:`). "
+            f"Never write session logs to Meta/Norris/Work/Contracts dailies."
+        )
+    else:
+        lines.append("## Session audit")
+        lines.append("")
+        lines.append(
+            "Session working memory is **automatic** — Apo tool-use metrics + Cursor hooks "
+            f"(`session_stats` / `active_session`). Do **not** `append_note` to `vault=sessions` on consequential turns."
+        )
+        lines.append("")
+        lines.append(
+            f"On consequential turns (decisions, status changes, new/corrected facts, completed tasks): "
+            f"write the **domain note** in the owning/default vault ({domain_s}) before the final reply."
+        )
     if habits.get("end_of_turn_gate", True):
         lines.append("")
         lines.append("End-of-turn gate: do not reply until required writes land.")
@@ -559,7 +582,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
 
     lines.append("## Safety")
     lines.append("")
-    lines.append("- `delete_note` only with explicit confirmation (admin / non-lean).")
+    lines.append("- `delete_note` via `apo_admin(action=invoke, name=delete_note, confirm=true)` only.")
     lines.append("- Do not substitute Apo for repo Grep/Glob or hosted Confluence/Jira/Slack/Gmail/Calendar.")
     lines.append("")
 
