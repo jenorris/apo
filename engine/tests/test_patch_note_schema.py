@@ -18,10 +18,10 @@ def _list_tools_lean(*, collection: str):
     with tempfile.TemporaryDirectory(prefix="apo-mcp-schema-") as tmp:
         vault = Path(tmp) / "vault"
         vault.mkdir()
-        os.environ["APO_MCP_LEAN"] = "1"
         os.environ["APO_NOTES_ROOT"] = str(vault)
         os.environ["APO_INDEX"] = str(Path(tmp) / "index.db")
         os.environ["APO_COLLECTION"] = collection
+        os.environ.pop("APO_MCP_LEAN", None)
         # Prefer this worktree's apo_engine over a stale editable install.
         import sys
 
@@ -137,7 +137,7 @@ class PatchNoteSchemaTest(unittest.TestCase):
         instr = getattr(mod.mcp, "instructions", None) or ""
         self.assertIn("append_note", instr)
         self.assertIn("note://", instr)
-        self.assertIn("Lean desk is default", instr)
+        self.assertIn("apo_admin", instr)
         self.assertIn("fields=", instr)
         self.assertIn("parallel", instr.lower())
         self.assertIn("history", instr)

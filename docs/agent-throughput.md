@@ -62,7 +62,7 @@ Targets (desk, rolling 7d, primary collection):
 | `patch_note` ValidationError rate | near zero |
 | `expand_chunk` | > 0 when search→section is common |
 
-Lean desk hides admin `tool_stats` — use **`session_stats`** (agents) or CLI `just tool-stats` (operators). Disable recording: `APO_TOOL_METRICS=0`. Storage: `~/.apo/metrics.duckdb`. Paths when vault ships [telemetry contract](docs/contracts/telemetry.md).
+Operator rollups: **`apo_admin(action=invoke, name=tool_stats, …)`** or CLI `just tool-stats`. Session agents: **`session_stats`**. Disable recording: `APO_TOOL_METRICS=0`. Storage: `~/.apo/metrics.duckdb`. Paths when vault ships [telemetry contract](docs/contracts/telemetry.md).
 
 ## End-of-turn checklist
 

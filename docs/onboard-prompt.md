@@ -21,7 +21,7 @@ Apo is a local MCP memory engine: files on disk are source of truth; sqlite-vec 
 2. **Preserve existing conventions.** Infer from this vault. Only propose Apo-shaped habits (search→anchor writes, check `ok`, folder=, deferred reindex) that fit what is already here.
 3. **Do not import PARA/OKF/thread rotations or a canned contract** unless this vault already uses them, or I explicitly ask for a template from `docs/contracts/` (e.g. PARA, llm-wiki, OKF bundle).
 4. **One vault.** Ignore multi-tenant / gateway product framing.
-5. If Apo MCP is available: smoke with `filter_notes` / `history` / one `search_notes`. Confirm vault paths via `memory://vaults` or a known note `read_note`. Lean desk hides `memory_status` — if writes return a watcher `warning`, check with `just watch-status` (or set `APO_MCP_LEAN=0` for admin diagnostics).
+5. If Apo MCP is available: smoke with `filter_notes` / `history` / one `search_notes`. Confirm vault paths via `memory://vaults` or a known note `read_note`. If writes return a watcher `warning`, check with `just watch-status` or `apo_admin(action=invoke, name=memory_status)`.
 6. If I asked for a contract template: read that template’s **Behaviors** section and fold them into Draft A (especially consequential-turn writes, adapted to *that* layout). Encode lasting machine rules in the vault (`system/config/…`), not only in chat.
 
 ### Phase 1 — Discover (read-only)
@@ -69,7 +69,7 @@ Produce **draft markdown** for me to approve, tailored to the inferred vault:
 **Draft A — Persistent agent memory rule** (Cursor rule or Claude/AGENTS section), including:
 - Apo as sole markdown memory backend for this vault (retire conflicting backends if any)
 - Tool routing table adapted to *our* folders (not a generic PARA lecture)
-- Write discipline: prefer append/patch; use heading/chunk_hash when available; `expected_mtime` when editing hot notes; lean desk hides admin reindex — rely on write enqueue + watcher
+- Write discipline: prefer append/patch; use heading/chunk_hash when available; `expected_mtime` when editing hot notes; rely on write enqueue + watcher (admin reindex via `apo_admin` when needed)
 - Consequential-turn writes *only if* this vault already has a logging/decision habit — map onto existing paths (do not invent a session-log format unless the vault already uses something like it)
 - Explicit non-goals: code search, email, ticket systems stay outside Apo
 
@@ -83,7 +83,7 @@ Label drafts clearly as PROPOSED. Do not write them yet.
 ### Phase 4 — Apply (only after I say yes)
 
 1. Write approved drafts (surgical edits; no drive-by cleanup).
-2. Re-check with `just watch-status` and a real `search_notes` query (lean desk hides admin `memory_status` — set `APO_MCP_LEAN=0` only if you need it).
+2. Re-check with `just watch-status` and a real `search_notes` query (or `apo_admin(action=invoke, name=memory_status)` for index health).
 3. Summarize what changed and any follow-ups I must do manually (restart app, pull embeddings).
 
 ### Start now

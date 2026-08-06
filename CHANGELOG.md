@@ -12,6 +12,8 @@ Worth-using polish for desk agents, Hermes/Night Shift, and fresh-machine share 
 
 ### Added
 
+- **`apo_admin` meta-tool** — `list` / `describe` / `invoke` for engine ops (`memory_status`, `reindex*`, `reload_config`, `delete_note`, `tool_stats`, `git_sync`). Destructive invoke requires `confirm=true`. Replaces top-level admin tools and **`APO_MCP_LEAN`** (removed). Top-level MCP count: **14**. Tests: `engine/tests/test_apo_admin.py`.
+
 - **Agent-habit wire compat** — `append_note`/`write_note` accept legacy `body=` alias; MCP instructions no longer say `body=text` (misread as kwarg). `patch_note` ops accept `set_field.path`→`field`, `replace_text.old_text`/`new_text`→`find`/`replace`. Validation hints + `agent-throughput.md` updated.
 - **Telemetry `apo_version`** — each tool-call row stamps engine semver; `tool_stats` / `session_stats` expose `engine_version` + `by_version` rollups for cross-version burn-down.
 

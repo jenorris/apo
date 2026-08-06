@@ -27,7 +27,7 @@ never write to `~/.apo` or a real vault (see `engine/tests/conftest.py`); CI run
 the suite on Linux and macOS for every push and PR.
 
 Please add or update tests for behavior changes. The MCP tool surface has a
-lean/full contract covered by `engine/tests/test_mcp_lean.py` — keep it green.
+lean/full contract covered by `engine/tests/test_apo_admin.py` — keep it green.
 
 ## Ground rules
 

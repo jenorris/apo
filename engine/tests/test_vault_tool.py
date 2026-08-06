@@ -353,7 +353,7 @@ class VaultOpTest(unittest.TestCase):
                 out = ops.vault_op("merge")
         self.assertTrue(out["ok"])
         self.assertEqual(out["desk_meta"]["source"], "defaults")
-        self.assertEqual(out["desk"]["dual_write"]["session_vault"], "sessions")
+        self.assertNotIn("dual_write", out["desk"])
         self.assertNotIn("role", out["vaults"]["alpha"])
 
 

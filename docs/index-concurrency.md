@@ -20,7 +20,7 @@ MCP enqueues work under `~/.apo/`:
 | `wake-{collection}` | Touch file — watcher processes queues immediately |
 
 Write enqueue already wakes the watcher (`wake-*`). Lean desk hides `reindex_deferred`
-(admin / `APO_MCP_LEAN=0`); use it only for diagnostics. Otherwise the watcher picks up
+(`apo_admin` → `memory_status`); use it only for diagnostics. Otherwise the watcher picks up
 queues on fsevents or the periodic hash scan (`WATCH_INTERVAL`, default 30s).
 
 ## Write transaction shape

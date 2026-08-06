@@ -1,7 +1,7 @@
 """Desk overlay for ``vault(action=merge)``.
 
 Host-level (not vault content): ``~/.apo/desk.yaml`` or ``APO_DESK_CONFIG``.
-Holds cross-vault policy (dual-write, citations, roles). Per-vault contracts
+Holds cross-vault policy (durable writes, session telemetry, citations, roles). Per-vault contracts
 stay under each vault's ``system/contracts/`` and are never cross-pollinated.
 """
 
@@ -20,11 +20,6 @@ _DEFAULT_DESK: dict[str, Any] = {
     "desk_version": "0.1",
     "cross_pollinate_contracts": False,
     "citations": "absolute_markdown",
-    "dual_write": {
-        "session_vault": "sessions",
-        "session_path_template": "inbox/daily/{date}.md",
-        "session_heading": "Session log",
-    },
     "vault_roles": {},
     "habits": {
         "end_of_turn_gate": True,

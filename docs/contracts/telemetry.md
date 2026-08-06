@@ -25,11 +25,11 @@ Ship `paths: vault_relative` + `expose_paths: true` so agents and `session_stats
 
 ## Agent tools
 
-| Tool | Lean | Role |
-|------|------|------|
-| `session_stats` | yes | Session-scoped rollups (+ `by_path` when contract allows) |
-| `active_session` | yes | Read `~/.apo/active-session.json` (Cursor hook) |
-| `tool_stats` | admin | Desk-wide operator rollups |
+| Tool | Role |
+|------|------|
+| `session_stats` | Session-scoped rollups (+ `by_path` when contract allows) |
+| `active_session` | Read `~/.apo/active-session.json` (Cursor hook) |
+| `apo_admin` → `tool_stats` | Desk-wide operator rollups |
 
 ## Session identity (MCP wire)
 
