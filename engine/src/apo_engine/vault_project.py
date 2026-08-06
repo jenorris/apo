@@ -24,6 +24,43 @@ DEFAULT_PROJECTED_DIR = Path.home() / ".apo" / "projected"
 _HOSTS = frozenset({"cursor", "claude", "hermes", "both", "all"})
 _HOST_HELP = "cursor|claude|hermes|both|all"
 
+# Deterministic lines for usage-contract ``write_habits`` ids (projected into apo-desk).
+_WRITE_HABIT_LINES: dict[str, str] = {
+    "prefer_append_patch": (
+        "- Prefer `append_note` / `patch_note` over full-file rewrites; archive via `place_note`."
+    ),
+    "folder_on_search": (
+        "- **Hard gate:** first `search_notes` in a turn **must** include `folder=` when PARA "
+        "bucket is inferable (threads → `areas/threads`, config → `system/config`, etc.). "
+        "Target ≥80% `folder_set/search_notes` in 7d rollups (`just tool-stats`)."
+    ),
+    "expected_mtime_on_followup": (
+        "- On **second+** write to the same path in one session, pass `expected_mtime` from the "
+        "prior hit's float `mtime`; on `stale_write`, re-read and reapply."
+    ),
+    "filter_okf_type": (
+        "- When a vault has an OKF contract: stamp `okf_type` / `description` / `timestamp` on "
+        "concept writes; prefer `filter_notes({\"okf_type\": \"…\"}, folder=…)`."
+    ),
+    "patch_note_wire": (
+        "- **`patch_note` wire:** every op needs `\"op\"`; `set_field` uses `field=` not `path`; "
+        "`replace_text` uses `find`/`replace` not `old_text`/`new_text`; section ops use `text=` "
+        "not `content=`; batch uses `items=[{path, ops}]`."
+    ),
+    "chunk_hash_surgical": (
+        "- Search → write via `chunk_hash` / `heading` from hits — skip `read_note` when an "
+        "anchor exists (`append_note(chunk_hash=…)` or patch with `chunk_hash`)."
+    ),
+    "dedupe_search": (
+        "- **One** `search_notes` per distinct query per turn — no parallel duplicate searches; "
+        "batch facets with `folder=` or widen `limit=` instead."
+    ),
+    "vault_api_routing": (
+        "- **`vault` tool:** `vault(action=list|contracts|describe|merge|project)` — never "
+        "`vault(name=…)` (`unexpected_keyword_argument:name`)."
+    ),
+}
+
 # Watch / multi-caller debounce for auto-reproject.
 _reproject_lock = threading.Lock()
 _last_reproject_mono = 0.0
@@ -212,6 +249,37 @@ def format_contribution_line(name: str, contrib: dict[str, Any]) -> str:
         return f"- `{name}`: `{dialect}` ({'; '.join(extras)})"
     return f"- `{name}`: `{dialect}`"
 
+def _usage_write_habits(row: dict[str, Any]) -> list[str]:
+    """Return ``write_habits`` id list from usage-contract ``data``."""
+    data = _usage_data(row)
+    if not data:
+        return []
+    raw = data.get("write_habits")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip())
+    return out
+
+
+def _render_write_habit_lines(habit_ids: list[str]) -> list[str]:
+    """Map usage-contract write_habit ids to projected markdown bullets."""
+    lines: list[str] = []
+    seen: set[str] = set()
+    for hid in habit_ids:
+        if hid in seen:
+            continue
+        seen.add(hid)
+        line = _WRITE_HABIT_LINES.get(hid)
+        if line:
+            lines.append(line)
+        else:
+            lines.append(f"- `{hid}` — see usage-contract / apo-write-api.")
+    return lines
+
+
 def attach_usage_contribution_bodies(merge: dict[str, Any]) -> dict[str, Any]:
     """Ensure each vault's usage-contract entry includes parsed ``data`` for project.
 
@@ -398,6 +466,27 @@ def render_desk_body(merge: dict[str, Any]) -> str:
             lines.append(
                 "- When a vault has an OKF contract: stamp `okf_type` / `description` / `timestamp` on concept writes; prefer `filter_notes({\"okf_type\": \"…\"}, folder=…)`."
             )
+        lines.append("")
+
+    # Apo throughput — from default vault usage-contract write_habits (deterministic projection).
+    default_vault = default or next(iter(vaults.keys()), "")
+    default_row = vaults.get(default_vault) if isinstance(vaults.get(default_vault), dict) else {}
+    throughput_ids = _usage_write_habits(default_row if isinstance(default_row, dict) else {})
+    # Skip ids already rendered by desk.yaml boolean habits (avoid duplicate bullets).
+    if habits.get("prefer_append_patch", True):
+        throughput_ids = [h for h in throughput_ids if h != "prefer_append_patch"]
+    if habits.get("filter_okf_type", True):
+        throughput_ids = [h for h in throughput_ids if h != "filter_okf_type"]
+    throughput_lines = _render_write_habit_lines(throughput_ids)
+    if throughput_lines:
+        lines.append("## Apo throughput")
+        lines.append("")
+        lines.append(
+            "From default vault usage-contract `write_habits` — engine API detail in skill **`mcp-apo`** "
+            "and Meta `system/config/apo-write-api.md`."
+        )
+        lines.append("")
+        lines.extend(throughput_lines)
         lines.append("")
 
     lines.append("## Contract inventory")
