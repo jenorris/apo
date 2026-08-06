@@ -122,6 +122,23 @@ def _usage_integrations(row: dict[str, Any]) -> dict[str, Any] | None:
     return integ if isinstance(integ, dict) else None
 
 
+def _usage_pointers(row: dict[str, Any]) -> list[str]:
+    """Return usage-contract root-level ``pointers`` list when present.
+
+    Distinct from ``contribution.pointers`` / ``integrations.pointers`` —
+    this is the vault's own policy pointer list (memory policy, write API,
+    session-log conventions, ...), otherwise silently dropped from every
+    projected desk body even though the contract author put it there.
+    """
+    data = _usage_data(row)
+    if not data:
+        return []
+    raw = data.get("pointers")
+    if not isinstance(raw, list):
+        return []
+    return [p.strip() for p in raw if isinstance(p, str) and p.strip()]
+
+
 def _str_list(raw: Any) -> list[str]:
     """Normalize host keys / CLI names (YAML list or single scalar string)."""
     if isinstance(raw, str):
@@ -364,6 +381,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
                 for p in iptrs:
                     if isinstance(p, str) and p.strip():
                         contrib_pointer_raws.append(p.strip())
+        contrib_pointer_raws.extend(_usage_pointers(row))
     if contrib_lines:
         lines.append("## Contribution")
         lines.append("")

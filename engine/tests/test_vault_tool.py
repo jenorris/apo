@@ -145,6 +145,8 @@ class VaultOpTest(unittest.TestCase):
         (cdir / "usage-contract.schema.yaml").write_text(
             "usage_contract_version: '0.1'\n"
             "purpose: test\n"
+            "pointers:\n"
+            "  - alpha:system/config/agent-memory-policy\n"
             "contribution:\n"
             "  dialect: obsidian-ofm\n"
             "  features:\n"
@@ -298,6 +300,9 @@ class VaultOpTest(unittest.TestCase):
             self.assertIn("obsidian-ofm", body)
             self.assertIn("## Expected integrations", body)
             self.assertIn("## MCP proxy", body)
+            # root-level usage-contract pointers (e.g. memory policy) must not
+            # be silently dropped from Deep policy pointers
+            self.assertIn("agent-memory-policy", body)
 
             guidance = projected["guidance"]
             self.assertIn("Return-only", guidance)
