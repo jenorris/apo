@@ -190,8 +190,9 @@ _MCP_INSTRUCTIONS = (
     "history=browse by mtime (since/until, preview=first|last, heading=, exclude=, fields=, chunk_hash) "
     "or file git log when path= + git contract; "
     "status sweeps → filter_notes. "
-    "Hits expose chunk_hash/heading for append/expand (skip read when possible; "
-    "append_note may take chunk_hash alone). "
+    "Search hits expose chunk_hash, heading, file_bytes, section_bytes — expand via expand_section(chunk_hash); "
+    "never bare read_note(heading=) after search (duplicate headings). "
+    "append_note may take chunk_hash alone. "
     "session_stats / active_session: desk tool-use metrics (session-scoped; paths when telemetry contract allows). "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
     "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
@@ -790,7 +791,7 @@ async def search_notes(
         ),
     ] = None,
 ) -> dict:
-    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). Prefer limit= over top_k. folder= scopes. vaults=[] fans out across separate indexes. Hits include chunk_hash/heading/mtime for append/expand."""
+    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). Hits include chunk_hash, heading, file_bytes, section_bytes, mtime — use expand_section(chunk_hash) to read more."""
     return await asyncio.to_thread(
         apo_ops.search,
         query,
@@ -804,13 +805,29 @@ async def search_notes(
     )
 
 
+
+@mcp.tool(annotations=_RO)
+async def expand_section(
+    chunk_hash: str,
+    vault: str = "",
+    force: Annotated[
+        bool,
+        Field(description="When true, return full section body even above preview threshold."),
+    ] = False,
+) -> dict:
+    """Fetch the full markdown section for a search_notes hit. Prefer over read_note(path) — anchor via chunk_hash only."""
+    return await asyncio.to_thread(
+        apo_ops.expand_section, chunk_hash, vault=vault, force=force
+    )
+
+
 @mcp.tool(annotations=_RO)
 async def expand_chunk(
     chunk_hash: str,
     vault: str = "",
     scope: Literal["section", "chunk"] = "section",
 ) -> dict:
-    """Grow a search_notes hit by chunk_hash only (no path/heading). scope=section (default, disk) or chunk (index body). Returns mtime when the source file exists (chain into expected_mtime)."""
+    """Deprecated — prefer expand_section(chunk_hash=). Delegates to section fetch."""
     return await asyncio.to_thread(
         apo_ops.expand_chunk, chunk_hash, vault=vault, scope=scope
     )

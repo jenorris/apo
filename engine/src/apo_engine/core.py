@@ -91,96 +91,73 @@ def _slice_lines(text: str, start_char: int, end_char: int, base_line: int) -> t
     return start, end
 
 
-def chunk_markdown(
-    text: str, max_chars: int, overlap: int
-) -> list[tuple[str, int, str, int, int]]:
-    """Return [(heading, level, chunk_text, start_line, end_line)] packed to ~max_chars.
+def section_markdown(text: str) -> list[tuple[str, int, str, int, int]]:
+    """Return [(heading_breadcrumb, level, section_text, start_line, end_line)] — one row per section.
 
-    ``start_line`` / ``end_line`` are 1-based in the raw file (frontmatter-aware).
-    heading_level is the markdown level of the chunk's governing heading (0 = preamble).
-    The breadcrumb alone can't recover it: skipped levels (H3 directly under H1) are
-    collapsed out of the join.
+    Each markdown heading starts a section that runs until the next heading of the same
+    or higher level. ``level`` 0 = preamble before the first heading.
     """
     body, body_line = _body_start_line(text)
-    heading: list[str] = []
-    # (breadcrumb, level, text, start_line, end_line)
-    blocks: list[tuple[str, int, str, int, int]] = []
-    buf: list[tuple[str, int]] = []
+    lines = body.split("\n")
+    if not body.strip():
+        return []
 
-    def flush_block() -> None:
-        if not buf:
-            return
-        lo, hi = 0, len(buf) - 1
-        while lo <= hi and not buf[lo][0].strip():
-            lo += 1
-        while hi >= lo and not buf[hi][0].strip():
-            hi -= 1
-        if lo > hi:
-            buf.clear()
-            return
-        joined = "\n".join(line for line, _ in buf[lo : hi + 1]).strip()
-        if joined:
-            blocks.append(
-                (
-                    " › ".join(h for h in heading if h),
-                    len(heading),
-                    joined,
-                    buf[lo][1],
-                    buf[hi][1],
-                )
-            )
-        buf.clear()
-
-    lineno = body_line
-    for line in body.split("\n"):
+    headings: list[tuple[int, int, str]] = []
+    for i, line in enumerate(lines):
         m = _HEADING.match(line)
         if m:
-            flush_block()
-            level, title = len(m.group(1)), m.group(2).strip()
-            heading = heading[: level - 1] + [""] * max(0, level - 1 - len(heading)) + [title]
-        else:
-            buf.append((line, lineno))
-        lineno += 1
-    flush_block()
+            headings.append((i, len(m.group(1)), m.group(2).strip()))
 
-    chunks: list[tuple[str, int, str, int, int]] = []
-    cur_head: str | None = None
-    cur_level = 0
-    cur: list[tuple[str, int, int]] = []  # (text, start_line, end_line)
-    cur_len = 0
+    sections: list[tuple[str, int, str, int, int]] = []
 
-    def emit() -> None:
-        nonlocal cur, cur_len, cur_head, cur_level
-        if cur:
-            chunks.append(
-                (
-                    cur_head or "",
-                    cur_level,
-                    "\n\n".join(t for t, _, _ in cur).strip(),
-                    cur[0][1],
-                    cur[-1][2],
-                )
+    if not headings:
+        content = body.strip()
+        if content:
+            end_line = body_line + max(0, len(lines) - 1)
+            sections.append(("", 0, content, body_line, end_line))
+        return sections
+
+    if headings[0][0] > 0:
+        preamble = "\n".join(lines[: headings[0][0]]).strip()
+        if preamble:
+            sections.append(
+                ("", 0, preamble, body_line, body_line + headings[0][0] - 1)
             )
-        cur, cur_len, cur_head, cur_level = [], 0, None, 0
 
-    for head, level, btext, bstart, bend in blocks:
-        if len(btext) > max_chars:
-            emit()
-            step = max(1, max_chars - overlap)
-            for i in range(0, len(btext), step):
-                piece = btext[i : i + max_chars]
-                s, e = _slice_lines(btext, i, i + len(piece), bstart)
-                chunks.append((head, level, piece, s, e))
-            continue
-        if cur and cur_len + len(btext) > max_chars:
-            emit()
-        if not cur:
-            cur_head = head
-            cur_level = level
-        cur.append((btext, bstart, bend))
-        cur_len += len(btext) + 2
-    emit()
-    return chunks
+    for hi, (idx, level, title) in enumerate(headings):
+        stack: list[str] = []
+        for j in range(hi + 1):
+            hj_idx, hj_level, hj_title = headings[j]
+            if hj_level <= level or j == hi:
+                stack = stack[: hj_level - 1] + [""] * max(0, hj_level - 1 - len(stack)) + [hj_title]
+        breadcrumb = " › ".join(h for h in stack if h)
+
+        end_idx = len(lines)
+        for j in range(hi + 1, len(headings)):
+            next_idx, next_level, _ = headings[j]
+            if next_level <= level:
+                end_idx = next_idx
+                break
+
+        section_text = "\n".join(lines[idx:end_idx]).strip()
+        start_line = body_line + idx
+        end_line = body_line + end_idx - 1 if end_idx > idx else start_line
+        if section_text:
+            sections.append((breadcrumb, level, section_text, start_line, end_line))
+
+    return sections
+
+
+
+
+def chunk_markdown(
+    text: str, max_chars: int = 0, overlap: int = 0
+) -> list[tuple[str, int, str, int, int]]:
+    """Deprecated alias — markdown notes are section-indexed; max_chars/overlap ignored."""
+    del max_chars, overlap
+    return section_markdown(text)
+
+
 
 
 # --------------------------------------------------------------------------- #
@@ -479,6 +456,8 @@ def _ensure_files_columns(db: sqlite3.Connection) -> None:
     cols = {row[1] for row in db.execute("PRAGMA table_info(files)").fetchall()}
     if "frontmatter" not in cols:
         db.execute("ALTER TABLE files ADD COLUMN frontmatter TEXT")
+    if "bytes" not in cols:
+        db.execute("ALTER TABLE files ADD COLUMN bytes INTEGER")
 
 
 def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
@@ -496,6 +475,7 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
         # lazily (NULL until next touch); _vectors_by_content_hash treats a miss as "not
         # reusable" and falls back to re-embedding, so this is safe without a forced rebuild.
         ("embedding", "BLOB"),
+        ("section_bytes", "INTEGER"),
     ):
         if name not in cols:
             db.execute(f"ALTER TABLE chunks ADD COLUMN {name} {ddl}")
@@ -738,6 +718,7 @@ def _insert_pending_chunks(
         rid = start_id + 1 + i
         rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id = row[:8]
         body_hash = row[8] if len(row) > 8 else _content_hash(ctext)
+        section_bytes = row[9] if len(row) > 9 else len(ctext.encode("utf-8"))
         blob = sqlite_vec.serialize_float32(vec)
         chunk_rows.append(
             (
@@ -752,14 +733,15 @@ def _insert_pending_chunks(
                 chunk_id,
                 body_hash,
                 blob,
+                section_bytes,
             )
         )
         vec_rows.append((rid, blob))
         fts_rows.append((rid, ctext))
     db.executemany(
         """INSERT INTO chunks(id, path, ord, heading, text, start_line, end_line, heading_level,
-                               chunk_hash, content_hash, embedding)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                               chunk_hash, content_hash, embedding, section_bytes)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         chunk_rows,
     )
     db.executemany("INSERT INTO vec_chunks(rowid, embedding) VALUES (?,?)", vec_rows)
@@ -1078,11 +1060,22 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
             fm_json = json.dumps(fm, default=str)
             wikilinks: list = []
         else:
-            chunk_iter = chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)
+            chunk_iter = section_markdown(text)
             id_prefix = f"markdown:{rel}"
             fm_json = note_catalog_json(text, rel)
             wikilinks = _extract_wikilinks(text)
         for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(chunk_iter):
+            sec_bytes = len(ctext.encode("utf-8"))
+            if sec_bytes > config.SECTION_WARN_BYTES:
+                import logging
+
+                logging.getLogger("apo.index").warning(
+                    "section %s:%s is %d bytes (> %d)",
+                    rel,
+                    heading or "(preamble)",
+                    sec_bytes,
+                    config.SECTION_WARN_BYTES,
+                )
             chash = _content_hash(ctext)
             chunk_id = compute_chunk_id(
                 id_prefix,
@@ -1091,13 +1084,15 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                 chash,
                 config.MODEL_NAME,
             )
-            pending.append((rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, chash))
+            pending.append(
+                (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, chash, sec_bytes)
+            )
         if wikilinks:
             db.executemany(
                 "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
                 [(rel, tk, ts, ln, tx) for ln, tk, ts, tx in wikilinks],
             )
-        file_stamps.append((rel, st.st_mtime, h, fm_json))
+        file_stamps.append((rel, st.st_mtime, h, fm_json, st.st_size))
 
     if limit is None:
         for rel in list(known):
@@ -1114,7 +1109,7 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
     if pending:
         stats.chunks, dropped = _embed_and_store_pending(db, pending, verbose=verbose)
     stamped = 0
-    for rel, mtime, h, fm_json in file_stamps:
+    for rel, mtime, h, fm_json, file_bytes in file_stamps:
         if rel in dropped:
             # Undo added/changed counts for notes we could not finish indexing.
             if rel in known:
@@ -1123,8 +1118,8 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                 stats.added = max(0, stats.added - 1)
             continue
         db.execute(
-            "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter) VALUES (?,?,?,?)",
-            (rel, mtime, h, fm_json),
+            "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter, bytes) VALUES (?,?,?,?,?)",
+            (rel, mtime, h, fm_json, file_bytes),
         )
         stamped += 1
     if stamped or dropped or work_done or mtime_refreshed:
@@ -1162,6 +1157,8 @@ class Hit:
     end_line: int = 0
     source: str = ""
     mtime: float = 0.0
+    file_bytes: int = 0
+    section_bytes: int = 0
 
 
 def count_chunks() -> int:
@@ -1311,6 +1308,7 @@ class _FilePlan:
     full_path: Path
     mtime: float
     file_hash: str
+    file_bytes: int = 0
     text: str = ""
     pending: list[PendingChunk] = field(default_factory=list)
     frontmatter_json: str | None = None
@@ -1371,8 +1369,17 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         if prev is not None and prev[1] == file_hash:
             db.execute("UPDATE files SET mtime=? WHERE path=?", (st_mtime, rel))
             continue
+        try:
+            file_bytes = full_path.stat().st_size
+        except OSError:
+            file_bytes = len(text.encode("utf-8"))
         plan = _FilePlan(
-            rel=rel, full_path=full_path, mtime=st_mtime, file_hash=file_hash, text=text
+            rel=rel,
+            full_path=full_path,
+            mtime=st_mtime,
+            file_hash=file_hash,
+            file_bytes=file_bytes,
+            text=text,
         )
         from apo_engine.note_format import chunk_yaml_note, is_yaml_note, parse_yaml_document
 
@@ -1383,7 +1390,7 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
             plan.frontmatter_json = json.dumps(fm, default=str)
             plan.wikilinks = []
         else:
-            chunk_iter = chunk_markdown(text, config.MAX_CHARS, config.OVERLAP)
+            chunk_iter = section_markdown(text)
             id_prefix = f"markdown:{plan.rel}"
             plan.frontmatter_json = note_catalog_json(text, rel)
             plan.wikilinks = _extract_wikilinks(text)
@@ -1392,8 +1399,20 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
             chunk_id = compute_chunk_id(
                 id_prefix, start_line, end_line, body_hash, config.MODEL_NAME
             )
+            sec_bytes = len(ctext.encode("utf-8"))
             plan.pending.append(
-                (plan.rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, body_hash)
+                (
+                    plan.rel,
+                    ordi,
+                    heading,
+                    ctext,
+                    start_line,
+                    end_line,
+                    hlevel,
+                    chunk_id,
+                    body_hash,
+                    sec_bytes,
+                )
             )
         plans.append(plan)
 
@@ -1483,8 +1502,8 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         if plan.rel in dropped:
             continue
         db.execute(
-            "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter) VALUES (?,?,?,?)",
-            (plan.rel, plan.mtime, plan.file_hash, plan.frontmatter_json),
+            "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter, bytes) VALUES (?,?,?,?,?)",
+            (plan.rel, plan.mtime, plan.file_hash, plan.frontmatter_json, plan.file_bytes),
         )
         stamped += 1
     if purge_rels or stamped or dropped:
@@ -1640,7 +1659,8 @@ def search(
         placeholders = ",".join("?" * len(ids))
         for row in db.execute(
             f"""SELECT c.id, c.path, c.heading, c.text, c.chunk_hash, c.heading_level,
-                       c.start_line, c.end_line, f.mtime
+                       c.start_line, c.end_line, f.mtime, COALESCE(f.bytes, 0),
+                       COALESCE(c.section_bytes, LENGTH(c.text))
                 FROM chunks c LEFT JOIN files f ON f.path = c.path
                 WHERE c.id IN ({placeholders})""",
             ids,
@@ -1653,7 +1673,18 @@ def search(
         row = by_id.get(rid)
         if row is None:
             continue
-        path, heading, text, chunk_hash, hlevel, start_line, end_line, mtime = row
+        (
+            path,
+            heading,
+            text,
+            chunk_hash,
+            hlevel,
+            start_line,
+            end_line,
+            mtime,
+            file_bytes,
+            section_bytes,
+        ) = row
         if folder_prefix and not path.startswith(folder_prefix + "/"):
             continue
         if _path_excluded(path, excl_prefixes, excl_globs):
@@ -1672,6 +1703,8 @@ def search(
                 end_line=int(end_line or 1),
                 source=str(vaults.notes_root() / path),
                 mtime=float(mtime or 0.0),
+                file_bytes=int(file_bytes or 0),
+                section_bytes=int(section_bytes or 0),
             )
         )
         full_texts.append(text)

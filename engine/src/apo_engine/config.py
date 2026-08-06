@@ -31,9 +31,23 @@ MODEL_NAME: str = os.environ.get("APO_MODEL", _DEFAULT_MODEL.get(EMBED_BACKEND, 
 # Ollama endpoint (required when EMBED_BACKEND=ollama).
 OLLAMA_URL: str = os.environ.get("APO_OLLAMA_URL", "http://localhost:11434").rstrip("/")
 
-# Chunking knobs.
-MAX_CHARS: int = int(os.environ.get("APO_MAX_CHARS", "1200"))
-OVERLAP: int = int(os.environ.get("APO_OVERLAP", "150"))
+# YAML catalog chunking (Markdown is section-indexed — see section_markdown).
+YAML_MAX_CHARS: int = int(
+    os.environ.get("APO_YAML_MAX_CHARS", os.environ.get("APO_MAX_CHARS", "1200"))
+)
+YAML_OVERLAP: int = int(
+    os.environ.get("APO_YAML_OVERLAP", os.environ.get("APO_OVERLAP", "150"))
+)
+# Deprecated aliases — markdown indexing ignores these; kept for test/back-compat imports.
+MAX_CHARS: int = YAML_MAX_CHARS
+OVERLAP: int = YAML_OVERLAP
+
+# Section search / expand size hints (bytes unless noted).
+FILE_TIP_BYTES: int = int(os.environ.get("APO_FILE_TIP_BYTES", "8192"))
+SECTION_PREVIEW_BYTES: int = int(os.environ.get("APO_SECTION_PREVIEW_BYTES", "8192"))
+SECTION_PREVIEW_CHARS: int = int(os.environ.get("APO_SECTION_PREVIEW_CHARS", "2048"))
+SECTION_WARN_BYTES: int = int(os.environ.get("APO_SECTION_WARN_BYTES", "32768"))
+PREAMBLE_WARN_BYTES: int = int(os.environ.get("APO_PREAMBLE_WARN_BYTES", "4096"))
 
 # Ignore-file (globs relative to NOTES_ROOT).
 IGNORE_FILE: Path = _path("APO_IGNORE", str(_ENGINE_ROOT / ".indexignore"))

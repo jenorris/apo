@@ -97,6 +97,6 @@ inspect:
     # Needs Node (npx) + ripgrep (rg). Prefer `just tool-list` if those are missing.
     npx -y @modelcontextprotocol/inspector --cli {{mcp_py}} {{mcp_srv}} --env APO_NOTES_ROOT=${APO_NOTES_ROOT} --method tools/list | rg '"name"' | wc -l
 
-# Pure-Python MCP tool count (no Node). Expect 14 tools.
+# Pure-Python MCP tool count (no Node). Expect 15 tools.
 tool-list:
     {{mcp_py}} -c 'import asyncio; from importlib.util import spec_from_file_location, module_from_spec; from pathlib import Path; p=Path("engine/mcp/server.py"); s=spec_from_file_location("apo_mcp_server", p); m=module_from_spec(s); s.loader.exec_module(m); tools=asyncio.run(m.mcp.list_tools()); print(len(tools)); print("\n".join(sorted(t.name for t in tools)))'

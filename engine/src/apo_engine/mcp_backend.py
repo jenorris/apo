@@ -33,18 +33,15 @@ def shape_search_hits(
             {
                 "content": h.text,
                 "score": round(float(h.score), 4),
-                # ``Hit.path`` is already vault-relative; skip resolve/display.
                 "source": h.path,
                 "chunk_hash": h.chunk_hash,
                 "heading": h.heading,
                 "heading_level": h.heading_level,
-                "start_line": h.start_line,
-                "end_line": h.end_line,
                 "modified": modified,
-                # Float epoch for expected_mtime on follow-up writes (ISO modified stays).
                 "mtime": float(mtime) if mtime else None,
-                # Region precondition for scoped follow-up writes.
                 "content_hash": _content_hash(h.text) if h.text else None,
+                "file_bytes": int(getattr(h, "file_bytes", 0) or 0),
+                "section_bytes": int(getattr(h, "section_bytes", 0) or 0),
             }
         )
     return rows

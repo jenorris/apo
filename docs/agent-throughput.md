@@ -7,7 +7,7 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 1. **Catalog / status / `okf_type`** → `filter_notes` + `fields=` (+ `folder=`) — works for MD frontmatter **and** `.yaml` / `.yml` catalog notes
 2. **Known path** → `read_note` / `append_note` / `patch_note` / `write_note` (skip search)
 3. **Meaning recall** → `search_notes` with **`folder=`** when PARA bucket is known
-4. **Need more than a snippet** → `expand_chunk(chunk_hash)` (not full-file `read_note`)
+4. **Need more than a snippet** → `expand_section(chunk_hash)` (not full-file `read_note`)
 5. **Append/edit from a hit** → `append_note(chunk_hash=…)` (path optional) or `patch_note` op with `chunk_hash` — do **not** `read_note` only to obtain an anchor
 6. **Dual-write** → parallel tools in one turn, same `vault=`
 7. **Multi-path patch** → `patch_note(items=…)` (not session log)
@@ -28,7 +28,7 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 ## Fast path (cheat card)
 
 ```
-filter(+fields) → search(+folder) → expand_chunk → append(chunk_hash)  # path optional (MD)
+filter(+fields) → search(+folder) → expand_section → append(chunk_hash)  # path optional (MD)
                                               ↘ patch(set_field|…, chunk_hash|heading) + expected_mtime
 YAML atoms: filter(+fields) → patch(set_field dotted path) + expected_mtime
 ```
@@ -38,9 +38,11 @@ YAML atoms: filter(+fields) → patch(set_field dotted path) + expected_mtime
 Successful responses may include a non-fatal **`tip`** field:
 
 - `search_notes` without `folder=` → tip to pass `folder=` (includes top-level dir names when known)
-- Follow-up write after a recent `read_note` / `expand_chunk` / write to the same path without `expected_mtime` → tip with the literal `expected_mtime=<n>` value when known
+- Follow-up write after a recent `read_note` / `expand_section` / write to the same path without `expected_mtime` → tip with the literal `expected_mtime=<n>` value when known
 - Stale `chunk_hash` with path+heading fallback → tip to re-search for a fresh hash
 - `append_note(content=…)` / `write_note(text=…)` → tip that the alias was used; prefer canonical
+
+Search hits include **`file_bytes`** and **`section_bytes`** — check before expand; never bare `read_note(heading=)` after search (duplicate headings). Anchor via **`chunk_hash`** only.
 
 Do not treat `tip` as failure; `warning` remains for watcher / path issues. Search hits include float **`mtime`** beside ISO `modified` for threading into writes.
 
@@ -60,7 +62,7 @@ Targets (desk, rolling 7d, primary collection):
 | `filter_notes` calls vs `search_notes` | rising share for status/catalog work |
 | `expected_mtime_set` / write calls | rising; dual-writes should thread mtime |
 | `patch_note` ValidationError rate | near zero |
-| `expand_chunk` | > 0 when search→section is common |
+| `expand_section` | > 0 when search→section is common |
 
 Operator rollups: **`apo_admin(action=invoke, name=tool_stats, …)`** or CLI `just tool-stats`. Session agents: **`session_stats`**. Disable recording: `APO_TOOL_METRICS=0`. Storage: `~/.apo/metrics.duckdb`. Paths when vault ships [telemetry contract](docs/contracts/telemetry.md).
 

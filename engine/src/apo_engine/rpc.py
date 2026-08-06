@@ -154,13 +154,11 @@ def _expand(body: dict[str, Any]) -> dict[str, Any]:
     chunk_hash = body.get("chunk_hash")
     if not isinstance(chunk_hash, str) or not chunk_hash.strip():
         return {"ok": False, "error": "bad_request", "message": "`chunk_hash` string required"}
-    scope = str(body.get("scope") or "section")
-    if scope not in ("section", "chunk"):
-        return {"ok": False, "error": "bad_request", "message": "`scope` must be section|chunk"}
-    return ops.expand_chunk(
+    force = bool(body.get("force"))
+    return ops.expand_section(
         chunk_hash,
         vault=str(body.get("vault") or ""),
-        scope=scope,  # type: ignore[arg-type]
+        force=force,
     )
 
 
