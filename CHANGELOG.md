@@ -4,16 +4,43 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-07
+
+MCP surface consolidation — **10 top-level tools**, **5 admin capabilities**. **Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads.
+
 ### Added
 
-- **`telemetry` MCP tool** — agent actions `status|session|active|efficiency`; operator rollups `collection|workbench|events` via **`apo_admin` → `telemetry`**. RPC `POST /v1/telemetry` with `surface=agent|admin`. Pluggable metrics backend (`embedded` DuckDB default, optional `local` desk-metrics HTTP).
-- **`metrics_backend`** — `EmbeddedDuckDBBackend` + `LocalDeskMetricsBackend`; env `APO_METRICS_BACKEND`.
-- **Telemetry contract v0.2** — `store.backend`, `efficiency` KPI thresholds, `rpc_telemetry: true`.
+- **`read_note(chunk_hash=, force=, fields=)`** — absorbs `expand_section` / `expand_chunk`; one search→read anchor end-to-end.
+- **`search_notes(folders=[])`** — multi-folder fan-out merge (XOR with `folder=`).
+- **`vault(action=stats, days=)`** — habit KPI rollups (`folder_scoped_pct`, chunk-read ratio, validation tips) from embedded metrics.
+- **`patch_note` place op** — `{op:place, src, dst, overwrite?, fields?}` replaces top-level `place_note`.
+- **`reindex(mode=flush|rebuild)`** — merges `reindex_deferred`; legacy admin handler `reindex_deferred` one release.
 
 ### Changed
 
-- **Lean MCP surface** — removed top-level `session_stats` and `active_session`; removed admin `tool_stats` (use `apo_admin` → `telemetry`). Top-level count **14** (`telemetry` replaces two session tools).
-- **`POST /v1/session_stats`** — deprecated; delegates to `/v1/telemetry` `action=session`.
+- **Top-level MCP count: 10** — removed `telemetry`, `expand_section`, `expand_chunk`, `place_note`.
+- **Admin capabilities: 5** — removed `telemetry` rollup; operator observability → OTel + Jaeger (not Apo MCP).
+- **MCP schemas strip alias params** — no `text`/`body`/`content`/`top_k`/`filters` on MCP (RPC keeps aliases one release).
+- **`POST /v1/expand`** — delegates to `read_note(chunk_hash=)`; **`POST /v1/place`** → patch place op dispatch.
+- **`POST /v1/telemetry`** / **`POST /v1/session_stats`** — deprecated; habits via **`POST /v1/vault` `action=stats`**.
+- **Retired `just tool-stats` CLI** and **`LocalDeskMetricsBackend`** (`store.backend=local` maps to embedded).
+
+### Removed
+
+- Top-level MCP **`telemetry`** — use `vault(action=stats)` for habits; session traces via OTel hooks + Jaeger.
+- MCP **`expand_section`**, **`expand_chunk`**, **`place_note`** — see Added migrations above.
+
+### Migration cheatsheet
+
+| Before | After |
+|--------|-------|
+| `expand_section(chunk_hash)` | `read_note(chunk_hash=…)` |
+| `expand_chunk(…)` | `read_note(chunk_hash=…)` |
+| `place_note(src, dst)` | `patch_note(ops=[{op:place, src, dst}])` |
+| `search_notes` × N folders | `search_notes(folders=[…])` |
+| `telemetry(action=efficiency)` | `vault(action=stats)` |
+| `apo_admin` → `reindex_deferred` | `apo_admin` → `reindex(mode=flush)` |
+| `just tool-stats` | `vault(action=stats)` or Jaeger UI |
 
 ## [0.4.0] — 2026-08-06
 

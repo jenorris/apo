@@ -1,4 +1,4 @@
-"""Search hit metadata and expand_section preview policy."""
+"""Search hit metadata and read_note(chunk_hash=) preview policy."""
 
 from __future__ import annotations
 
@@ -84,16 +84,16 @@ class SearchSectionMetadataTest(unittest.TestCase):
         out = ops.search("Big", limit=3, hybrid=False)
         self.assertTrue(out["ok"], out)
         tip = out.get("tip") or ""
-        self.assertIn("expand_section", tip)
+        self.assertIn("read_note(chunk_hash=)", tip)
 
-    def test_expand_section_preview(self):
-        out = ops.expand_section(self._big_hash())
+    def test_read_note_chunk_preview(self):
+        out = ops.read_note("", chunk_hash=self._big_hash())
         self.assertTrue(out["ok"], out)
         self.assertTrue(out.get("preview_truncated"))
         self.assertLess(len(out["content"]), 9000)
 
-    def test_expand_section_force_full(self):
-        out = ops.expand_section(self._big_hash(), force=True)
+    def test_read_note_chunk_force_full(self):
+        out = ops.read_note("", chunk_hash=self._big_hash(), force=True)
         self.assertTrue(out["ok"], out)
         self.assertNotIn("preview_truncated", out)
         self.assertGreater(len(out["content"]), 8000)
@@ -104,8 +104,8 @@ class SearchSectionMetadataTest(unittest.TestCase):
         out2 = ops.search("two", limit=5)
         two_hit = next(r for r in out2["results"] if r["source"] == "dup.md")
         self.assertNotEqual(one_hit["chunk_hash"], two_hit["chunk_hash"])
-        self.assertIn("one", ops.expand_section(one_hit["chunk_hash"], force=True)["content"])
-        self.assertIn("two", ops.expand_section(two_hit["chunk_hash"], force=True)["content"])
+        self.assertIn("one", ops.read_note("", chunk_hash=one_hit["chunk_hash"], force=True)["content"])
+        self.assertIn("two", ops.read_note("", chunk_hash=two_hit["chunk_hash"], force=True)["content"])
 
 
 if __name__ == "__main__":

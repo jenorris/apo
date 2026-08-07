@@ -32,13 +32,16 @@ class ToolMetricsMigrationTest(unittest.TestCase):
             )
             db_path = runtime / "metrics.duckdb"
             with mock.patch.object(tool_metrics, "DEFERRED_DIR", runtime):
+                events = tool_metrics.read_events("migrate", path=db_path)
+                self.assertFalse(jsonl.is_file())
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["tool"], "search_notes")
                 tool_metrics.record_call(
                     collection="migrate",
                     tool="append_note",
                     ok=True,
                     path=db_path,
                 )
-                self.assertFalse(jsonl.is_file())
                 stats = tool_metrics.tool_stats("migrate", days=None, path=db_path)
                 self.assertEqual(stats["calls"], 2)
                 by_tool = {t["tool"]: t for t in stats["by_tool"]}

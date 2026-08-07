@@ -1,4 +1,4 @@
-"""Command-line interface: index | search | stats | tool-stats | watch | desk-project | serve."""
+"""Command-line interface: index | search | stats | watch | desk-project | serve."""
 from __future__ import annotations
 
 import argparse
@@ -6,7 +6,7 @@ import json
 import os
 import sys
 
-from . import core, tool_metrics, vaults
+from . import core, vaults
 from .rpc import run_rpc
 from .watch import run_watch
 
@@ -81,19 +81,6 @@ def _cmd_stats(args) -> int:
     return 0
 
 
-def _cmd_tool_stats(args) -> int:
-    """Roll up MCP tool-use metrics (privacy-safe; no note bodies)."""
-    days = None if args.all else args.days
-    coll = (args.collection or "").strip()
-    if not coll:
-        _cm, b = _bind_cli_vault(getattr(args, "vault", None))
-        with _cm:
-            coll = b.collection
-    data = tool_metrics.tool_stats(coll, days=days, tool=args.tool or None)
-    print(json.dumps(data, indent=2))
-    return 0
-
-
 def _cmd_watch(args) -> int:
     run_watch(interval=args.interval, use_events=not args.poll_only, verbose=True)
     return 0
@@ -154,21 +141,6 @@ def main(argv: list[str] | None = None) -> int:
     pt = sub.add_parser("stats", help="index stats")
     pt.add_argument("--vault", default="", help="vault name from APO_VAULTS")
     pt.set_defaults(func=_cmd_stats)
-
-    pts = sub.add_parser(
-        "tool-stats",
-        help="MCP tool-use rollups from ~/.apo/metrics.duckdb",
-    )
-    pts.add_argument("--days", type=int, default=7, help="rollup window (default 7)")
-    pts.add_argument("--all", action="store_true", help="include all events (ignore --days)")
-    pts.add_argument("--tool", default="", help="optional tool name filter")
-    pts.add_argument("--vault", default="", help="vault name (resolves collection)")
-    pts.add_argument(
-        "--collection",
-        default="",
-        help="metrics collection id (default: vault collection)",
-    )
-    pts.set_defaults(func=_cmd_tool_stats)
 
     pw = sub.add_parser("watch", help="watch vault + consume deferred queues (sole index writer)")
     pw.add_argument("--interval", type=float, default=None, help="poll interval seconds (default from WATCH_INTERVAL)")

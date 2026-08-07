@@ -95,53 +95,53 @@ class PatchNoteSchemaTest(unittest.TestCase):
         by_name = {t.name: t for t in tools}
 
         self.assertIn("prefer", (by_name["append_note"].description or "").lower())
-        self.assertIn("place_note", by_name)
-        self.assertIn("move", (by_name["place_note"].description or "").lower())
+        self.assertIn("place", (by_name["patch_note"].description or "").lower())
+        self.assertNotIn("place_note", by_name)
         self.assertNotIn("delete_note", by_name)
         self.assertNotIn("move_note", by_name)
         self.assertNotIn("send_note", by_name)
+        self.assertNotIn("telemetry", by_name)
+        self.assertNotIn("expand_section", by_name)
 
         write_params = _tool_params(by_name["write_note"])
         self.assertNotIn("index", write_params)
         self.assertNotIn("append", write_params)
         self.assertIn("content", write_params)
-        self.assertIn("text", write_params)
-        self.assertIn("Alias", write_params["text"].get("description") or "")
-        self.assertIn("mtime", (write_params["expected_mtime"].get("description") or "").lower())
+        self.assertNotIn("text", write_params)
+        self.assertNotIn("body", write_params)
         write_desc = (by_name["write_note"].description or "").lower()
         self.assertIn("content", write_desc)
-        self.assertIn("text", write_desc)
 
         append_params = _tool_params(by_name["append_note"])
         self.assertIn("text", append_params)
-        self.assertIn("content", append_params)
-        self.assertIn("Alias", append_params["content"].get("description") or "")
+        self.assertNotIn("content", append_params)
+        self.assertNotIn("body", append_params)
         append_desc = (by_name["append_note"].description or "").lower()
         self.assertIn("text", append_desc)
-        self.assertIn("content", append_desc)
 
-        place_params = _tool_params(by_name["place_note"])
-        self.assertIn("expected_mtime", place_params)
-        self.assertIn("fields", place_params)
-        self.assertNotIn("index", place_params)
+        read_params = _tool_params(by_name["read_note"])
+        self.assertIn("chunk_hash", read_params)
+        self.assertIn("force", read_params)
 
         search_params = _tool_params(by_name["search_notes"])
-        self.assertIn("Prefer", search_params["limit"].get("description") or "")
-        self.assertIn("Alias", search_params["top_k"].get("description") or "")
+        self.assertIn("limit", search_params)
+        self.assertIn("folders", search_params)
+        self.assertNotIn("top_k", search_params)
 
         filter_params = _tool_params(by_name["filter_notes"])
-        self.assertIn("canonical", (filter_params["where"].get("description") or "").lower())
-        self.assertIn("Alias", filter_params["filters"].get("description") or "")
+        self.assertIn("where", filter_params)
+        self.assertNotIn("filters", filter_params)
         self.assertIn("fields", filter_params)
+
+        vault_params = _tool_params(by_name["vault"])
+        self.assertIn("action", vault_params)
 
         instr = getattr(mod.mcp, "instructions", None) or ""
         self.assertIn("append_note", instr)
-        self.assertIn("note://", instr)
+        self.assertIn("chunk_hash=", instr)
         self.assertIn("apo_admin", instr)
-        self.assertIn("fields=", instr)
-        self.assertIn("parallel", instr.lower())
-        self.assertIn("history", instr)
-        self.assertNotIn("recent_activity", instr)
+        self.assertNotIn("expand_section", instr)
+        self.assertNotIn("telemetry", instr.lower())
 
     def test_ops_items_are_typed_oneof(self):
         tool = _patch_note_tool()
@@ -169,6 +169,7 @@ class PatchNoteSchemaTest(unittest.TestCase):
             "append",
             "prepend",
             "append_eof",
+            "place",
         }
         self.assertTrue(
             expected <= op_names,

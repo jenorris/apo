@@ -259,7 +259,7 @@ def _attach_search_size_tips(out: dict[str, Any]) -> dict[str, Any]:
     tips: list[str] = []
     if any(int(r.get("file_bytes") or 0) > config.FILE_TIP_BYTES for r in results):
         tips.append(
-            "large note(s) in results — use expand_section(chunk_hash), not full read_note"
+            "large note(s) in results — use read_note(chunk_hash=), not full read_note"
         )
     if any(int(r.get("section_bytes") or 0) > config.SECTION_PREVIEW_BYTES for r in results):
         tips.append(
@@ -642,6 +642,7 @@ def search(
     *,
     top_k: int | None = None,
     folder: str = "",
+    folders: list[str] | None = None,
     vault: str = "",
     vaults: list[str] | None = None,
     snippet_chars: int = 240,
@@ -656,63 +657,85 @@ def search(
     k, err = resolve_top_k(top_k, limit)
     if err:
         return _err(error="bad_request", message=err)
-    folder_clean = folder.replace("\\", "/").strip("/")
+    if folder.strip() and folders:
+        return _err(
+            error="bad_request",
+            message="pass folder= or folders=[], not both",
+        )
+    folder_list: list[str] = []
+    if folders:
+        folder_list = [f.replace("\\", "/").strip("/") for f in folders if isinstance(f, str) and f.strip()]
+    elif folder.strip():
+        folder_list = [folder.replace("\\", "/").strip("/")]
     for b in targets:
-        if folder_clean:
+        for folder_clean in folder_list:
             try:
                 _safe_resolve(b.resolved().root, folder_clean)
             except ValueError as e:
                 return _err(error="bad_path", message=str(e))
-    fanout = len(targets) > 1
+    if not folder_list:
+        folder_list = [""]
+    fanout_vaults = len(targets) > 1
+    fanout_folders = len(folder_list) > 1
     all_rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     any_reranked = False
     default_exclude: list[str] | None = None
     default_exclude_by_vault: dict[str, list[str]] = {}
     failed = 0
+    total_attempts = len(targets) * len(folder_list)
     for b in targets:
-        try:
-            rows, w, reranked, applied_default = _search_one_vault(
-                query,
-                b,
-                k=k,
-                folder_clean=folder_clean,
-                snippet_chars=snippet_chars,
-                exclude=exclude,
-                hybrid=hybrid,
-                stamp_vault=fanout,
-            )
-            if applied_default:
-                if fanout:
-                    default_exclude_by_vault[b.name] = applied_default
-                else:
-                    default_exclude = applied_default
-            all_rows.extend(rows)
-            warnings.extend(w)
-            any_reranked = any_reranked or reranked
-        except SystemExit as e:
-            msg = str(e) or "index unavailable"
-            if fanout:
-                failed += 1
-                warnings.append(f"vault {b.name}: search_failed ({msg})")
-                continue
-            return _err(error="search_failed", message=msg)
-        except Exception as e:
-            if fanout:
-                failed += 1
-                warnings.append(f"vault {b.name}: search_failed ({e})")
-                continue
-            return _err(error="search_failed", message=str(e))
+        for folder_clean in folder_list:
+            try:
+                rows, w, reranked, applied_default = _search_one_vault(
+                    query,
+                    b,
+                    k=k,
+                    folder_clean=folder_clean,
+                    snippet_chars=snippet_chars,
+                    exclude=exclude,
+                    hybrid=hybrid,
+                    stamp_vault=fanout_vaults or fanout_folders,
+                )
+                if applied_default:
+                    if fanout_vaults:
+                        default_exclude_by_vault[b.name] = applied_default
+                    else:
+                        default_exclude = applied_default
+                all_rows.extend(rows)
+                warnings.extend(w)
+                any_reranked = any_reranked or reranked
+            except SystemExit as e:
+                msg = str(e) or "index unavailable"
+                if total_attempts > 1:
+                    failed += 1
+                    prefix = f"vault {b.name}" if fanout_vaults else ""
+                    if folder_clean:
+                        prefix = f"{prefix} folder {folder_clean}".strip()
+                    warnings.append(f"{prefix}: search_failed ({msg})".strip())
+                    continue
+                return _err(error="search_failed", message=msg)
+            except Exception as e:
+                if total_attempts > 1:
+                    failed += 1
+                    prefix = f"vault {b.name}" if fanout_vaults else ""
+                    if folder_clean:
+                        prefix = f"{prefix} folder {folder_clean}".strip()
+                    warnings.append(f"{prefix}: search_failed ({e})".strip())
+                    continue
+                return _err(error="search_failed", message=str(e))
 
-    if fanout and failed == len(targets):
+    if total_attempts > 1 and failed == total_attempts:
         return _err(
             error="search_failed",
-            message="all vaults failed: " + "; ".join(warnings) if warnings else "all vaults failed",
+            message="all searches failed: " + "; ".join(warnings) if warnings else "all searches failed",
         )
 
-    if fanout:
+    if total_attempts > 1:
         all_rows.sort(key=lambda r: float(r.get("score") or 0.0), reverse=True)
         all_rows = all_rows[:k]
+
+    if fanout_vaults:
         out: dict[str, Any] = {
             "ok": True,
             "results": all_rows,
@@ -722,6 +745,9 @@ def search(
     else:
         out = {"ok": True, "results": all_rows, "vault": targets[0].name}
         tip_root = targets[0].resolved().root
+    if fanout_folders:
+        out["folders"] = [f for f in folder_list if f]
+    folder_tip = folder_list[0] if len(folder_list) == 1 else ""
     if default_exclude:
         out["default_exclude"] = default_exclude
     if default_exclude_by_vault:
@@ -730,34 +756,181 @@ def search(
         out["reranked"] = True
     if warnings:
         out["warning"] = "; ".join(warnings)
-    return _attach_search_size_tips(_attach_folder_tip(out, folder_clean, root=tip_root))
+    return _attach_search_size_tips(_attach_folder_tip(out, folder_tip, root=tip_root))
+
+
+def _apply_read_frontmatter(
+    out: dict[str, Any],
+    *,
+    raw_fm: dict[str, Any] | None,
+    fields: list[str] | None,
+    path_mode: bool,
+) -> None:
+    """Attach frontmatter per path/chunk read policy."""
+    if fields is not None:
+        if fields:
+            out["frontmatter"] = project_frontmatter(raw_fm, fields)
+        return
+    if path_mode:
+        out["frontmatter"] = raw_fm
+
+
+def _read_from_chunk(
+    chunk_hash: str,
+    *,
+    vault: str = "",
+    force: bool = False,
+    path_guard: str | None = None,
+    fields: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return an indexed markdown section by search hit chunk_hash."""
+    try:
+        b = _binding(vault)
+    except OpsError as e:
+        return _err(error=e.code, message=e.message)
+
+    if fields is not None and not isinstance(fields, list):
+        return _err(error="bad_request", message="fields must be a list of strings")
+
+    with vaults.bind(b):
+        chunk = core.lookup_chunk(chunk_hash, include_text=True)
+    if not chunk:
+        return _err(
+            error="anchor_not_found",
+            message=f"chunk_hash {chunk_hash!r} not found in index",
+        )
+
+    rel = (chunk.get("path") or "").replace("\\", "/")
+    if not rel:
+        return _err(error="anchor_not_found", message="chunk has no path")
+    if path_guard and path_guard.replace("\\", "/").strip("/") != rel:
+        return _err(
+            error="bad_request",
+            message=f"path {path_guard!r} does not match chunk path {rel!r}",
+        )
+
+    try:
+        full = _safe_resolve(b.resolved().root, rel)
+    except ValueError as e:
+        return _err(error="anchor_not_found", message=str(e))
+
+    body = chunk.get("content") or ""
+    hlevel = int(chunk.get("heading_level") or 0)
+    heading_raw = chunk.get("heading") or ""
+    heading_label = f"{'#' * hlevel} {heading_raw.split(' › ')[-1]}".strip() if heading_raw else ""
+    if hlevel > 0 and heading_raw and not heading_label.startswith("#"):
+        title = heading_raw.split(" › ")[-1]
+        heading_label = f"{'#' * hlevel} {title}".strip()
+
+    section_bytes = len(body.encode("utf-8"))
+    preview_limit = config.SECTION_PREVIEW_BYTES
+    preview_chars = config.SECTION_PREVIEW_CHARS
+    truncated = section_bytes > preview_limit and not force
+    display = body[:preview_chars] if truncated else body
+
+    out_sec: dict[str, Any] = {
+        "ok": True,
+        "path": rel,
+        "chunk_hash": chunk_hash,
+        "heading": heading_label,
+        "content": display,
+        "section_bytes": section_bytes,
+        "scope": "section",
+        "vault": b.name,
+    }
+    if truncated:
+        out_sec["preview_truncated"] = True
+        out_sec["tip"] = (
+            f"section is {section_bytes} bytes — add ### subheadings or "
+            "read_note(path, heading=, max_chars=) for a sub-range; pass force=true for full body"
+        )
+
+    file_text = ""
+    if full.exists():
+        file_text = full.read_text(encoding="utf-8")
+        file_mtime = _mtime(full)
+        out_sec["mtime"] = file_mtime
+        lines = normalize_lines(file_text)
+        section = section_from_chunk(
+            lines,
+            int(chunk.get("start_line", 1)),
+            hlevel,
+        )
+        attach_region_hashes(out_sec, file_text, section=section)
+        _record_path_touch(
+            b.name, rel, float(file_mtime), file_text, heading=heading_label or None
+        )
+        if fields is not None:
+            raw_fm = core.note_frontmatter(file_text, rel)
+            _apply_read_frontmatter(out_sec, raw_fm=raw_fm, fields=fields, path_mode=False)
+    else:
+        out_sec["content_hash"] = region_content_hash(body) if body else ""
+
+    return out_sec
 
 
 def read_note(
-    path: str,
+    path: str = "",
     *,
+    chunk_hash: str | None = None,
     heading: str | None = None,
     vault: str = "",
     start_line: int | None = None,
     end_line: int | None = None,
     max_chars: int | None = None,
     raw: bool = False,
+    force: bool = False,
+    fields: list[str] | None = None,
 ) -> dict[str, Any]:
+    path_s = (path or "").strip()
+    ch = (chunk_hash or "").strip()
+    if path_s and ch:
+        return _err(
+            error="bad_request",
+            message="pass path= or chunk_hash= (section anchor from search_notes), not both",
+        )
+    if not path_s and not ch:
+        return _err(
+            error="bad_request",
+            message="path= or chunk_hash= required",
+        )
+    if ch:
+        if heading is not None:
+            return _err(
+                error="bad_request",
+                message="heading= is path-mode only; use chunk_hash= from search_notes",
+            )
+        if start_line is not None or end_line is not None or max_chars is not None or raw:
+            return _err(
+                error="bad_request",
+                message="line range / raw / max_chars are path-mode only; chunk reads use force=",
+            )
+        return _read_from_chunk(
+            ch,
+            vault=vault,
+            force=force,
+            path_guard=path_s or None,
+            fields=fields,
+        )
+
+    if fields is not None and not isinstance(fields, list):
+        return _err(error="bad_request", message="fields must be a list of strings")
+
     try:
         b = _binding(vault)
         root = b.resolved().root
-        full = _safe_resolve(root, path)
+        full = _safe_resolve(root, path_s)
     except OpsError as e:
-        return _err(path=path, error=e.code, message=e.message)
+        return _err(path=path_s, error=e.code, message=e.message)
     except ValueError as e:
-        return _err(path=path, error="bad_path", message=str(e))
+        return _err(path=path_s, error="bad_path", message=str(e))
     if not full.exists():
-        return _err(path=path, error="not_found", message=f"note not found: {path}")
+        return _err(path=path_s, error="not_found", message=f"note not found: {path_s}")
 
     text = full.read_text(encoding="utf-8")
     out: dict[str, Any] = {
         "ok": True,
-        "path": path,
+        "path": path_s,
         "mtime": full.stat().st_mtime,
         "size": full.stat().st_size,
         "vault": b.name,
@@ -765,7 +938,7 @@ def read_note(
     try:
         shaped = shape_note_read(
             text,
-            path=path,
+            path=path_s,
             heading=heading,
             start_line=start_line,
             end_line=end_line,
@@ -774,14 +947,19 @@ def read_note(
         )
     except PatchError as e:
         return _err(
-            path=path,
+            path=path_s,
             error=e.code,
             message=e.message,
             suggestions=e.suggestions,
         )
     except ValueError as e:
-        return _err(path=path, error="bad_request", message=str(e))
-    out["frontmatter"] = shaped["frontmatter"]
+        return _err(path=path_s, error="bad_request", message=str(e))
+    _apply_read_frontmatter(
+        out,
+        raw_fm=shaped["frontmatter"],
+        fields=fields,
+        path_mode=True,
+    )
     if shaped["heading"]:
         out["heading"] = shaped["heading"]
     out["content"] = shaped["content"]
@@ -790,9 +968,19 @@ def read_note(
     out["truncated"] = shaped["truncated"]
     attach_region_hashes(out, text, heading=heading)
     _record_path_touch(
-        b.name, path, float(out["mtime"]), text, heading=heading
+        b.name, path_s, float(out["mtime"]), text, heading=heading
     )
     return out
+
+
+def expand_section(
+    chunk_hash: str,
+    *,
+    vault: str = "",
+    force: bool = False,
+) -> dict[str, Any]:
+    """Deprecated internal/RPC alias — prefer read_note(chunk_hash=)."""
+    return _read_from_chunk(chunk_hash, vault=vault, force=force)
 
 
 def filter_notes(
@@ -853,96 +1041,15 @@ def filter_notes(
     return out
 
 
-def expand_section(
-    chunk_hash: str,
-    *,
-    vault: str = "",
-    force: bool = False,
-) -> dict[str, Any]:
-    """Return a indexed markdown section by search hit chunk_hash."""
-    try:
-        b = _binding(vault)
-    except OpsError as e:
-        return _err(error=e.code, message=e.message)
-
-    with vaults.bind(b):
-        chunk = core.lookup_chunk(chunk_hash, include_text=True)
-    if not chunk:
-        return _err(
-            error="anchor_not_found",
-            message=f"chunk_hash {chunk_hash!r} not found in index",
-        )
-
-    rel = (chunk.get("path") or "").replace("\\", "/")
-    if not rel:
-        return _err(error="anchor_not_found", message="chunk has no path")
-
-    try:
-        full = _safe_resolve(b.resolved().root, rel)
-    except ValueError as e:
-        return _err(error="anchor_not_found", message=str(e))
-
-    body = chunk.get("content") or ""
-    hlevel = int(chunk.get("heading_level") or 0)
-    heading_raw = chunk.get("heading") or ""
-    heading_label = f"{'#' * hlevel} {heading_raw.split(' › ')[-1]}".strip() if heading_raw else ""
-    if hlevel > 0 and heading_raw and not heading_label.startswith("#"):
-        title = heading_raw.split(" › ")[-1]
-        heading_label = f"{'#' * hlevel} {title}".strip()
-
-    section_bytes = len(body.encode("utf-8"))
-    preview_limit = config.SECTION_PREVIEW_BYTES
-    preview_chars = config.SECTION_PREVIEW_CHARS
-    truncated = section_bytes > preview_limit and not force
-    display = body[:preview_chars] if truncated else body
-
-    out_sec: dict[str, Any] = {
-        "ok": True,
-        "path": rel,
-        "heading": heading_label,
-        "content": display,
-        "section_bytes": section_bytes,
-        "scope": "section",
-        "vault": b.name,
-    }
-    if truncated:
-        out_sec["preview_truncated"] = True
-        out_sec["tip"] = (
-            f"section is {section_bytes} bytes — add ### subheadings or "
-            "read_note(path, heading=, max_chars=) for a sub-range; pass force=true to expand full body"
-        )
-
-    if full.exists():
-        file_text = full.read_text(encoding="utf-8")
-        file_mtime = _mtime(full)
-        out_sec["mtime"] = file_mtime
-        lines = normalize_lines(file_text)
-        section = section_from_chunk(
-            lines,
-            int(chunk.get("start_line", 1)),
-            hlevel,
-        )
-        attach_region_hashes(out_sec, file_text, section=section)
-        _record_path_touch(
-            b.name, rel, float(file_mtime), file_text, heading=heading_label or None
-        )
-    else:
-        out_sec["content_hash"] = region_content_hash(body) if body else ""
-
-    return out_sec
-
-
 def expand_chunk(
     chunk_hash: str,
     *,
     vault: str = "",
     scope: Literal["section", "chunk"] = "section",
 ) -> dict[str, Any]:
-    """Deprecated alias — prefer expand_section(chunk_hash=)."""
+    """Deprecated alias — prefer read_note(chunk_hash=)."""
     del scope
-    return expand_section(chunk_hash, vault=vault)
-
-
+    return _read_from_chunk(chunk_hash, vault=vault)
 
 
 def backlinks(path: str, *, limit: int = 100, vault: str = "") -> dict[str, Any]:
@@ -1618,6 +1725,50 @@ def patch_note(
 _PATCH_NOTES_MAX_ITEMS = 20
 
 
+def _op_to_dict(op: Any) -> dict[str, Any]:
+    if isinstance(op, dict):
+        return dict(op)
+    if hasattr(op, "model_dump"):
+        return op.model_dump(mode="python", exclude_none=True)
+    raise TypeError(f"unsupported patch op type: {type(op)!r}")
+
+
+def _all_place_ops(ops: list[Any]) -> bool:
+    if not ops:
+        return False
+    for op in ops:
+        data = _op_to_dict(op)
+        if data.get("op") != "place":
+            return False
+    return True
+
+
+def _dispatch_place_op(
+    op: dict[str, Any],
+    *,
+    vault: str,
+    expected_mtime: float | None = None,
+) -> dict[str, Any]:
+    src = str(op.get("src") or "").strip()
+    dst = str(op.get("dst") or "").strip()
+    if not src or not dst:
+        return _err(
+            error="bad_request",
+            message="place op requires src= and dst=",
+        )
+    fields = op.get("fields")
+    if fields is not None and not isinstance(fields, dict):
+        return _err(error="bad_request", message="place op fields must be an object")
+    return place_note(
+        src,
+        dst,
+        overwrite=bool(op.get("overwrite")),
+        fields=fields if isinstance(fields, dict) else None,
+        expected_mtime=expected_mtime,
+        vault=vault,
+    )
+
+
 def patch_entry(
     *,
     path: str = "",
@@ -1647,8 +1798,14 @@ def patch_entry(
     has_items = isinstance(raw_items, list) and len(raw_items) > 0
     path_s = (path or "").strip()
     has_single = bool(path_s) and ops is not None
+    has_place_single = (
+        ops is not None
+        and isinstance(ops, list)
+        and _all_place_ops(ops)
+        and not path_s
+    )
 
-    if has_items and has_single:
+    if has_items and (has_single or has_place_single):
         return _err(
             error="bad_request",
             message="pass either path+ops (single) or items[] (multi-path), not both",
@@ -1676,6 +1833,17 @@ def patch_entry(
             verbose=verbose,
             vault=vault,
         )
+    if has_place_single:
+        if len(ops or []) != 1:
+            return _err(
+                error="bad_request",
+                message="single place mode accepts exactly one place op",
+            )
+        return _dispatch_place_op(
+            _op_to_dict(ops[0]),
+            vault=vault,
+            expected_mtime=expected_mtime,
+        )
     if has_single:
         return patch_note(
             path_s,
@@ -1691,7 +1859,10 @@ def patch_entry(
         )
     return _err(
         error="bad_request",
-        message="provide path+ops for one note, or items=[{path, ops, expected_mtime?}] for a batch",
+        message=(
+            "provide path+ops for one note, place-only ops=[{op:place,src,dst}], "
+            "or items=[{path?, ops, expected_mtime?}] for a batch"
+        ),
     )
 
 
@@ -1745,33 +1916,35 @@ def patch_notes(
             results.append(entry)
             fail_n += 1
             continue
-        path = raw.get("path")
+        path_raw = raw.get("path")
+        path = path_raw.strip() if isinstance(path_raw, str) else ""
         ops_list = raw.get("ops")
-        if not isinstance(path, str) or not path.strip():
-            entry = {
-                "ok": False,
-                "error": "bad_request",
-                "message": f"items[{i}].path string required",
-                "index": i,
-                "vault": b.name,
-            }
-            results.append(entry)
-            fail_n += 1
-            continue
-        path = path.strip()
-        if path in seen:
-            entry = {
-                "ok": False,
-                "path": path,
-                "error": "duplicate_path",
-                "message": f"duplicate path in batch: {path!r}",
-                "index": i,
-                "vault": b.name,
-            }
-            results.append(entry)
-            fail_n += 1
-            continue
-        seen.add(path)
+        place_only = isinstance(ops_list, list) and _all_place_ops(ops_list)
+        if not place_only:
+            if not path:
+                entry = {
+                    "ok": False,
+                    "error": "bad_request",
+                    "message": f"items[{i}].path string required",
+                    "index": i,
+                    "vault": b.name,
+                }
+                results.append(entry)
+                fail_n += 1
+                continue
+            if path in seen:
+                entry = {
+                    "ok": False,
+                    "path": path,
+                    "error": "duplicate_path",
+                    "message": f"duplicate path in batch: {path!r}",
+                    "index": i,
+                    "vault": b.name,
+                }
+                results.append(entry)
+                fail_n += 1
+                continue
+            seen.add(path)
         if not isinstance(ops_list, list):
             entry = {
                 "ok": False,
@@ -1814,18 +1987,34 @@ def patch_notes(
             s = val.strip()
             return s or None
 
-        item_out = patch_note(
-            path,
-            ops_list,
-            strict=strict,
-            dry_run=dry_run,
-            verbose=verbose,
-            expected_mtime=expected,
-            expected_frontmatter_hash=_opt_hash("expected_frontmatter_hash"),
-            expected_body_hash=_opt_hash("expected_body_hash"),
-            expected_content_hash=_opt_hash("expected_content_hash"),
-            vault=b.name,
-        )
+        if place_only:
+            if len(ops_list) != 1:
+                item_out = {
+                    "ok": False,
+                    "error": "bad_request",
+                    "message": f"items[{i}] place batch accepts one place op per item",
+                    "index": i,
+                    "vault": b.name,
+                }
+            else:
+                item_out = _dispatch_place_op(
+                    _op_to_dict(ops_list[0]),
+                    vault=b.name,
+                    expected_mtime=expected,
+                )
+        else:
+            item_out = patch_note(
+                path,
+                ops_list,
+                strict=strict,
+                dry_run=dry_run,
+                verbose=verbose,
+                expected_mtime=expected,
+                expected_frontmatter_hash=_opt_hash("expected_frontmatter_hash"),
+                expected_body_hash=_opt_hash("expected_body_hash"),
+                expected_content_hash=_opt_hash("expected_content_hash"),
+                vault=b.name,
+            )
         item_out = dict(item_out)
         item_out["index"] = i
         results.append(item_out)
@@ -2186,20 +2375,36 @@ def vault_op(
     vault: str = "",
     vaults: list[str] | None = None,
     full: bool = False,
+    days: int | None = 7,
 ) -> dict[str, Any]:
-    """Vault management: list | contracts | describe | merge | project.
+    """Vault management: list | contracts | describe | merge | project | stats.
 
-    Read-only. ``project`` returns desk ``body`` + ``guidance`` (agent chooses placement).
-    ``vaults=`` scopes every action to a named subset of the registry (do not
-    combine with ``vault=``) — e.g. a workspace whose desk projection should
-    only ever mention two of six registered vaults.
+    Read-only except ``stats`` (habit KPI rollups). ``project`` returns desk ``body`` + ``guidance``.
     """
     act = (action or "list").strip().lower()
-    if act not in ("list", "contracts", "describe", "merge", "project"):
+    if act not in ("list", "contracts", "describe", "merge", "project", "stats"):
         return _err(
             error="bad_action",
-            message="action must be list|contracts|describe|merge|project",
+            message="action must be list|contracts|describe|merge|project|stats",
         )
+
+    if act == "stats":
+        from apo_engine import telemetry_ops
+
+        key = (vault or "").strip()
+        try:
+            b = _binding(key) if key else _binding("")
+        except OpsError as e:
+            return _err(error=e.code, message=e.message)
+        if days is not None and days < 0:
+            return _err(error="bad_request", message="days must be >= 0 or null")
+        out = telemetry_ops.vault_stats(
+            vault_root=b.resolved().root,
+            collection=b.collection,
+            days=days,
+        )
+        out["vault"] = b.name
+        return out
 
     try:
         default_name, bindings = _load_bindings()

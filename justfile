@@ -43,9 +43,6 @@ search-eval *ARGS:
 stats:
     {{eng}} stats
 
-tool-stats *ARGS:
-    {{eng}} tool-stats {{ARGS}}
-
 # Render apo-desk text from ~/.apo/desk.yaml + vault contracts (JSON to stdout).
 # Watcher logs when desk/contracts change — re-run desk-project to render.
 desk-project *ARGS:

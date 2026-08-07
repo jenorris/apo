@@ -25,24 +25,20 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
             "read_note has no snippet_chars — use max_chars to truncate, "
             "or search_notes(snippet_chars=…) for search hit previews."
         ),
-        "top_k": "read_note has no top_k — use search_notes(top_k=…) then read_note(path=…).",
+        "top_k": "read_note has no top_k — use search_notes(limit=…) then read_note(path=… or chunk_hash=…).",
         "limit": "read_note has no limit — use max_chars / start_line / end_line, or search_notes(limit=…).",
-        "query": "read_note needs path= (vault-relative). For search, use search_notes(query=…).",
-    },
-    "expand_chunk": {
-        "path": (
-            "expand_chunk requires chunk_hash from search_notes (not path/heading). "
-            "To read a section by heading: read_note(path=…, heading=…)."
+        "query": (
+            "read_note needs path= or chunk_hash= (from search_notes). "
+            "For search, use search_notes(query=…)."
         ),
-        "heading": (
-            "expand_chunk requires chunk_hash from search_notes (not path/heading). "
-            "To read a section by heading: read_note(path=…, heading=…)."
+        "scope": (
+            "read_note has no scope — pass chunk_hash= from search_notes "
+            "(optional force= for full section above preview threshold)."
         ),
-        "snippet_chars": "expand_chunk has no snippet_chars — pass chunk_hash (+ optional scope=section|chunk).",
     },
     "write_note": {
-        "body": "write_note uses content= (canonical); text= and body= are accepted aliases. For append under a heading use append_note(path, text, heading=…).",
-        "text": "write_note uses content= (not text). Aliases text= and body= are accepted when content= is omitted. For append under a heading use append_note(path, text, heading=…).",
+        "body": "write_note uses content= only on MCP. For append under a heading use append_note(path, text, heading=…).",
+        "text": "write_note uses content= (not text). For append under a heading use append_note(path, text, heading=…).",
         "ops": "write_note has no ops — use patch_note for surgical edits.",
         "append": (
             "write_note append is removed — use append_note(path, text, heading=… "
@@ -59,8 +55,8 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         ),
     },
     "append_note": {
-        "body": "append_note uses text= (canonical); content= and body= are accepted aliases. For full overwrite use write_note(path, content).",
-        "content": "append_note uses text= (canonical); content= and body= are accepted aliases. For full overwrite use write_note(path, content).",
+        "body": "append_note uses text= only on MCP. For full overwrite use write_note(path, content).",
+        "content": "append_note uses text= (not content). For full overwrite use write_note(path, content).",
         "ops": "append_note has no ops — use patch_note for mutators, or append_note(path, text, heading=…).",
         "index": "append_note has no index= — writes always enqueue for apo-engine watch.",
         "path": (
@@ -75,7 +71,7 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "find": "find belongs inside an op: {\"op\":\"replace_text\",\"find\":\"…\",\"replace\":\"…\"}.",
         "path": (
             "patch_note single-path mode uses top-level path= + ops=[…]. "
-            "Multi-path: items=[{path, ops, …}] — each item requires path."
+            "Multi-path: items=[{path, ops, …}] — each item requires path unless all ops are place."
         ),
         "old": _OPS_HINT,
         "new": _OPS_HINT,
@@ -83,23 +79,29 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "new_text": "replace_text uses find= and replace= (aliases old_text/new_text accepted).",
         "key": _OPS_HINT,
         "index": "patch_note has no index= — writes always enqueue for apo-engine watch.",
-    },
-    "place_note": {
-        "path": (
-            "place_note uses src= and dst= (not path=). src: vault-relative note to move, "
-            "or absolute host .md to copy in."
+        "src": (
+            "move/copy uses place op: patch_note(ops=[{op:place, src, dst, overwrite?, fields?}]). "
+            "Not top-level src=."
         ),
-        "content": "place_note moves/copies whole files — no content=; use fields={} for frontmatter merge.",
-        "text": "place_note moves/copies whole notes; for in-vault append use append_note.",
-        "heading": "place_note has no heading — it places whole files; edit after with append_note/patch_note.",
-        "index": "place_note has no index= — moves always enqueue purge/reindex for apo-engine watch.",
+        "dst": (
+            "move/copy uses place op: patch_note(ops=[{op:place, src, dst, overwrite?, fields?}])."
+        ),
     },
     "search_notes": {
         "path": (
-            "search_notes uses query= (+ optional folder=). "
+            "search_notes uses query= (+ optional folder= or folders=[]). "
             "To read a known path: read_note(path=…)."
         ),
-        "chunk_hash": "search_notes returns chunk_hash; to expand one hit use expand_chunk(chunk_hash=…).",
+        "chunk_hash": (
+            "search_notes returns chunk_hash; to read a hit use read_note(chunk_hash=…)."
+        ),
+        "folder": (
+            "pass folder= or folders=[], not both. Multi-folder: folders=[\"areas/threads\", \"projects/foo\"]."
+        ),
+        "folders": (
+            "pass folder= or folders=[], not both. Single folder: folder=… instead."
+        ),
+        "top_k": "search_notes uses limit= (not top_k).",
     },
     "filter_notes": {
         "query": (
@@ -107,6 +109,7 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
             "not query=. For semantic search use search_notes."
         ),
         "top_k": "filter_notes uses limit= (and offset=), not top_k.",
+        "filters": "filter_notes uses where= (not filters=).",
     },
 }
 
@@ -192,11 +195,27 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
             continue
 
         if etype == "missing_argument" and loc_tail:
-            if name == "expand_chunk" and loc_tail == "chunk_hash":
+            if name == "read_note" and loc_tail == "chunk_hash":
                 hints.append(
-                    "expand_chunk requires chunk_hash from search_notes. "
+                    "read_note requires path= or chunk_hash= from search_notes. "
                     "For a section by path+heading use read_note(path=…, heading=…)."
                 )
+                continue
+            if name == "read_note" and loc_tail == "path":
+                for peer in errors:
+                    keys = _input_keys(peer)
+                    if "chunk_hash" in keys or (
+                        peer.get("type") == "unexpected_keyword_argument"
+                        and _loc_tail(peer) == "chunk_hash"
+                    ):
+                        hints.append(
+                            "read_note accepts path= or chunk_hash= (from search_notes), not both."
+                        )
+                        break
+                else:
+                    hints.append(
+                        "read_note missing path= — pass vault-relative path or chunk_hash= from search_notes."
+                    )
                 continue
             if name == "append_note" and loc_tail == "text":
                 # Dual-error case: content=/body= present → prefer alias hint over generic missing.
@@ -246,8 +265,7 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
                 continue
             if name == "filter_notes" and loc_tail in ("where",):
                 hints.append(
-                    "filter_notes requires where= (use where={} to list a folder). "
-                    "Alias filters= is accepted."
+                    "filter_notes requires where= (use where={} to list a folder)."
                 )
                 continue
             hints.append(f"{name} missing required argument {loc_tail!r}.")

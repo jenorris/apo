@@ -31,49 +31,23 @@ _ADMIN_CATALOG: dict[str, dict[str, Any]] = {
         "confirm_policy": None,
         "parameters": {},
     },
-    "telemetry": {
-        "description": (
-            "Operator telemetry rollups — action=collection|workbench|events. "
-            "Replaces tool_stats. Agent habits use top-level telemetry(action=…)."
-        ),
-        "read_only": True,
-        "destructive": False,
-        "confirm_policy": None,
-        "parameters": {
-            "action": "collection | workbench | events (default collection)",
-            "days": "int|null — rollup window in days (default 7)",
-            "tool": "optional tool name filter",
-            "vault": "vault name (default registry default)",
-        },
-    },
-    "reindex_deferred": {
-        "description": (
-            "Wake watcher to flush deferred queue. Check watcher_running; enqueue "
-            "already wakes on write."
-        ),
-        "read_only": False,
-        "destructive": False,
-        "confirm_policy": None,
-        "parameters": {
-            "vault": "optional vault name (empty = all vaults)",
-        },
-    },
     "reindex": {
         "description": (
-            "Signal full index rebuild (prunes deleted). force=True re-embeds all. "
-            "Check watcher_running."
+            "Index maintenance: mode=flush wakes deferred queue (empty vault = all vaults); "
+            "mode=rebuild signals full rebuild (single vault). force=true re-embeds all."
         ),
         "read_only": False,
         "destructive": False,
         "confirm_policy": "force=true",
         "parameters": {
-            "force": "bool — re-embed all chunks (default false)",
-            "vault": "vault name (default registry default)",
+            "mode": "flush | rebuild (default rebuild)",
+            "force": "bool — rebuild only; re-embed all chunks (default false)",
+            "vault": "vault name (empty = all vaults for flush only)",
         },
     },
     "delete_note": {
         "description": (
-            "Irreversible delete + index purge. Prefer place_note to archives/. "
+            "Irreversible delete + index purge. Prefer patch_note place op to archives/. "
             "Always requires confirm=true."
         ),
         "read_only": False,

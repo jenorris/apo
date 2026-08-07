@@ -105,6 +105,8 @@ def extract_arg_flags(
         flags["used_alias"] = True
     if args.get("folder") or args.get("folders"):
         flags["folder_set"] = True
+    if args.get("chunk_hash"):
+        flags["chunk_hash_set"] = True
     if args.get("fields") is not None:
         flags["fields_set"] = True
     if args.get("expected_mtime") is not None:

@@ -19,8 +19,6 @@ _SRC = _ENGINE / "src"
 _ADMIN_CAPABILITIES = frozenset({
     "reload_config",
     "memory_status",
-    "telemetry",
-    "reindex_deferred",
     "reindex",
     "delete_note",
     "git_sync",
@@ -30,15 +28,11 @@ _TOP_LEVEL = frozenset({
     "append_note",
     "apo_admin",
     "backlinks",
-    "expand_chunk",
-    "expand_section",
     "filter_notes",
     "history",
     "patch_note",
-    "place_note",
     "read_note",
     "search_notes",
-    "telemetry",
     "vault",
     "write_note",
 })
@@ -112,16 +106,18 @@ class ApoAdminMcpSurfaceTest(unittest.TestCase):
     def test_tool_count_and_names(self):
         names = _list_tool_names()
         self.assertEqual(names, _TOP_LEVEL)
-        self.assertEqual(len(names), 14)
+        self.assertEqual(len(names), 10)
         self.assertIn("apo_admin", names)
-        self.assertIn("telemetry", names)
-        self.assertEqual(names & _ADMIN_CAPABILITIES, {"telemetry"})
+        self.assertIn("vault", names)
+        self.assertEqual(names & _ADMIN_CAPABILITIES, set())
 
     def test_apo_admin_registered(self):
         names = _list_tool_names()
         self.assertNotIn("delete_note", names)
         self.assertNotIn("memory_status", names)
-        self.assertNotIn("git_sync", names)
+        self.assertNotIn("telemetry", names)
+        self.assertNotIn("expand_section", names)
+        self.assertNotIn("place_note", names)
 
 
 if __name__ == "__main__":

@@ -43,46 +43,35 @@ def _stats(body: dict[str, Any]) -> dict[str, Any]:
 
 @_route("POST", "/v1/session_stats")
 def _session_stats(body: dict[str, Any]) -> dict[str, Any]:
-    """Deprecated — use POST /v1/telemetry with action=session."""
+    """Deprecated — use vault(action=stats) for habit KPIs; traces via OTel/Jaeger."""
     body = dict(body)
-    body.setdefault("action", "session")
-    body.setdefault("surface", "agent")
-    out = _telemetry(body)
+    body.setdefault("action", "stats")
+    out = _vault(body)
     out["deprecated"] = True
-    out["tip"] = "POST /v1/session_stats is deprecated; use POST /v1/telemetry action=session"
+    out["tip"] = "POST /v1/session_stats is deprecated; use POST /v1/vault action=stats"
     return out
 
 
 @_route("POST", "/v1/telemetry")
 def _telemetry(body: dict[str, Any]) -> dict[str, Any]:
-    from apo_engine import telemetry_ops, vaults as apo_vaults
-
-    action = str(body.get("action") or "status").strip().lower()
-    surface_raw = str(body.get("surface") or "agent").strip().lower()
-    surface: telemetry_ops.Surface = "admin" if surface_raw == "admin" else "agent"
-    vault_name = str(body.get("vault") or "").strip()
-    try:
-        default_name, bindings = apo_vaults.load_bindings()
-    except (OSError, ValueError, json.JSONDecodeError) as e:
-        return {"ok": False, "error": "bad_vault", "message": str(e)}
-    key = vault_name or default_name
-    binding = bindings.get(key)
-    if binding is None:
-        return {"ok": False, "error": "bad_vault", "message": f"unknown vault {key!r}"}
-    days = body.get("days")
-    if days is not None and int(days) < 0:
-        return {"ok": False, "error": "bad_request", "message": "days must be >= 0 or null"}
-    tool = body.get("tool")
-    conv = body.get("conversation_id")
-    return telemetry_ops.telemetry(
-        action,
-        surface=surface,
-        vault_root=binding.root,
-        collection=binding.collection,
-        days=int(days) if days is not None else 7,
-        tool=str(tool).strip() if tool else None,
-        conversation_id=str(conv).strip() if conv else None,
-    )
+    """Deprecated — habit KPIs via vault(action=stats); operator traces via otlp-mcp + Jaeger."""
+    action = str(body.get("action") or "efficiency").strip().lower()
+    if action in ("efficiency", "stats"):
+        body = dict(body)
+        body["action"] = "stats"
+        out = _vault(body)
+        out["deprecated"] = True
+        out["tip"] = "POST /v1/telemetry action=stats is deprecated; use POST /v1/vault action=stats"
+        return out
+    return {
+        "ok": False,
+        "error": "bad_action",
+        "message": (
+            f"action {action!r} removed in v0.5.0 — use POST /v1/vault action=stats for habits; "
+            "operator traces via otlp-mcp + Jaeger"
+        ),
+        "deprecated": True,
+    }
 
 
 @_route("POST", "/v1/search")
@@ -99,11 +88,16 @@ def _search(body: dict[str, Any]) -> dict[str, Any]:
     if vaults_raw is not None and not isinstance(vaults_raw, list):
         return {"ok": False, "error": "bad_request", "message": "`vaults` must be an array of strings"}
     vaults_arg = [str(x) for x in vaults_raw] if vaults_raw is not None else None
+    folders_raw = body.get("folders")
+    if folders_raw is not None and not isinstance(folders_raw, list):
+        return {"ok": False, "error": "bad_request", "message": "`folders` must be an array of strings"}
+    folders_arg = [str(x) for x in folders_raw] if folders_raw is not None else None
     return ops.search(
         query,
         top_k=int(top_k) if top_k is not None else None,
         limit=int(limit) if limit is not None else None,
         folder=str(body.get("folder") or ""),
+        folders=folders_arg,
         vault=str(body.get("vault") or ""),
         vaults=vaults_arg,
         snippet_chars=int(body.get("snippet_chars", 240)),
@@ -115,8 +109,17 @@ def _search(body: dict[str, Any]) -> dict[str, Any]:
 @_route("POST", "/v1/read")
 def _read(body: dict[str, Any]) -> dict[str, Any]:
     path = body.get("path")
-    if not isinstance(path, str) or not path.strip():
-        return {"ok": False, "error": "bad_request", "message": "`path` string required"}
+    chunk_hash = body.get("chunk_hash")
+    path_s = path.strip() if isinstance(path, str) else ""
+    ch_s = chunk_hash.strip() if isinstance(chunk_hash, str) else ""
+    if not path_s and not ch_s:
+        return {"ok": False, "error": "bad_request", "message": "`path` or `chunk_hash` required"}
+    if path_s and ch_s:
+        return {
+            "ok": False,
+            "error": "bad_request",
+            "message": "pass path= or chunk_hash=, not both",
+        }
     heading = body.get("heading")
     if heading is not None and not isinstance(heading, str):
         return {"ok": False, "error": "bad_request", "message": "`heading` must be a string"}
@@ -126,14 +129,27 @@ def _read(body: dict[str, Any]) -> dict[str, Any]:
     raw = body.get("raw", False)
     if not isinstance(raw, bool):
         return {"ok": False, "error": "bad_request", "message": "`raw` must be a boolean"}
+    force = bool(body.get("force"))
+    fields = body.get("fields")
+    if fields is not None and not isinstance(fields, list):
+        return {"ok": False, "error": "bad_request", "message": "`fields` must be an array of strings"}
+    if ch_s:
+        return ops.read_note(
+            "",
+            chunk_hash=ch_s,
+            vault=str(body.get("vault") or ""),
+            force=force,
+            fields=fields if isinstance(fields, list) else None,
+        )
     return ops.read_note(
-        path,
+        path_s,
         heading=heading,
         vault=str(body.get("vault") or ""),
         start_line=int(start_line) if start_line is not None else None,
         end_line=int(end_line) if end_line is not None else None,
         max_chars=int(max_chars) if max_chars is not None else None,
         raw=raw,
+        fields=fields if isinstance(fields, list) else None,
     )
 
 
@@ -172,8 +188,9 @@ def _expand(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(chunk_hash, str) or not chunk_hash.strip():
         return {"ok": False, "error": "bad_request", "message": "`chunk_hash` string required"}
     force = bool(body.get("force"))
-    return ops.expand_section(
-        chunk_hash,
+    return ops.read_note(
+        "",
+        chunk_hash=chunk_hash,
         vault=str(body.get("vault") or ""),
         force=force,
     )
@@ -361,11 +378,16 @@ def _place_body(body: dict[str, Any]) -> dict[str, Any]:
     fields = body.get("fields")
     if fields is not None and not isinstance(fields, dict):
         return {"ok": False, "error": "bad_request", "message": "`fields` must be an object"}
-    return ops.place_note(
-        src,
-        dst,
-        overwrite=bool(body.get("overwrite")),
-        fields=fields,
+    place_op: dict[str, Any] = {
+        "op": "place",
+        "src": src.strip(),
+        "dst": dst.strip(),
+        "overwrite": bool(body.get("overwrite")),
+    }
+    if isinstance(fields, dict):
+        place_op["fields"] = fields
+    return ops.patch_entry(
+        ops=[place_op],
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
     )
@@ -431,6 +453,7 @@ def _vault(body: dict[str, Any]) -> dict[str, Any]:
         vault=str(body.get("vault") or ""),
         vaults=vaults_raw,
         full=full,
+        days=int(body["days"]) if body.get("days") is not None else 7,
     )
 
 

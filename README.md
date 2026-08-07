@@ -179,12 +179,12 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 | Surface | Count | Notes |
 |---------|------:|-------|
-| Top-level | **14** | Core search/write + `vault` + `apo_admin` + `telemetry` |
-| Via `apo_admin` | **7** | `memory_status`, `reindex*`, `reload_config`, `delete_note`, `telemetry`, `git_sync` |
+| Top-level | **10** | Core search/write + `vault` + `apo_admin` |
+| Via `apo_admin` | **5** | `memory_status`, `reindex`, `reload_config`, `delete_note`, `git_sync` |
 
 Counts are contract-tested (`engine/tests/test_apo_admin.py`) — if this table drifts from the code, CI fails.
 
-Admin analytics: `apo_admin(action=invoke, name=telemetry, parameters={action: collection, …})` or CLI `just tool-stats`
+Habit KPIs (optional): **`vault(action=stats)`**. Operator traces: OTel → Jaeger (Workbench `harness/observability/`).
 
 ## Configuration
 
@@ -205,8 +205,8 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | `APO_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder id |
 | `APO_RERANK_POOL` | `24` | Fused candidates rescored before the cut to `k` |
 | `APO_INGEST_DIR` | `resources/wiki` | Advisory convention for wiki ingest paths |
-| `APO_SEND_ALLOW_ROOTS` | `$HOME` | Colon-separated host roots `place_note` may copy from |
-| `APO_SEND_MAX_BYTES` | `5242880` | Max size for `place_note` host-source files |
+| `APO_SEND_ALLOW_ROOTS` | `$HOME` | Colon-separated host roots place op / host copy may read from |
+| `APO_SEND_MAX_BYTES` | `5242880` | Max size for host-source `.md` copies (place op) |
 | `APO_EMBED_BACKEND` | `ollama` | `ollama` or `fastembed` (ONNX) |
 | `APO_MODEL` | `bge-m3` | Ollama model, or a FastEmbed id when backend is `fastembed` |
 | `OLLAMA_KEEP_ALIVE` | `5m` | Keep embed model warm; `0` = unload when idle |
