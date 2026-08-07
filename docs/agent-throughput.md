@@ -64,7 +64,7 @@ Targets (desk, rolling 7d, primary collection):
 | `patch_note` ValidationError rate | near zero |
 | `expand_section` | > 0 when search→section is common |
 
-Operator rollups: **`apo_admin(action=invoke, name=tool_stats, …)`** or CLI `just tool-stats`. Session agents: **`session_stats`**. Disable recording: `APO_TOOL_METRICS=0`. Storage: `~/.apo/metrics.duckdb`. Paths when vault ships [telemetry contract](docs/contracts/telemetry.md).
+Operator rollups: **`apo_admin(action=invoke, name=telemetry, parameters={action: collection|…})`** or CLI `just tool-stats`. Session agents: **`telemetry(action=session|active|efficiency)`**. Disable recording: `APO_TOOL_METRICS=0`. Storage: embedded `~/.apo/metrics.duckdb` or `store.backend=local` (desk-metrics). Paths when vault ships [telemetry contract](docs/contracts/telemetry.md).
 
 ## End-of-turn checklist
 

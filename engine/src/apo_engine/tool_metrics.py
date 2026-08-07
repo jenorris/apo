@@ -58,11 +58,10 @@ def _runtime_dir() -> Path:
 DEFERRED_DIR = _runtime_dir()
 
 
-def metrics_enabled() -> bool:
-    raw = os.environ.get("APO_TOOL_METRICS")
-    if raw is None or str(raw).strip() == "":
-        return True
-    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+def metrics_enabled(vault_root: Path | None = None) -> bool:
+    from apo_engine.metrics_backend import metrics_enabled as _mb_enabled
+
+    return _mb_enabled(vault_root)
 
 
 def metrics_db_path(path: Path | None = None) -> Path:
@@ -104,7 +103,7 @@ def extract_arg_flags(
         flags["used_alias"] = True
     if name == "write_note" and args.get("body") is not None:
         flags["used_alias"] = True
-    if args.get("folder"):
+    if args.get("folder") or args.get("folders"):
         flags["folder_set"] = True
     if args.get("fields") is not None:
         flags["fields_set"] = True
@@ -353,6 +352,24 @@ def _row_to_event(row: tuple[Any, ...], columns: list[str]) -> dict[str, Any]:
     return event
 
 
+def _embedded_record(
+    collection: str, event: dict[str, Any], path: Path | None = None
+) -> None:
+    """Insert one event into embedded DuckDB. Best-effort — never raises."""
+    db_path = metrics_db_path(path)
+    try:
+        _migrate_jsonl_once(db_path)
+        with _write_lock:
+            conn = _connect(db_path)
+            try:
+                _ensure_schema(conn)
+                _insert_events(conn, collection, [event])
+            finally:
+                conn.close()
+    except (OSError, duckdb.Error):
+        return
+
+
 def record_call(
     *,
     collection: str,
@@ -370,12 +387,11 @@ def record_call(
     path: Path | None = None,
 ) -> None:
     """Insert one tool-call event. Best-effort — never raises to callers."""
-    if not metrics_enabled():
+    if not metrics_enabled(vault_root):
         return
     policy = tc.policy_for_vault(vault_root)
     if not policy.enabled:
         return
-    db_path = metrics_db_path(path)
     event: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tool": tool,
@@ -396,20 +412,21 @@ def record_call(
         if cid:
             event["conversation_id"] = cid
     event.update(tc.extract_note_context(tool, arguments, policy))
+    from apo_engine.metrics_backend import get_backend
+
+    backend = get_backend(vault_root)
+    if path is not None and isinstance(backend, object):
+        from apo_engine.metrics_backend import EmbeddedDuckDBBackend
+
+        EmbeddedDuckDBBackend(path).record(collection, event)
+        return
     try:
-        _migrate_jsonl_once(db_path)
-        with _write_lock:
-            conn = _connect(db_path)
-            try:
-                _ensure_schema(conn)
-                _insert_events(conn, collection, [event])
-            finally:
-                conn.close()
+        backend.record(collection, event)
     except (OSError, duckdb.Error):
         return
 
 
-def read_events(
+def _embedded_read_events(
     collection: str,
     *,
     days: int | None = None,
@@ -462,6 +479,32 @@ def read_events(
     except (OSError, duckdb.Error):
         return []
     return [_row_to_event(row, columns) for row in rows]
+
+
+def read_events(
+    collection: str,
+    *,
+    days: int | None = None,
+    tool: str | None = None,
+    conversation_id: str | None = None,
+    path: Path | None = None,
+) -> list[dict[str, Any]]:
+    if path is not None:
+        return _embedded_read_events(
+            collection,
+            days=days,
+            tool=tool,
+            conversation_id=conversation_id,
+            path=path,
+        )
+    from apo_engine.metrics_backend import get_backend
+
+    return get_backend().read_events(
+        collection,
+        days=days,
+        tool=tool,
+        conversation_id=conversation_id,
+    )
 
 
 def rollup_events(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -631,7 +674,14 @@ def tool_stats(
     out["collection"] = collection
     out["days"] = days
     out["tool_filter"] = tool or None
-    out["metrics_path"] = str(metrics_db_path(path))
+    if path is not None:
+        out["metrics_path"] = str(metrics_db_path(path))
+    else:
+        from apo_engine.metrics_backend import get_backend, resolve_store_config
+
+        cfg = resolve_store_config()
+        status = get_backend().status()
+        out["metrics_path"] = status.get("path") or status.get("uri") or str(cfg.path)
     out["enabled"] = metrics_enabled()
     out["engine_version"] = engine_version()
     return out
@@ -666,8 +716,15 @@ def session_stats(
     out["days"] = days if cid else (days if days is not None else 1)
     out["tool_filter"] = tool or None
     out["conversation_id"] = cid
-    out["metrics_path"] = str(metrics_db_path(path))
-    out["enabled"] = metrics_enabled() and policy.enabled
+    if path is not None:
+        out["metrics_path"] = str(metrics_db_path(path))
+    else:
+        from apo_engine.metrics_backend import get_backend, resolve_store_config
+
+        cfg = resolve_store_config(vault_root)
+        status = get_backend(vault_root).status()
+        out["metrics_path"] = status.get("path") or status.get("uri") or str(cfg.path)
+    out["enabled"] = metrics_enabled(vault_root) and policy.enabled
     out["engine_version"] = engine_version()
     if policy.expose_paths:
         out["by_path"] = rollup_by_path(events)

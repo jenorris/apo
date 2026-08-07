@@ -166,7 +166,7 @@ _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown + YAML catalog notes; sqlite-vec hybrid search; "
     "files are source of truth. "
     "apo_admin(action=list|describe|invoke): engine ops (memory_status, reindex*, "
-    "delete_note, git_sync, tool_stats, reload_config). Destructive invoke requires "
+    "delete_note, git_sync, telemetry, reload_config). Destructive invoke requires "
     "confirm=true (delete_note always; reindex when force=true; git_sync run/pull). "
     "vault(action=list|contracts|describe|merge|project): registry + system/contracts/ "
     "(summaries by default; full=true for YAML bodies; "
@@ -193,7 +193,9 @@ _MCP_INSTRUCTIONS = (
     "Search hits expose chunk_hash, heading, file_bytes, section_bytes — expand via expand_section(chunk_hash); "
     "never bare read_note(heading=) after search (duplicate headings). "
     "append_note may take chunk_hash alone. "
-    "session_stats / active_session: desk tool-use metrics (session-scoped; paths when telemetry contract allows). "
+    "telemetry(action=status|session|active|efficiency) — agent habit KPIs; "
+    "operator rollups via apo_admin invoke name=telemetry "
+    "(action=collection|workbench|events). Paths when telemetry contract allows. "
     "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
     "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
     "index.db writer and wakes on enqueue. Multi-vault: pass vault= or "
@@ -260,60 +262,14 @@ def _reload_config_sync() -> dict:
     }
 
 
-def _tool_stats_sync(
-    days: int | None = 7,
-    tool: str | None = None,
-    vault: str = "",
-) -> dict:
-    from apo_engine import tool_metrics as apo_metrics
-
-    try:
-        v = _vault(vault)
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-    if days is not None and days < 0:
-        return _err(error="bad_request", message="days must be >= 0 or null")
-    return apo_metrics.tool_stats(v.collection, days=days, tool=tool)
-
-
-def _delete_note_sync(path: str, vault: str = "") -> dict:
-    return apo_ops.delete_note(path, vault=vault)
-
-
-###############################################################################
-# Tools — session metrics (agent-facing)
-###############################################################################
-
-
-@mcp.tool(annotations=_RO)
-async def session_stats(
-    days: Annotated[
-        int | None,
-        Field(description="Rollup window in days. Omit with conversation_id for session default."),
-    ] = None,
-    tool: Annotated[
-        str | None,
-        Field(description="Optional tool name filter (e.g. search_notes)."),
-    ] = None,
-    conversation_id: Annotated[
-        str | None,
-        Field(description="Cursor conversation id (default: APO_CONVERSATION_ID env)."),
-    ] = None,
-    vault: str = "",
-) -> dict:
-    """Session-scoped tool-use rollups. Includes by_path when vault telemetry contract allows."""
-    return await asyncio.to_thread(
-        _session_stats_sync, days, tool, conversation_id, vault
-    )
-
-
-def _session_stats_sync(
+def _telemetry_sync(
+    action: str,
     days: int | None,
     tool: str | None,
     conversation_id: str | None,
     vault: str,
 ) -> dict:
-    from apo_engine import tool_metrics as apo_metrics
+    from apo_engine import telemetry_ops
 
     try:
         v = _vault(vault)
@@ -321,25 +277,48 @@ def _session_stats_sync(
         return _err(error="bad_vault", message=str(e))
     if days is not None and days < 0:
         return _err(error="bad_request", message="days must be >= 0 or null")
-    return apo_metrics.session_stats(
-        v.collection,
+    act = (action or "status").strip().lower()
+    return telemetry_ops.telemetry(
+        act,
+        surface="agent",
         vault_root=v.root,
-        conversation_id=conversation_id,
+        collection=v.collection,
         days=days,
         tool=tool,
+        conversation_id=conversation_id,
     )
 
 
 @mcp.tool(annotations=_RO)
-async def active_session() -> dict:
-    """Read ~/.apo/active-session.json (written by Cursor sessionStart hook)."""
-    return await asyncio.to_thread(_active_session_sync)
+async def telemetry(
+    action: Annotated[
+        str,
+        Field(
+            description="status | session | active | efficiency — agent-facing only.",
+        ),
+    ] = "status",
+    days: Annotated[
+        int | None,
+        Field(description="Rollup window in days (default 7 for efficiency)."),
+    ] = 7,
+    tool: Annotated[
+        str | None,
+        Field(description="Optional tool name filter (session / efficiency)."),
+    ] = None,
+    conversation_id: Annotated[
+        str | None,
+        Field(description="Cursor conversation id (session action)."),
+    ] = None,
+    vault: str = "",
+) -> dict:
+    """Agent telemetry — store health, session habits, efficiency KPIs."""
+    return await asyncio.to_thread(
+        _telemetry_sync, action, days, tool, conversation_id, vault
+    )
 
 
-def _active_session_sync() -> dict:
-    from apo_engine import tool_metrics as apo_metrics
-
-    return apo_metrics.read_active_session()
+def _delete_note_sync(path: str, vault: str = "") -> dict:
+    return apo_ops.delete_note(path, vault=vault)
 
 
 def _memory_status_sync() -> dict:
@@ -440,7 +419,10 @@ def _delete_note_admin(params: dict[str, Any], *, vault: str = "") -> dict:
     return _delete_note_sync(path.strip(), vault=v)
 
 
-def _tool_stats_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+def _telemetry_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    from apo_engine import telemetry_ops
+
+    action = str(params.get("action") or "collection").strip().lower()
     days = params.get("days", 7)
     tool = params.get("tool")
     v = vault or str(params.get("vault") or "")
@@ -448,10 +430,17 @@ def _tool_stats_admin(params: dict[str, Any], *, vault: str = "") -> dict:
         return _err(error="bad_request", message="parameters.days must be int or null")
     if tool is not None and not isinstance(tool, str):
         return _err(error="bad_request", message="parameters.tool must be a string")
-    return _tool_stats_sync(
-        days if days is None or isinstance(days, int) else 7,
-        tool if isinstance(tool, str) else None,
-        v,
+    try:
+        binding = _vault(v)
+    except VaultError as e:
+        return _err(error="bad_vault", message=str(e))
+    return telemetry_ops.telemetry(
+        action,
+        surface="admin",
+        vault_root=binding.root,
+        collection=binding.collection,
+        days=days if days is None or isinstance(days, int) else 7,
+        tool=tool if isinstance(tool, str) else None,
     )
 
 
@@ -479,7 +468,7 @@ def _reload_config_admin(_params: dict[str, Any], *, vault: str = "") -> dict:
 _ADMIN_HANDLERS: dict[str, apo_admin_ops.AdminHandler] = {
     "reload_config": _reload_config_admin,
     "memory_status": _memory_status_admin,
-    "tool_stats": _tool_stats_admin,
+    "telemetry": _telemetry_admin,
     "reindex_deferred": _reindex_deferred_admin,
     "reindex": _reindex_admin,
     "delete_note": _delete_note_admin,

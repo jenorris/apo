@@ -31,17 +31,18 @@ _ADMIN_CATALOG: dict[str, dict[str, Any]] = {
         "confirm_policy": None,
         "parameters": {},
     },
-    "tool_stats": {
+    "telemetry": {
         "description": (
-            "MCP tool-use rollups from ~/.apo/metrics.duckdb (operator). Note paths "
-            "only when vault telemetry contract allows."
+            "Operator telemetry rollups — action=collection|workbench|events. "
+            "Replaces tool_stats. Agent habits use top-level telemetry(action=…)."
         ),
         "read_only": True,
         "destructive": False,
         "confirm_policy": None,
         "parameters": {
-            "days": "int|null — rollup window in days (default 7). null = all events.",
-            "tool": "optional tool name filter (e.g. filter_notes)",
+            "action": "collection | workbench | events (default collection)",
+            "days": "int|null — rollup window in days (default 7)",
+            "tool": "optional tool name filter",
             "vault": "vault name (default registry default)",
         },
     },

@@ -4,6 +4,17 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- **`telemetry` MCP tool** — agent actions `status|session|active|efficiency`; operator rollups `collection|workbench|events` via **`apo_admin` → `telemetry`**. RPC `POST /v1/telemetry` with `surface=agent|admin`. Pluggable metrics backend (`embedded` DuckDB default, optional `local` desk-metrics HTTP).
+- **`metrics_backend`** — `EmbeddedDuckDBBackend` + `LocalDeskMetricsBackend`; env `APO_METRICS_BACKEND`.
+- **Telemetry contract v0.2** — `store.backend`, `efficiency` KPI thresholds, `rpc_telemetry: true`.
+
+### Changed
+
+- **Lean MCP surface** — removed top-level `session_stats` and `active_session`; removed admin `tool_stats` (use `apo_admin` → `telemetry`). Top-level count **14** (`telemetry` replaces two session tools).
+- **`POST /v1/session_stats`** — deprecated; delegates to `/v1/telemetry` `action=session`.
+
 ## [0.4.0] — 2026-08-06
 
 Desk agents + telemetry semver bump. **Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads. **Force reindex** all vaults after upgrade (`apo_admin` → `reindex` with `force=true`).

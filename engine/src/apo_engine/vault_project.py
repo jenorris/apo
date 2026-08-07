@@ -53,7 +53,7 @@ _WRITE_HABIT_LINES: dict[str, str] = {
         "final reply — do not defer to end-of-session."
     ),
     "session_audit_telemetry_only": (
-        "- Session audit is **telemetry only** (`session_stats` / `active_session`) — do **not** "
+        "- Session audit is **telemetry only** (`telemetry(action=session|active|efficiency)`) — do **not** "
         "`append_note` to `vault=sessions` unless desk `dual_write.enabled` is explicitly true."
     ),
 }
@@ -456,7 +456,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.append("")
         lines.append(
             "Session working memory is **automatic** — Apo tool-use metrics + Cursor hooks "
-            f"(`session_stats` / `active_session`). Do **not** `append_note` to `vault=sessions` on consequential turns."
+            f"(`telemetry(action=session|active|efficiency)`). Do **not** `append_note` to `vault=sessions` on consequential turns."
         )
         lines.append("")
         lines.append(
