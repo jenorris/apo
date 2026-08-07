@@ -27,9 +27,20 @@ Ship `paths: vault_relative` + `expose_paths: true` so agents and `session_stats
 
 | Tool | Role |
 |------|------|
-| `session_stats` | Session-scoped rollups (+ `by_path` when contract allows) |
-| `active_session` | Read `~/.apo/active-session.json` (Cursor hook) |
-| `apo_admin` → `tool_stats` | Desk-wide operator rollups |
+| **`telemetry`** | **Agent MCP** — `action=status\|session\|active\|efficiency` only |
+| **`apo_admin` → `telemetry`** | **Operator** — `action=collection\|workbench\|events` via `invoke` |
+
+RPC: `POST /v1/telemetry` with `surface=agent|admin` (default `agent`). `POST /v1/session_stats` is deprecated (delegates to `action=session`).
+
+## Store backends
+
+| `store.backend` | Path / URI |
+|-----------------|------------|
+| `embedded` (default) | `~/.apo/metrics.duckdb` |
+| `local` | desk-metrics daemon (`local_uri`, default `http://127.0.0.1:9473`) |
+| `none` | No recording (`APO_TOOL_METRICS=0`) |
+
+Env override: `APO_METRICS_BACKEND=embedded|local|none`.
 
 ## Session identity (MCP wire)
 

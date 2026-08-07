@@ -33,8 +33,7 @@ APO_MCP_TOOL_NAMES = frozenset(
         "history",
         "vault",
         "apo_admin",
-        "session_stats",
-        "active_session",
+        "telemetry",
     }
 )
 

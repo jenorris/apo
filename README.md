@@ -179,12 +179,12 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 | Surface | Count | Notes |
 |---------|------:|-------|
-| Top-level | **14** | Core search/write + `vault` + `apo_admin` + `session_stats` + `active_session` |
-| Via `apo_admin` | **7** | `memory_status`, `reindex*`, `reload_config`, `delete_note`, `tool_stats`, `git_sync` |
+| Top-level | **14** | Core search/write + `vault` + `apo_admin` + `telemetry` |
+| Via `apo_admin` | **7** | `memory_status`, `reindex*`, `reload_config`, `delete_note`, `telemetry`, `git_sync` |
 
 Counts are contract-tested (`engine/tests/test_apo_admin.py`) — if this table drifts from the code, CI fails.
 
-Admin analytics: `apo_admin(action=invoke, name=tool_stats, …)` or CLI `just tool-stats` (DuckDB at `~/.apo/metrics.duckdb`; legacy JSONL auto-imported once; disable with `APO_TOOL_METRICS=0`).
+Admin analytics: `apo_admin(action=invoke, name=telemetry, parameters={action: collection, …})` or CLI `just tool-stats`
 
 ## Configuration
 

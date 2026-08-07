@@ -51,7 +51,7 @@ def _tool_arguments(context: MiddlewareContext[Any]) -> dict[str, Any]:
     return {}
 
 
-_SKIP_METRICS_TOOLS = frozenset({"tool_stats", "session_stats", "active_session"})
+_SKIP_METRICS_TOOLS = frozenset({"telemetry", "apo_admin"})
 
 
 class ToolMetricsMiddleware(Middleware):

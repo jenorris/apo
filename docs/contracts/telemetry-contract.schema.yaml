@@ -3,12 +3,13 @@
 # Prose twin: docs/contracts/telemetry.md
 # Privacy and agent access are vault-defined — not hardcoded in the engine.
 
-telemetry_contract_version: "0.1"
+telemetry_contract_version: "0.2"
 enabled: true
 
 store:
-  backend: duckdb
+  backend: embedded # embedded | local | none
   path: ~/.apo/metrics.duckdb
+  local_uri: http://127.0.0.1:9473
 
 # Engine records only dimensions listed under allow; strips deny keys at ingest.
 privacy:
@@ -30,12 +31,20 @@ agent_access:
   lean_visible: true
   scope: session # session | collection | desk
   expose_paths: true
+  actions: [status, session, collection, active, efficiency, workbench]
+
+# Optional KPI thresholds for telemetry(action=efficiency) tips
+efficiency:
+  folder_scoped_target_pct: 80
+  expand_to_search_target_pct: 10
+  error_rate_max_pct: 5
+  large_read_bytes: 15000
 
 ingest:
   conversation_id_env: APO_CONVERSATION_ID
   # Preferred: MCP _meta apo/conversation_id or args _apo.conversation_id (stripped pre-validation)
   active_session_file: ~/.apo/active-session.json
-  rpc_telemetry: false # POST /v1/telemetry — hook ingest (future)
+  rpc_telemetry: true # POST /v1/telemetry
 
 pointers:
   - docs/agent-throughput.md

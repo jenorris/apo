@@ -43,8 +43,23 @@ def _stats(body: dict[str, Any]) -> dict[str, Any]:
 
 @_route("POST", "/v1/session_stats")
 def _session_stats(body: dict[str, Any]) -> dict[str, Any]:
-    from apo_engine import tool_metrics, vaults as apo_vaults
+    """Deprecated — use POST /v1/telemetry with action=session."""
+    body = dict(body)
+    body.setdefault("action", "session")
+    body.setdefault("surface", "agent")
+    out = _telemetry(body)
+    out["deprecated"] = True
+    out["tip"] = "POST /v1/session_stats is deprecated; use POST /v1/telemetry action=session"
+    return out
 
+
+@_route("POST", "/v1/telemetry")
+def _telemetry(body: dict[str, Any]) -> dict[str, Any]:
+    from apo_engine import telemetry_ops, vaults as apo_vaults
+
+    action = str(body.get("action") or "status").strip().lower()
+    surface_raw = str(body.get("surface") or "agent").strip().lower()
+    surface: telemetry_ops.Surface = "admin" if surface_raw == "admin" else "agent"
     vault_name = str(body.get("vault") or "").strip()
     try:
         default_name, bindings = apo_vaults.load_bindings()
@@ -59,12 +74,14 @@ def _session_stats(body: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "bad_request", "message": "days must be >= 0 or null"}
     tool = body.get("tool")
     conv = body.get("conversation_id")
-    return tool_metrics.session_stats(
-        binding.collection,
+    return telemetry_ops.telemetry(
+        action,
+        surface=surface,
         vault_root=binding.root,
-        conversation_id=str(conv).strip() if conv else None,
-        days=int(days) if days is not None else None,
+        collection=binding.collection,
+        days=int(days) if days is not None else 7,
         tool=str(tool).strip() if tool else None,
+        conversation_id=str(conv).strip() if conv else None,
     )
 
 
