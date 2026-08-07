@@ -15,12 +15,12 @@ from . import vault_contracts
 # Deterministic lines for usage-contract ``write_habits`` ids (projected into apo-desk).
 _WRITE_HABIT_LINES: dict[str, str] = {
     "prefer_append_patch": (
-        "- Prefer `append_note` / `patch_note` over full-file rewrites; archive via `place_note`."
+        "- Prefer `append_note` / `patch_note` over full-file rewrites; archive via `patch_note` place op."
     ),
     "folder_on_search": (
         "- **Hard gate:** first `search_notes` in a turn **must** include `folder=` when PARA "
         "bucket is inferable (threads → `areas/threads`, config → `system/config`, etc.). "
-        "Target ≥80% `folder_set/search_notes` in 7d rollups (`just tool-stats`)."
+        "Target ≥80% `folder_set/search_notes` in 7d rollups (`vault(action=stats)`)."
     ),
     "expected_mtime_on_followup": (
         "- On **second+** write to the same path in one session, pass `expected_mtime` from the "
@@ -53,7 +53,7 @@ _WRITE_HABIT_LINES: dict[str, str] = {
         "final reply — do not defer to end-of-session."
     ),
     "session_audit_telemetry_only": (
-        "- Session audit is **telemetry only** (`telemetry(action=session|active|efficiency)`) — do **not** "
+        "- Session audit is **automatic OTel** (Cursor hooks → Jaeger via otlp-mcp) — do **not** "
         "`append_note` to `vault=sessions` unless desk `dual_write.enabled` is explicitly true."
     ),
 }
@@ -455,8 +455,8 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.append("## Session audit")
         lines.append("")
         lines.append(
-            "Session working memory is **automatic** — Apo tool-use metrics + Cursor hooks "
-            f"(`telemetry(action=session|active|efficiency)`). Do **not** `append_note` to `vault=sessions` on consequential turns."
+            "Session working memory is **automatic OTel** (Cursor hooks → Jaeger via otlp-mcp). "
+            "Do **not** `append_note` to `vault=sessions` on consequential turns."
         )
         lines.append("")
         lines.append(
@@ -490,7 +490,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
                 "violation, not a wrap-up step skipped for later."
             )
         if habits.get("prefer_append_patch", True):
-            lines.append("- Prefer `append_note` / `patch_note` over full-file rewrites; archive via `place_note`.")
+            lines.append("- Prefer `append_note` / `patch_note` over full-file rewrites; archive via `patch_note` place op.")
         if habits.get("filter_okf_type", True):
             lines.append(
                 "- When a vault has an OKF contract: stamp `okf_type` / `description` / `timestamp` on concept writes; prefer `filter_notes({\"okf_type\": \"…\"}, folder=…)`."

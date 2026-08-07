@@ -79,7 +79,7 @@ class FormatToolValidationErrorTest(unittest.TestCase):
         self.assertIn("max_chars", msg)
         self.assertIn("search_notes", msg)
 
-    def test_expand_chunk_path_heading(self):
+    def test_read_note_path_heading(self):
         class Fake(Exception):
             def errors(self, include_url: bool = True):
                 return [
@@ -105,9 +105,9 @@ class FormatToolValidationErrorTest(unittest.TestCase):
 
         exc = Exception("boom")
         exc.__cause__ = Fake()
-        msg = format_tool_validation_error("expand_chunk", exc)
+        msg = format_tool_validation_error("read_note", exc)
         self.assertIn("chunk_hash", msg)
-        self.assertIn("read_note", msg)
+        self.assertIn("path=", msg)
         self.assertNotIn("Unexpected keyword argument", msg)
 
     def test_append_note_body_dual_error(self):
@@ -135,8 +135,8 @@ class FormatToolValidationErrorTest(unittest.TestCase):
         exc = Exception("boom")
         exc.__cause__ = Fake()
         msg = format_tool_validation_error("append_note", exc)
-        self.assertIn("body=", msg)
         self.assertIn("text=", msg)
+        self.assertNotIn("body=", msg)
 
     def test_append_note_content_dual_error(self):
         class Fake(Exception):
@@ -164,7 +164,7 @@ class FormatToolValidationErrorTest(unittest.TestCase):
         exc.__cause__ = Fake()
         msg = format_tool_validation_error("append_note", exc)
         self.assertIn("text=", msg)
-        self.assertIn("content=", msg)
+        self.assertIn("content", msg)
         self.assertNotIn("missing required argument 'text'", msg.lower())
         # Deduped — one actionable line, not generic + alias.
         self.assertEqual(msg.count("append_note uses text="), 1)
@@ -191,7 +191,7 @@ class FormatToolValidationErrorTest(unittest.TestCase):
         exc.__cause__ = Fake()
         msg = format_tool_validation_error("write_note", exc)
         self.assertIn("content=", msg)
-        self.assertIn("text=", msg)
+        self.assertIn("text", msg)
         self.assertEqual(msg.count("write_note uses content="), 1)
 
     def test_write_note_heading_create_redirect(self):

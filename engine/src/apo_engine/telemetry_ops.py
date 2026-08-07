@@ -1,19 +1,13 @@
-"""Unified telemetry — agent MCP/RPC vs admin operator rollups."""
+"""Apo habit KPI rollups — internal engine API for vault(action=stats)."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from apo_engine import metrics_backend as mb
 from apo_engine import telemetry_contract as tc
 from apo_engine import tool_metrics as tm
-
-AGENT_ACTIONS = frozenset({"status", "session", "active", "efficiency"})
-ADMIN_ACTIONS = frozenset({"collection", "workbench", "events"})
-ALL_ACTIONS = AGENT_ACTIONS | ADMIN_ACTIONS
-
-Surface = Literal["agent", "admin"]
 
 _DEFAULT_EFFICIENCY = {
     "folder_scoped_target_pct": 80,
@@ -44,11 +38,28 @@ def _search_tool_slot(by_tool: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
+def _read_chunk_calls(events: list[dict[str, Any]]) -> int:
+    count = 0
+    for ev in events:
+        if ev.get("tool") != "read_note":
+            continue
+        if ev.get("chunk_hash"):
+            count += 1
+            continue
+        args = ev.get("args") if isinstance(ev.get("args"), dict) else {}
+        if args.get("chunk_hash"):
+            count += 1
+            continue
+        flags = ev.get("flags") if isinstance(ev.get("flags"), dict) else {}
+        if flags.get("chunk_hash_set") or ev.get("chunk_hash_set"):
+            count += 1
+    return count
+
+
 def compute_efficiency(
     events: list[dict[str, Any]],
     *,
     thresholds: dict[str, Any] | None = None,
-    workbench: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Domain KPIs + tips from raw apo tool-call events."""
     th = thresholds or dict(_DEFAULT_EFFICIENCY)
@@ -60,15 +71,13 @@ def compute_efficiency(
     folder_pct = round(100.0 * folder_set / search_calls, 1) if search_calls else 0.0
     target_pct = float(th.get("folder_scoped_target_pct") or 80)
 
-    expand_calls = sum(
+    legacy_expand = sum(
         int(r.get("calls") or 0)
         for r in by_tool
         if r.get("tool") in ("expand_section", "expand_chunk")
     )
-    read_calls = sum(
-        int(r.get("calls") or 0) for r in by_tool if r.get("tool") == "read_note"
-    )
-    expand_ratio = round(100.0 * expand_calls / search_calls, 1) if search_calls else 0.0
+    chunk_reads = _read_chunk_calls(events) + legacy_expand
+    expand_ratio = round(100.0 * chunk_reads / search_calls, 1) if search_calls else 0.0
 
     total = len(events) or 1
     errors = int(rollup.get("error_count") or 0)
@@ -104,27 +113,13 @@ def compute_efficiency(
     expand_target = float(th.get("expand_to_search_target_pct") or 10)
     if search_calls and expand_ratio < expand_target:
         tips.append(
-            f"expand_section rarely used after search ({expand_ratio}% vs target {expand_target}%)"
+            f"read_note(chunk_hash=) rarely used after search ({expand_ratio}% vs target {expand_target}%)"
         )
     max_err = float(th.get("error_rate_max_pct") or 5)
     if error_rate > max_err:
         tips.append(f"validation error rate {error_rate}% above max {max_err}%")
     if patch_calls and mtime_set < patch_calls * 0.5:
         tips.append("expected_mtime rarely set on patch_note repeat writes")
-
-    orientation: dict[str, Any] = {}
-    if workbench and workbench.get("ok"):
-        orient = workbench.get("orientation_signal") or {}
-        orientation = {
-            "graphify_shell": orient.get("graphify_shell", 0),
-            "grep_rg_shell": orient.get("grep_rg", orient.get("grep_shell", 0)),
-            "graphify_log_queries": orient.get("graphify_log", 0),
-            "subagent_spawns": (workbench.get("tool_mix") or {}).get("subagent", 0),
-        }
-        grep_n = int(orientation.get("grep_rg_shell") or 0)
-        gf_n = int(orientation.get("graphify_shell") or 0)
-        if grep_n > gf_n * 3 and grep_n > 5:
-            tips.append("graphify underused vs rg for orientation")
 
     return {
         "ok": True,
@@ -137,9 +132,8 @@ def compute_efficiency(
             "avg_duration_ms": search.get("avg_duration_ms") if search else 0,
         },
         "read_patterns": {
-            "read_note_calls": read_calls,
-            "expand_section_calls": expand_calls,
-            "expand_to_search_ratio_pct": expand_ratio,
+            "read_note_chunk_calls": chunk_reads,
+            "chunk_read_to_search_ratio_pct": expand_ratio,
             "target_ratio_pct": expand_target,
         },
         "validation": {
@@ -151,162 +145,54 @@ def compute_efficiency(
             "patch_note_calls": patch_calls,
             "expected_mtime_set": mtime_set,
         },
-        "orientation": orientation,
         "tips": tips,
     }
+
+
+def vault_stats(
+    *,
+    vault_root: Path | None = None,
+    collection: str = "",
+    days: int | None = 7,
+) -> dict[str, Any]:
+    """Habit KPI rollup for vault(action=stats)."""
+    coll = (collection or "default").strip() or "default"
+    window = days if days is not None else 7
+    backend = mb.get_backend(vault_root)
+    events = backend.read_events(coll, days=window)
+    thresholds = _efficiency_thresholds(vault_root)
+    eff = compute_efficiency(events, thresholds=thresholds)
+    eff["action"] = "stats"
+    eff["collection"] = coll
+    eff["days"] = window
+    eff["engine_version"] = tm.engine_version()
+    eff["enabled"] = mb.metrics_enabled(vault_root)
+    st = backend.status()
+    eff["metrics_path"] = st.get("path") or str(mb.resolve_store_config(vault_root).path)
+    eff["store"] = {"backend": st.get("backend") or "embedded", "path": eff["metrics_path"]}
+    return eff
 
 
 def telemetry(
     action: str,
     *,
-    surface: Surface = "agent",
+    surface: str = "agent",
     vault_root: Path | None = None,
     collection: str = "",
     days: int | None = 7,
     tool: str | None = None,
     conversation_id: str | None = None,
 ) -> dict[str, Any]:
-    act = (action or "status").strip().lower()
-    allowed = ADMIN_ACTIONS if surface == "admin" else AGENT_ACTIONS
-    if act not in allowed:
-        other = "admin" if surface == "agent" else "agent"
-        hint = (
-            f"Use telemetry(action={act!r}) on the {other} surface "
-            f"(MCP top-level: agent actions only; operator rollups: "
-            f"apo_admin action=invoke name=telemetry)."
-        )
-        return {
-            "ok": False,
-            "error": "bad_action",
-            "message": (
-                f"action {act!r} not allowed for surface={surface!r}; "
-                f"allowed: {', '.join(sorted(allowed))}"
-            ),
-            "hint": hint,
-        }
-
-    cfg = mb.resolve_store_config(vault_root)
-    backend = mb.get_backend(vault_root)
-    policy = tc.policy_for_vault(vault_root)
-
-    if act == "status":
-        store_status = backend.status()
-        return {
-            "ok": True,
-            "action": "status",
-            "enabled": mb.metrics_enabled(vault_root),
-            "store": store_status,
-            "engine_version": tm.engine_version(),
-            "metrics_path": store_status.get("path") or cfg.path,
-        }
-
-    if act == "active":
-        out = tm.read_active_session()
-        out["action"] = "active"
-        return out
-
-    if act == "events":
-        coll = (collection or "default").strip() or "default"
-        events = backend.read_events(coll, days=days, tool=tool)
-        return {
-            "ok": True,
-            "action": "events",
-            "surface": surface,
-            "collection": coll,
-            "days": days,
-            "tool_filter": tool or None,
-            "count": len(events),
-            "events": events,
-        }
-
-    if act == "workbench":
-        if cfg.backend != "local":
-            return {
-                "ok": False,
-                "error": "workbench_requires_local",
-                "message": (
-                    "workbench rollups require store.backend=local "
-                    "(desk-metrics daemon)"
-                ),
-            }
-        local = backend
-        if not isinstance(local, mb.LocalDeskMetricsBackend):
-            local = mb.LocalDeskMetricsBackend(cfg.local_uri)
-        window = days if days is not None else 7
-        report = local.workbench_report(window)
-        report["action"] = "workbench"
-        report["days"] = window
-        report["surface"] = surface
-        return report
-
-    coll = (collection or "default").strip() or "default"
-
-    if act == "collection":
-        events = backend.read_events(coll, days=days, tool=tool)
-        out = tm.rollup_events(events)
-        out["action"] = "collection"
-        out["surface"] = surface
-        out["collection"] = coll
-        out["days"] = days
-        out["tool_filter"] = tool or None
-        out["enabled"] = mb.metrics_enabled(vault_root)
-        out["engine_version"] = tm.engine_version()
-        st = backend.status()
-        out["metrics_path"] = st.get("path") or st.get("uri") or str(cfg.path)
-        return out
-
-    if act == "session":
-        cid = (conversation_id or "").strip() or None
-        if not cid:
-            from apo_engine.session_context import request_conversation_id
-
-            cid = (request_conversation_id() or "").strip() or None
-        if cid:
-            events = backend.read_events(
-                coll, days=days, tool=tool, conversation_id=cid
-            )
-            effective_days = days
-        elif days is not None:
-            events = backend.read_events(coll, days=days, tool=tool)
-            effective_days = days
-        else:
-            events = backend.read_events(coll, days=1, tool=tool)
-            effective_days = 1
-        out = tm.rollup_events(events)
-        out["action"] = "session"
-        out["collection"] = coll
-        out["days"] = effective_days
-        out["tool_filter"] = tool or None
-        out["conversation_id"] = cid
-        out["enabled"] = mb.metrics_enabled(vault_root) and policy.enabled
-        out["engine_version"] = tm.engine_version()
-        st = backend.status()
-        out["metrics_path"] = st.get("path") or st.get("uri") or str(cfg.path)
-        if policy.expose_paths:
-            out["by_path"] = tm.rollup_by_path(events)
-        if not cid:
-            out["tip"] = (
-                "Session scope is approximate (24h window). "
-                "Pass conversation_id for exact session attribution."
-            )
-        return out
-
-    # efficiency
-    window = days if days is not None else 7
-    events = backend.read_events(coll, days=window, tool=tool)
-    thresholds = _efficiency_thresholds(vault_root)
-    workbench_data = None
-    if cfg.backend == "local":
-        try:
-            lb = mb.LocalDeskMetricsBackend(cfg.local_uri)
-            workbench_data = lb.workbench_report(window)
-        except OSError:
-            pass
-    eff = compute_efficiency(
-        events, thresholds=thresholds, workbench=workbench_data
-    )
-    eff["action"] = "efficiency"
-    eff["collection"] = coll
-    eff["days"] = window
-    eff["engine_version"] = tm.engine_version()
-    return eff
+    """Deprecated RPC shim — use vault_stats for efficiency habits."""
+    del surface, tool, conversation_id
+    act = (action or "efficiency").strip().lower()
+    if act in ("efficiency", "stats"):
+        return vault_stats(vault_root=vault_root, collection=collection, days=days)
+    return {
+        "ok": False,
+        "error": "bad_action",
+        "message": (
+            f"action {act!r} removed in v0.5.0 — use vault(action=stats) for habits; "
+            "operator traces via otlp-mcp + Jaeger"
+        ),
+    }

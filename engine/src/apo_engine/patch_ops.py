@@ -204,6 +204,14 @@ class AppendEofOp(_OpBase):
     text: str
 
 
+class PlaceOp(_OpBase):
+    op: Literal["place"]
+    src: str
+    dst: str
+    overwrite: bool = False
+    fields: dict[str, Any] | None = None
+
+
 PatchOp = Annotated[
     Union[
         SetFieldOp,
@@ -213,6 +221,7 @@ PatchOp = Annotated[
         AppendOp,
         PrependOp,
         AppendEofOp,
+        PlaceOp,
     ],
     Field(discriminator="op"),
 ]
@@ -223,7 +232,8 @@ OPS_FIELD_DESC = (
     "Ops: set_field(field,value); delete_field(field); "
     "replace_text(find,replace,scope.heading|heading|chunk_hash); "
     "replace_section(heading|target|chunk_hash,text); "
-    "append/prepend(text,heading|target|chunk_hash); append_eof(text). "
+    "append/prepend(text,heading|target|chunk_hash); append_eof(text); "
+    "place(src,dst,overwrite?,fields?) — move/copy (replaces place_note). "
     "Standalone add → append_note. "
     "Aliases frozen: target≡heading; replace_text heading≡scope.heading; "
     "set_field path≡field; replace_text old_text/new_text≡find/replace; "
@@ -232,7 +242,7 @@ OPS_FIELD_DESC = (
 
 PATCH_NOTES_ITEMS_DESC = (
     "Multi-path mode for patch_note: same-vault batch. "
-    "Each item: path + ops (+ optional expected_mtime / region hashes). "
+    "Each item: path + ops, or place-only ops without path (+ optional expected_mtime). "
     "Max 20 items; duplicate paths rejected. Partial failures continue; check per-item ok. "
     "XOR with path+ops — do not pass both. "
     "Cross-role parallel writes (e.g. two different notes) stay separate MCP calls."
@@ -244,7 +254,7 @@ class PatchNotesItem(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str
+    path: str = ""
     ops: Annotated[list[PatchOp], Field(description=OPS_FIELD_DESC)]
     expected_mtime: float | None = Field(
         default=None,
@@ -269,9 +279,22 @@ class PatchNotesItem(BaseModel):
         default=None,
         description=(
             "Allow section/chunk ops when that span's hash still matches "
-            "(from search/expand_chunk content_hash)."
+            "(from search/read_note chunk_hash content_hash)."
         ),
     )
+
+    @model_validator(mode="after")
+    def _place_or_path(self) -> PatchNotesItem:
+        place_only = all(
+            (hasattr(op, "op") and op.op == "place")
+            or (isinstance(op, dict) and op.get("op") == "place")
+            for op in self.ops
+        )
+        if place_only:
+            return self
+        if not (self.path or "").strip():
+            raise ValueError("path required unless all ops are place")
+        return self
 
 
 def normalize_op_dict(data: dict[str, Any]) -> dict[str, Any]:

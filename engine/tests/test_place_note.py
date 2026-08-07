@@ -93,7 +93,18 @@ class PlaceNoteTest(unittest.TestCase):
         # relative non-vault path is treated as vault-relative → not_found
         self.assertEqual(out["error"], "not_found")
 
-    def test_rejects_non_md_host(self):
+    def test_patch_note_place_op_moves(self):
+        src = self.vault / "inbox" / "d.md"
+        src.parent.mkdir(parents=True)
+        src.write_text("# D\n", encoding="utf-8")
+        out = ops.patch_entry(
+            ops=[{"op": "place", "src": "inbox/d.md", "dst": "archives/d.md"}],
+        )
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["mode"], "move")
+        self.assertFalse(src.exists())
+        self.assertTrue((self.vault / "archives" / "d.md").is_file())
+
         other = self.outside / "data.txt"
         other.write_text("nope\n", encoding="utf-8")
         out = ops.place_note(str(other), "inbox/data.md")

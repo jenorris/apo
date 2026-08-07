@@ -1,4 +1,4 @@
-"""Unit tests for unified telemetry MCP/RPC actions."""
+"""Unit tests for habit KPI rollups (vault action=stats)."""
 
 from __future__ import annotations
 
@@ -43,28 +43,50 @@ class TelemetryOpsTest(unittest.TestCase):
             self.assertEqual(eff["search_notes"]["calls"], 5)
             self.assertEqual(eff["search_notes"]["folder_scoped_pct"], 40.0)
             self.assertGreater(len(eff["tips"]), 0)
+            self.assertGreaterEqual(eff["read_patterns"]["read_note_chunk_calls"], 1)
 
     def test_telemetry_bad_action(self):
         out = telemetry_ops.telemetry("nope")
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"], "bad_action")
 
-    def test_admin_collection_rejects_agent_surface(self):
-        out = telemetry_ops.telemetry("collection", surface="agent")
-        self.assertFalse(out["ok"])
-        self.assertIn("hint", out)
+    def test_telemetry_efficiency_delegates_to_vault_stats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "metrics.duckdb"
+            tool_metrics.record_call(
+                collection="eff2",
+                tool="search_notes",
+                ok=True,
+                flags={"folder_set": True},
+                path=db_path,
+            )
+            out = telemetry_ops.telemetry(
+                "efficiency",
+                collection="eff2",
+                vault_root=Path(tmp),
+            )
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["action"], "stats")
 
-    def test_telemetry_status(self):
-        out = telemetry_ops.telemetry("status")
-        self.assertTrue(out["ok"])
-        self.assertEqual(out["action"], "status")
-        self.assertIn("store", out)
-        self.assertEqual(out["store"]["backend"], "embedded")
-
-    def test_telemetry_active(self):
-        out = telemetry_ops.telemetry("active")
-        self.assertTrue(out["ok"])
-        self.assertEqual(out["action"], "active")
+    def test_vault_stats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "metrics.duckdb"
+            tool_metrics.record_call(
+                collection="vs",
+                tool="filter_notes",
+                ok=True,
+                flags={"fields_set": True},
+                path=db_path,
+            )
+            out = telemetry_ops.vault_stats(
+                vault_root=Path(tmp),
+                collection="vs",
+                days=7,
+            )
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["action"], "stats")
+            self.assertIn("search_notes", out)
+            self.assertEqual(out["store"]["backend"], "embedded")
 
     def test_collection_rollup_embedded(self):
         with tempfile.TemporaryDirectory() as tmp:

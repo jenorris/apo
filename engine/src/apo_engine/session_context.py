@@ -21,19 +21,15 @@ _generation_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 APO_MCP_TOOL_NAMES = frozenset(
     {
         "search_notes",
-        "expand_section",
-        "expand_chunk",
         "read_note",
         "write_note",
         "append_note",
         "patch_note",
-        "place_note",
         "filter_notes",
         "backlinks",
         "history",
         "vault",
         "apo_admin",
-        "telemetry",
     }
 )
 

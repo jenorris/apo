@@ -54,11 +54,11 @@ class ExpandChunkMtimeTest(unittest.TestCase):
             p.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_expand_section_includes_mtime(self):
+    def test_read_note_chunk_includes_mtime(self):
         hits = core.search("alpha", k=1, hybrid=False)
         self.assertTrue(hits)
         ch = hits[0].chunk_hash
-        out = ops.expand_chunk(ch, scope="section")
+        out = ops.read_note("", chunk_hash=ch)
         self.assertTrue(out["ok"], out)
         self.assertEqual(out["path"], "note.md")
         self.assertIn("mtime", out)
@@ -69,6 +69,24 @@ class ExpandChunkMtimeTest(unittest.TestCase):
         out = ops.filter_notes(None, folder="", limit=5)
         self.assertTrue(out["ok"], out)
         self.assertGreaterEqual(out["total"], 1)
+
+    def test_search_folders_fanout(self):
+        (self.vault / "projects").mkdir(parents=True, exist_ok=True)
+        (self.vault / "projects" / "p.md").write_text(
+            "---\ntitle: Proj\n---\n\n# Proj\n\nproject alpha\n",
+            encoding="utf-8",
+        )
+        core.index_vault(rebuild=True, verbose=False)
+        out = ops.search(
+            "alpha",
+            folders=["projects", "prjects"],
+            limit=5,
+        )
+        self.assertTrue(out["ok"], out)
+        self.assertIn("folders", out)
+        paths = {r["source"] for r in out["results"]}
+        self.assertIn("projects/p.md", paths)
+        self.assertIn("prjects", out.get("warning", ""))
 
 
 class MissingFolderWarningTest(unittest.TestCase):

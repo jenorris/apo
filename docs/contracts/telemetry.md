@@ -2,7 +2,7 @@
 
 **Template:** [telemetry-contract.schema.yaml](./telemetry-contract.schema.yaml)
 
-Opt-in per vault. When present under `<vault>/system/contracts/`, Apo adjusts **tool-use metrics** ingest and **agent read** surfaces for that vault.
+Opt-in per vault. When present under `<vault>/system/contracts/`, Apo adjusts **tool-use metrics** ingest and habit KPI surfaces for that vault.
 
 ## What it controls
 
@@ -11,9 +11,10 @@ Opt-in per vault. When present under `<vault>/system/contracts/`, Apo adjusts **
 | `enabled` | Master switch (`false` → no `record_call` rows for this vault) |
 | `privacy.allow.paths` | `none` (flags only) · `hash_only` · `vault_relative` · `absolute` |
 | `privacy.allow.headings` / `chunk_hash` | Section-level optimization nodes when paths allowed |
-| `agent_access.expose_paths` | Lean MCP `session_stats` includes `by_path` rollups |
+| `agent_access.expose_paths` | Habit rollups may include path-scoped flags when allowed |
 | `agent_access.scope` | `session` (conversation_id) · `collection` · `desk` (operator) |
 | `privacy.allow.dimensions` | Includes `apo_version` (engine semver per row) for cross-version burn-down |
+| `efficiency` | KPI thresholds for `vault(action=stats)` tips |
 
 ## Default without contract
 
@@ -21,26 +22,25 @@ Flags and timings only — **no note paths**. Matches pre-telemetry-contract beh
 
 ## Meta PKB (recommended)
 
-Ship `paths: vault_relative` + `expose_paths: true` so agents and `session_stats` can identify hot notes and folder-scoping gaps without storing bodies or search queries.
+Ship `paths: vault_relative` + `expose_paths: true` so habit rollups can identify hot notes and folder-scoping gaps without storing bodies or search queries.
 
-## Agent tools
+## Agent tools (v0.5.0+)
 
-| Tool | Role |
-|------|------|
-| **`telemetry`** | **Agent MCP** — `action=status\|session\|active\|efficiency` only |
-| **`apo_admin` → `telemetry`** | **Operator** — `action=collection\|workbench\|events` via `invoke` |
+| Surface | Role |
+|---------|------|
+| **`vault(action=stats)`** | **Agent MCP** — habit KPI rollups (`folder_scoped_pct`, chunk-read ratio, validation tips) |
+| **OTel hooks → Jaeger** | **Session / tool traces** — Cursor preToolUse/postToolUse via otlp-mcp (Workbench `harness/observability/`) |
 
-RPC: `POST /v1/telemetry` with `surface=agent|admin` (default `agent`). `POST /v1/session_stats` is deprecated (delegates to `action=session`).
+RPC: `POST /v1/vault` with `action=stats` (+ optional `days=`). `POST /v1/telemetry` and `POST /v1/session_stats` are **deprecated** (delegate to `stats` or return `bad_action`).
 
 ## Store backends
 
 | `store.backend` | Path / URI |
 |-----------------|------------|
 | `embedded` (default) | `~/.apo/metrics.duckdb` |
-| `local` | desk-metrics daemon (`local_uri`, default `http://127.0.0.1:9473`) |
 | `none` | No recording (`APO_TOOL_METRICS=0`) |
 
-Env override: `APO_METRICS_BACKEND=embedded|local|none`.
+Legacy `local` / desk-metrics HTTP ingest is **retired in v0.5.0** — maps to `embedded`. Env override: `APO_METRICS_BACKEND=embedded|none`.
 
 ## Session identity (MCP wire)
 
@@ -58,7 +58,8 @@ Engine middleware binds ids in a **request contextvar** (not a global file) befo
 ## Hooks (Cursor local)
 
 - **`preToolUse`** → inject `_apo.conversation_id` into Apo MCP tool args (`updated_input`)
-- **`sessionStart`** → write `active-session.json` for `active_session` convenience
+- **`sessionStart`** → write `active-session.json` for legacy fallbacks
+- **OTel export** → Workbench `harness/observability/` (Jaeger UI at `just telemetry ui`)
 
 Example shell: [scripts/cursor-telemetry-hooks.example.sh](../../scripts/cursor-telemetry-hooks.example.sh) · installed: `~/.cursor/hooks/apo-telemetry.sh`
 

@@ -165,42 +165,19 @@ def _top_level_dirs(v: Vault) -> list[str]:
 _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown + YAML catalog notes; sqlite-vec hybrid search; "
     "files are source of truth. "
-    "apo_admin(action=list|describe|invoke): engine ops (memory_status, reindex*, "
-    "delete_note, git_sync, telemetry, reload_config). Destructive invoke requires "
-    "confirm=true (delete_note always; reindex when force=true; git_sync run/pull). "
-    "vault(action=list|contracts|describe|merge|project): registry + system/contracts/ "
-    "(summaries by default; full=true for YAML bodies; "
-    "legacy system/config/*-contract.schema.yaml still discovered; merge adds "
-    "~/.apo/desk.yaml; project returns desk body + guidance — agent places output). "
-    "Routing: write_note=create/overwrite only (content= canonical; text/body alias; no append); "
-    "append_note=Markdown session log / History / post-search add "
-    "(text= canonical; content/body alias; prefer over patch_note append; unsupported on .yaml); "
-    "patch_note=frontmatter/YAML fields + MD section mutate — one path (path+ops) or multi-path (items[]); "
-    "YAML notes: set_field/delete_field (dotted nested paths); whole file is the catalog row; "
-    "parallel mutators in one turn use the same vault=; "
-    "place_note=move if src in vault else copy host .md into vault (prefer over delete_note). "
-    "Thread mtime → expected_mtime on follow-up writes; when mtime is stale, "
-    "scoped writes may still proceed if expected_frontmatter_hash / expected_body_hash / "
-    "expected_content_hash (or a same-process prior read) still matches the untouched region. "
-    "search_notes=content (prefer limit=; top_k alias; "
-    "vault= one vault or vaults=[] fan-out across separate indexes); "
-    "filter_notes=frontmatter / YAML-note catalog (prefer where=; filters alias; "
-    "omit where or pass where={} to list; "
-    "status sweeps pass fields=[status,okf_type,last_checked,title]); "
-    "history=browse by mtime (since/until, preview=first|last, heading=, exclude=, fields=, chunk_hash) "
-    "or file git log when path= + git contract; "
-    "status sweeps → filter_notes. "
-    "Search hits expose chunk_hash, heading, file_bytes, section_bytes — expand via expand_section(chunk_hash); "
-    "never bare read_note(heading=) after search (duplicate headings). "
-    "append_note may take chunk_hash alone. "
-    "telemetry(action=status|session|active|efficiency) — agent habit KPIs; "
-    "operator rollups via apo_admin invoke name=telemetry "
-    "(action=collection|workbench|events). Paths when telemetry contract allows. "
-    "backlinks=[[wiki-links]]. Resources: note://<vault>/<path>, memory://vaults. "
-    "MCP enqueues index work (~/.apo/deferred-*.json); apo-engine watch is the sole "
-    "index.db writer and wakes on enqueue. Multi-vault: pass vault= or "
-    "search_notes(vaults=[…]) (APO_VAULTS registry); each vault has its own "
-    "index + deferred collection."
+    "apo_admin(action=list|describe|invoke): engine ops (memory_status, reindex, "
+    "delete_note, reload_config, git_sync). Destructive invoke requires "
+    "confirm=true (delete_note always; reindex force=true; git_sync run/pull). "
+    "vault(action=list|contracts|describe|merge|project|stats): registry + contracts + "
+    "optional habit KPIs (stats). "
+    "Routing: write_note=create/overwrite (content=); "
+    "append_note=session log / post-search add (text=); "
+    "patch_note=frontmatter/section mutate or place op (move/copy); "
+    "search_notes(limit=, folder= or folders=[]); filter_notes(where=); "
+    "read_note(path= or chunk_hash= from search hits); "
+    "Thread mtime → expected_mtime on follow-up writes. "
+    "Operator traces: otlp-mcp + Jaeger (not Apo MCP). "
+    "Multi-vault: vault= or search_notes(vaults=[])."
 )
 mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
 
@@ -261,60 +238,6 @@ def _reload_config_sync() -> dict:
         "runtime_file": str(_runtime_config_path()),
     }
 
-
-def _telemetry_sync(
-    action: str,
-    days: int | None,
-    tool: str | None,
-    conversation_id: str | None,
-    vault: str,
-) -> dict:
-    from apo_engine import telemetry_ops
-
-    try:
-        v = _vault(vault)
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-    if days is not None and days < 0:
-        return _err(error="bad_request", message="days must be >= 0 or null")
-    act = (action or "status").strip().lower()
-    return telemetry_ops.telemetry(
-        act,
-        surface="agent",
-        vault_root=v.root,
-        collection=v.collection,
-        days=days,
-        tool=tool,
-        conversation_id=conversation_id,
-    )
-
-
-@mcp.tool(annotations=_RO)
-async def telemetry(
-    action: Annotated[
-        str,
-        Field(
-            description="status | session | active | efficiency — agent-facing only.",
-        ),
-    ] = "status",
-    days: Annotated[
-        int | None,
-        Field(description="Rollup window in days (default 7 for efficiency)."),
-    ] = 7,
-    tool: Annotated[
-        str | None,
-        Field(description="Optional tool name filter (session / efficiency)."),
-    ] = None,
-    conversation_id: Annotated[
-        str | None,
-        Field(description="Cursor conversation id (session action)."),
-    ] = None,
-    vault: str = "",
-) -> dict:
-    """Agent telemetry — store health, session habits, efficiency KPIs."""
-    return await asyncio.to_thread(
-        _telemetry_sync, action, days, tool, conversation_id, vault
-    )
 
 
 def _delete_note_sync(path: str, vault: str = "") -> dict:
@@ -419,40 +342,23 @@ def _delete_note_admin(params: dict[str, Any], *, vault: str = "") -> dict:
     return _delete_note_sync(path.strip(), vault=v)
 
 
-def _telemetry_admin(params: dict[str, Any], *, vault: str = "") -> dict:
-    from apo_engine import telemetry_ops
-
-    action = str(params.get("action") or "collection").strip().lower()
-    days = params.get("days", 7)
-    tool = params.get("tool")
-    v = vault or str(params.get("vault") or "")
-    if days is not None and not isinstance(days, int):
-        return _err(error="bad_request", message="parameters.days must be int or null")
-    if tool is not None and not isinstance(tool, str):
-        return _err(error="bad_request", message="parameters.tool must be a string")
-    try:
-        binding = _vault(v)
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-    return telemetry_ops.telemetry(
-        action,
-        surface="admin",
-        vault_root=binding.root,
-        collection=binding.collection,
-        days=days if days is None or isinstance(days, int) else 7,
-        tool=tool if isinstance(tool, str) else None,
-    )
-
-
 def _reindex_admin(params: dict[str, Any], *, vault: str = "") -> dict:
-    force = bool(params.get("force"))
+    mode = str(params.get("mode") or "rebuild").strip().lower()
     v = vault or str(params.get("vault") or "")
+    if mode == "flush":
+        return _reindex_deferred_sync(vault=v)
+    if mode != "rebuild":
+        return _err(error="bad_request", message="mode must be flush or rebuild")
+    force = bool(params.get("force"))
     return _reindex_sync(force=force, vault=v)
 
 
-def _reindex_deferred_admin(params: dict[str, Any], *, vault: str = "") -> dict:
-    v = vault or str(params.get("vault") or "")
-    return _reindex_deferred_sync(vault=v)
+def _reindex_deferred_legacy_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    out = _reindex_deferred_sync(vault=vault or str(params.get("vault") or ""))
+    if out.get("ok"):
+        out = dict(out)
+        out["tip"] = "reindex_deferred renamed — use reindex(mode=flush)"
+    return out
 
 
 def _memory_status_admin(_params: dict[str, Any], *, vault: str = "") -> dict:
@@ -468,9 +374,8 @@ def _reload_config_admin(_params: dict[str, Any], *, vault: str = "") -> dict:
 _ADMIN_HANDLERS: dict[str, apo_admin_ops.AdminHandler] = {
     "reload_config": _reload_config_admin,
     "memory_status": _memory_status_admin,
-    "telemetry": _telemetry_admin,
-    "reindex_deferred": _reindex_deferred_admin,
     "reindex": _reindex_admin,
+    "reindex_deferred": _reindex_deferred_legacy_admin,
     "delete_note": _delete_note_admin,
     "git_sync": _git_sync_admin,
 }
@@ -493,15 +398,7 @@ async def write_note(
     path: str,
     content: Annotated[
         str | None,
-        Field(description="Note body (canonical). Aliases: text=, body=."),
-    ] = None,
-    text: Annotated[
-        str | None,
-        Field(description="Alias for content. Prefer content=; conflicting values → bad_request."),
-    ] = None,
-    body: Annotated[
-        str | None,
-        Field(description="Legacy alias for content. Prefer content=."),
+        Field(description="Note body (required for create/overwrite)."),
     ] = None,
     expected_mtime: Annotated[
         float | None,
@@ -526,13 +423,11 @@ async def write_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Create or overwrite a note. Use content= (aliases text=, body=). Prefer append_note / patch_note for edits."""
+    """Create or overwrite a note. Use content=. Prefer append_note / patch_note for edits."""
     return await asyncio.to_thread(
         apo_ops.write_note,
         path,
         content,
-        text=text,
-        body=body,
         expected_mtime=expected_mtime,
         expected_frontmatter_hash=expected_frontmatter_hash,
         expected_body_hash=expected_body_hash,
@@ -545,21 +440,13 @@ async def write_note(
 async def append_note(
     text: Annotated[
         str | None,
-        Field(description="Body to append (canonical). Aliases: content=, body=. Do not repeat the heading."),
+        Field(description="Body to append (required). Do not repeat the heading."),
     ] = None,
     path: str = "",
     heading: str | None = None,
     chunk_hash: str | None = None,
     position: Literal["end", "start"] = "end",
     create: bool = False,
-    content: Annotated[
-        str | None,
-        Field(description="Alias for text. Prefer text=; conflicting values → bad_request."),
-    ] = None,
-    body: Annotated[
-        str | None,
-        Field(description="Legacy alias for text (often confused with note body). Prefer text=."),
-    ] = None,
     expected_mtime: Annotated[
         float | None,
         Field(
@@ -583,13 +470,11 @@ async def append_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Preferred add for session log / History / post-search text. Use text= (aliases content=, body=). Anchor: chunk_hash (path optional) → heading → EOF. ``text`` is body only (do not repeat the heading — a leading duplicate of the anchor is stripped). Batch with other mutators → patch_note."""
+    """Preferred add for session log / History / post-search text. Use text=. Anchor: chunk_hash → heading → EOF."""
     return await asyncio.to_thread(
         apo_ops.append_note,
         path,
         text,
-        content=content,
-        body=body,
         heading=heading,
         chunk_hash=chunk_hash,
         position=position,
@@ -643,7 +528,7 @@ async def patch_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Mutate frontmatter/sections. Single path: path+ops. Multi-path: items=[{path,ops,…}] (max 20). XOR — not both. Standalone text add → append_note."""
+    """Mutate frontmatter/sections or place (ops place). Single: path+ops or place-only ops. Multi: items[]."""
     return await asyncio.to_thread(
         apo_ops.patch_entry,
         path=path,
@@ -660,54 +545,6 @@ async def patch_note(
     )
 
 
-@mcp.tool(annotations=_MUTATE)
-async def place_note(
-    src: Annotated[
-        str,
-        Field(
-            description=(
-                "Source: vault-relative path to move, or absolute ~/…|/… host .md to copy. "
-                "In-vault absolute paths move (not copy)."
-            ),
-        ),
-    ],
-    dst: Annotated[
-        str,
-        Field(description="Vault-relative destination path."),
-    ],
-    overwrite: bool = False,
-    fields: Annotated[
-        dict[str, Any] | None,
-        Field(
-            description=(
-                "Copy mode only: optional frontmatter merge before write "
-                '(e.g. {"source":"report"}). Forbidden when moving inside the vault.'
-            ),
-        ),
-    ] = None,
-    expected_mtime: Annotated[
-        float | None,
-        Field(
-            description=(
-                "Optimistic concurrency: src mtime when moving; dst mtime when copying "
-                "over an existing note."
-            ),
-        ),
-    ] = None,
-    vault: str = "",
-) -> dict:
-    """Move if src is in the vault; otherwise copy host .md into the vault (leaves host src). Prefer over delete+rewrite."""
-    return await asyncio.to_thread(
-        apo_ops.place_note,
-        src,
-        dst,
-        overwrite=overwrite,
-        fields=fields,
-        expected_mtime=expected_mtime,
-        vault=vault,
-    )
-
-
 ###############################################################################
 # Tools — reading & search (delegate to ops)
 ###############################################################################
@@ -715,50 +552,68 @@ async def place_note(
 
 @mcp.tool(annotations=_RO)
 async def read_note(
-    path: str,
+    path: Annotated[
+        str,
+        Field(description="Vault-relative path (XOR with chunk_hash)."),
+    ] = "",
+    chunk_hash: Annotated[
+        str | None,
+        Field(description="Section anchor from search_notes hits (XOR with path)."),
+    ] = None,
     heading: str | None = None,
     vault: str = "",
     start_line: int | None = None,
     end_line: int | None = None,
     max_chars: int | None = None,
+    force: Annotated[
+        bool,
+        Field(description="chunk_hash mode: return full section above preview threshold."),
+    ] = False,
+    fields: Annotated[
+        list[str] | None,
+        Field(description="Optional frontmatter projection; [] omits frontmatter key."),
+    ] = None,
     raw: Annotated[
         bool,
         Field(
             description=(
-                "If true, content is byte-exact file text (or an absolute-line slice). "
-                "Default full-file reads return body only; frontmatter is always a sidecar."
+                "Path mode: byte-exact file text (or line slice). "
+                "Default returns body only with frontmatter sidecar."
             ),
         ),
     ] = False,
 ) -> dict:
-    """Read a known path. Returns frontmatter (parsed) + content (body by default). Optional heading=/line range/max_chars; raw=true for byte-exact. Unknown path → search_notes first."""
+    """Read by path or search hit chunk_hash. Search → read_note(chunk_hash=)."""
     return await asyncio.to_thread(
         apo_ops.read_note,
         path,
+        chunk_hash=chunk_hash,
         heading=heading,
         vault=vault,
         start_line=start_line,
         end_line=end_line,
         max_chars=max_chars,
         raw=raw,
+        force=force,
+        fields=fields,
     )
 
 
 @mcp.tool(annotations=_RO)
 async def search_notes(
     query: str,
-    top_k: Annotated[
-        int | None,
-        Field(description="Alias for limit. Prefer limit=; conflicting values → bad_request."),
-    ] = None,
     folder: str = "",
+    folders: Annotated[
+        list[str] | None,
+        Field(description="Multi-folder scope (XOR with folder=). Merge by score."),
+    ] = None,
     vault: str = "",
     vaults: Annotated[
         list[str] | None,
         Field(
             description=(
                 "Fan-out across named vaults (separate indexes); merge by score. "
-                "Do not combine with vault=. Empty/omitted → single vault= or default."
+                "Do not combine with vault=."
             ),
         ),
     ] = None,
@@ -768,7 +623,7 @@ async def search_notes(
     ] = _DEFAULT_SEARCH_SNIPPET,
     limit: Annotated[
         int | None,
-        Field(description="Max hits (canonical; default 5). Prefer over top_k."),
+        Field(description="Max hits (default 5)."),
     ] = None,
     exclude: Annotated[
         list[str] | None,
@@ -780,45 +635,17 @@ async def search_notes(
         ),
     ] = None,
 ) -> dict:
-    """Hybrid BM25+vector content search (not frontmatter — use filter_notes). Hits include chunk_hash, heading, file_bytes, section_bytes, mtime — use expand_section(chunk_hash) to read more."""
+    """Hybrid search. Hits include chunk_hash — read more via read_note(chunk_hash=)."""
     return await asyncio.to_thread(
         apo_ops.search,
         query,
-        top_k=top_k,
         folder=folder,
+        folders=folders,
         vault=vault,
         vaults=vaults,
         snippet_chars=snippet_chars,
         limit=limit,
         exclude=exclude,
-    )
-
-
-
-@mcp.tool(annotations=_RO)
-async def expand_section(
-    chunk_hash: str,
-    vault: str = "",
-    force: Annotated[
-        bool,
-        Field(description="When true, return full section body even above preview threshold."),
-    ] = False,
-) -> dict:
-    """Fetch the full markdown section for a search_notes hit. Prefer over read_note(path) — anchor via chunk_hash only."""
-    return await asyncio.to_thread(
-        apo_ops.expand_section, chunk_hash, vault=vault, force=force
-    )
-
-
-@mcp.tool(annotations=_RO)
-async def expand_chunk(
-    chunk_hash: str,
-    vault: str = "",
-    scope: Literal["section", "chunk"] = "section",
-) -> dict:
-    """Deprecated — prefer expand_section(chunk_hash=). Delegates to section fetch."""
-    return await asyncio.to_thread(
-        apo_ops.expand_chunk, chunk_hash, vault=vault, scope=scope
     )
 
 
@@ -838,10 +665,6 @@ async def filter_notes(
     limit: int = 20,
     vault: str = "",
     offset: int = 0,
-    filters: Annotated[
-        dict | None,
-        Field(description="Alias for where. Prefer where=; do not pass both with different values."),
-    ] = None,
     fields: Annotated[
         list[str] | None,
         Field(
@@ -852,7 +675,7 @@ async def filter_notes(
         ),
     ] = None,
 ) -> dict:
-    """Frontmatter catalog (no embeddings). Prefer where=; omit where or pass {} to list. Pass fields= on status sweeps. Newest first."""
+    """Frontmatter catalog (no embeddings). Prefer where=; omit where or pass {} to list."""
     return await asyncio.to_thread(
         apo_ops.filter_notes,
         where,
@@ -860,7 +683,6 @@ async def filter_notes(
         limit=limit,
         vault=vault,
         offset=offset,
-        filters=filters,
         fields=fields,
     )
 
@@ -953,14 +775,14 @@ async def history(
 async def vault(
     action: Annotated[
         str,
-        Field(description="list | contracts | describe | merge | project"),
+        Field(description="list | contracts | describe | merge | project | stats"),
     ] = "list",
     vault: Annotated[
         str,
         Field(
             description=(
                 "Vault name from APO_VAULTS. Empty: list/merge/project=all; "
-                "contracts=all; describe=default vault."
+                "contracts=all; describe/stats=default vault."
             ),
         ),
     ] = "",
@@ -968,9 +790,8 @@ async def vault(
         list[str] | None,
         Field(
             description=(
-                "Scope every action to a named subset of the registry (e.g. a "
-                "workspace desk projection limited to two of six vaults). "
-                "Do not combine with vault=. Unknown names → bad_vault."
+                "Scope every action to a named subset of the registry. "
+                "Do not combine with vault=."
             ),
         ),
     ] = None,
@@ -979,19 +800,23 @@ async def vault(
         Field(
             description=(
                 "contracts / describe / merge: when false (default), return contract "
-                "summaries (id/path/source/ok) without YAML bodies. When true, include "
-                "parsed data=. Ignored for list/project."
+                "summaries without YAML bodies. When true, include parsed data=."
             ),
         ),
     ] = False,
+    days: Annotated[
+        int | None,
+        Field(description="stats only: rollup window in days (default 7)."),
+    ] = 7,
 ) -> dict:
-    """Vault registry, contracts, desk merge, and return-only desk projection."""
+    """Vault registry, contracts, desk projection, and optional habit KPIs (stats)."""
     return await asyncio.to_thread(
         apo_ops.vault_op,
         action,
         vault=vault,
         vaults=vaults,
         full=full,
+        days=days,
     )
 
 
