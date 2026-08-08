@@ -53,6 +53,10 @@ def _tool_arguments(context: MiddlewareContext[Any]) -> dict[str, Any]:
 
 _SKIP_METRICS_TOOLS = frozenset({"telemetry", "apo_admin"})
 
+# vault_id, vault_root, collection (collection may be "" → fall back to process default)
+VaultResolve = tuple[str, Path | None, str]
+VaultResolver = Callable[[dict[str, Any]], VaultResolve | tuple[str, Path | None]]
+
 
 class ToolMetricsMiddleware(Middleware):
     """Record one tool-call event per tools/call (best-effort; never blocks the tool)."""
@@ -63,7 +67,7 @@ class ToolMetricsMiddleware(Middleware):
         *,
         vault_id: str = "",
         vault_root: Path | None = None,
-        vault_resolver: Callable[[dict[str, Any]], tuple[str, Path | None]] | None = None,
+        vault_resolver: VaultResolver | None = None,
     ) -> None:
         super().__init__()
         self.collection = (
@@ -75,11 +79,22 @@ class ToolMetricsMiddleware(Middleware):
         self.default_vault_root = vault_root
         self.vault_resolver = vault_resolver
 
-    def _resolve_vault(self, args: dict[str, Any]) -> tuple[str, Path | None]:
+    def _resolve_vault(self, args: dict[str, Any]) -> VaultResolve:
+        """Return (vault_id, vault_root, collection) for this tool call.
+
+        Prefer the registry collection from ``vault_resolver`` so
+        ``vault(action=stats)`` (which filters by vault binding collection)
+        sees the same bucket the middleware wrote.
+        """
         if self.vault_resolver is not None:
-            vid, root = self.vault_resolver(args)
-            return vid, root
-        return self.default_vault_id, self.default_vault_root
+            resolved = self.vault_resolver(args)
+            if len(resolved) == 3:
+                vid, root, coll = resolved  # type: ignore[misc]
+                coll_s = (coll or "").strip()
+                return str(vid or ""), root, coll_s or self.collection
+            vid, root = resolved  # type: ignore[misc]
+            return str(vid or ""), root, self.collection
+        return self.default_vault_id, self.default_vault_root, self.collection
 
     async def on_call_tool(
         self,
@@ -96,7 +111,7 @@ class ToolMetricsMiddleware(Middleware):
         args = _tool_arguments(context)
         flags = tool_metrics.extract_arg_flags(args, tool=tool)
         req_bytes = tool_metrics.estimate_bytes(args)
-        vault_id, vault_root = self._resolve_vault(args)
+        vault_id, vault_root, collection = self._resolve_vault(args)
         conv_id = request_conversation_id()
         t0 = time.perf_counter()
         try:
@@ -108,7 +123,7 @@ class ToolMetricsMiddleware(Middleware):
             if shape:
                 err_flags["error_shape"] = shape
             tool_metrics.record_call(
-                collection=self.collection,
+                collection=collection,
                 tool=tool,
                 ok=False,
                 error="validation_error",
@@ -125,7 +140,7 @@ class ToolMetricsMiddleware(Middleware):
         except Exception as e:
             duration_ms = (time.perf_counter() - t0) * 1000.0
             tool_metrics.record_call(
-                collection=self.collection,
+                collection=collection,
                 tool=tool,
                 ok=False,
                 error=type(e).__name__,
@@ -143,7 +158,7 @@ class ToolMetricsMiddleware(Middleware):
         duration_ms = (time.perf_counter() - t0) * 1000.0
         ok, error, resp_bytes = tool_metrics.summarize_result(result)
         tool_metrics.record_call(
-            collection=self.collection,
+            collection=collection,
             tool=tool,
             ok=ok,
             error=error,

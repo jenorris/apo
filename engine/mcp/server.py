@@ -191,17 +191,19 @@ from apo_engine.agent_validation import AgentValidationMiddleware  # noqa: E402
 _load_vaults()
 
 
-def _metrics_vault_for_args(args: dict[str, Any]) -> tuple[str, Path | None]:
+def _metrics_vault_for_args(args: dict[str, Any]) -> tuple[str, Path | None, str]:
+    """Resolve (vault_id, vault_root, collection) for ToolMetricsMiddleware."""
     key = str(args.get("vault") or "").strip() or DEFAULT_VAULT
     v = VAULTS.get(key)
     if v is not None:
-        return v.name, v.root
+        return v.name, v.root, v.collection
     if VAULTS:
         dv = VAULTS.get(DEFAULT_VAULT)
         if dv is not None:
-            return dv.name, dv.root
+            return dv.name, dv.root, dv.collection
     root_s = os.environ.get("APO_NOTES_ROOT", "").strip()
-    return key, Path(root_s).expanduser() if root_s else None
+    coll = (os.environ.get("APO_COLLECTION") or "").strip() or key or "default"
+    return key, Path(root_s).expanduser() if root_s else None, coll
 
 
 from apo_engine.tool_metrics_middleware import ToolMetricsMiddleware  # noqa: E402

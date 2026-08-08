@@ -4,6 +4,21 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-08-08
+
+Telemetry collection alignment + durable watcher start.
+
+### Fixed
+
+- **`ToolMetricsMiddleware`** records the vault registry `collection` (not process-wide `default`), so `vault(action=stats)` sees the same bucket as writes.
+- **`remap_default_collections_by_vault_id`** one-shot remediates historical `default` rows that already had a correct `vault_id`.
+- **`watch.sh start`** double-forks into a new session (survives Cursor/agent shell teardown) and preserves caller `APO_VAULTS` / `APO_NOTES_ROOT` overrides across `.env` source.
+- **`apo_engine.__version__`** synced to package semver (was stuck at `0.4.0` while pyproject was `0.6.x`).
+
+### Changed
+
+- MCP `_metrics_vault_for_args` returns `(vault_id, vault_root, collection)` for multi-vault desks.
+
 ## [0.6.1] — 2026-08-08
 
 Bugbot follow-ups on the 0.6.0 table/ToC surface.

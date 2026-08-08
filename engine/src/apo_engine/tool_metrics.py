@@ -752,6 +752,62 @@ def read_active_session() -> dict[str, Any]:
     return {"ok": True, "active": True, "path": str(p), **data}
 
 
+def remap_default_collections_by_vault_id(
+    *,
+    path: Path | None = None,
+    vault_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """One-shot fix: set collection = vault_id for mis-bucketed ``default`` rows.
+
+    Historical ToolMetricsMiddleware wrote registry vault_id correctly but left
+    collection as ``default``. ``vault(action=stats)`` filters by binding
+    collection, so those rows were invisible until remapped.
+    """
+    db_path = metrics_db_path(path)
+    if not db_path.is_file():
+        return {"ok": True, "updated": 0, "path": str(db_path), "skipped": "missing_db"}
+    ids = [v.strip() for v in (vault_ids or []) if isinstance(v, str) and v.strip()]
+    try:
+        with _write_lock:
+            conn = _connect(db_path)
+            try:
+                _ensure_schema(conn)
+                if ids:
+                    placeholders = ", ".join("?" for _ in ids)
+                    where = (
+                        f"collection = 'default' AND vault_id IN ({placeholders})"
+                    )
+                    before = int(
+                        conn.execute(
+                            f"SELECT COUNT(*) FROM tool_calls WHERE {where}",
+                            ids,
+                        ).fetchone()[0]
+                    )
+                    conn.execute(
+                        f"UPDATE tool_calls SET collection = vault_id WHERE {where}",
+                        ids,
+                    )
+                else:
+                    where = (
+                        "collection = 'default' "
+                        "AND vault_id IS NOT NULL AND vault_id != ''"
+                    )
+                    before = int(
+                        conn.execute(
+                            f"SELECT COUNT(*) FROM tool_calls WHERE {where}"
+                        ).fetchone()[0]
+                    )
+                    conn.execute(
+                        f"UPDATE tool_calls SET collection = vault_id WHERE {where}"
+                    )
+                updated = before
+            finally:
+                conn.close()
+    except (OSError, duckdb.Error) as e:
+        return {"ok": False, "updated": 0, "path": str(db_path), "error": str(e)}
+    return {"ok": True, "updated": updated, "path": str(db_path), "vault_ids": ids or "all"}
+
+
 def summarize_result(result: Any) -> tuple[bool, str | None, int]:
     """Infer ok/error and response size from a tool return value."""
     resp_bytes = _estimate_bytes(result)
