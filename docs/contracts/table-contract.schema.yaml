@@ -1,0 +1,36 @@
+# Apo table contract — template / example
+# Copy to <vault>/system/contracts/table-contract.schema.yaml and edit.
+# Legacy path system/config/table-contract.schema.yaml still loaded.
+# Runtime: guides table-row indexing (row_key selection) and CSV/JSON upsert
+# (merge mode + header synonyms). Fuzzy header matching with ambiguity reject is
+# the default engine behavior — this contract only overrides it per table pattern.
+
+table_contract_version: "0.1"
+
+# Per-pattern table rules. `match` is a vault-relative path glob; the first match
+# wins. Omit this file entirely to accept engine defaults everywhere.
+tables:
+  - match: "areas/vehicle/*.md"
+    # Column whose value is the stable row_key. Falls back to the first non-empty
+    # cell, then a synthetic row-<n>, when absent or blank.
+    key_column: "Date"
+
+  - match: "areas/**/inventory.md"
+    key_column: "SKU"
+    # Default merge for replace_table / CSV upsert on this note.
+    # replace = swap whole table; append = add rows; upsert = replace by key.
+    merge: upsert
+    # Allow CSV/JSON imports to introduce columns not present in the table.
+    # Default false — unmatched columns reject with header_ambiguous + suggestions.
+    allow_new_columns: false
+    # Optional explicit header synonyms (incoming -> canonical). Only needed when
+    # the default fuzzy match is ambiguous or wrong; canonical must be a real column.
+    header_synonyms:
+      qty: "Quantity"
+      "unit cost": "Unit Cost"
+
+# Engine defaults when no pattern matches:
+#   key_column      : first non-empty cell (else row-<n>)
+#   merge           : replace
+#   allow_new_columns: false
+#   header mapping  : normalized fuzzy match, ambiguity-reject (cutoff 0.72)

@@ -95,56 +95,27 @@ def section_markdown(text: str) -> list[tuple[str, int, str, int, int]]:
     """Return [(heading_breadcrumb, level, section_text, start_line, end_line)] — one row per section.
 
     Each markdown heading starts a section that runs until the next heading of the same
-    or higher level. ``level`` 0 = preamble before the first heading.
+    or higher level. ``level`` 0 = preamble before the first heading. Boundaries come from
+    the shared :mod:`apo_engine.markdown_sections` splitter so an index span, a read span,
+    and a patch span all resolve to the same lines.
     """
+    from .markdown_sections import BREADCRUMB_SEP, split_sections
+
     body, body_line = _body_start_line(text)
-    lines = body.split("\n")
     if not body.strip():
         return []
-
-    headings: list[tuple[int, int, str]] = []
-    for i, line in enumerate(lines):
-        m = _HEADING.match(line)
-        if m:
-            headings.append((i, len(m.group(1)), m.group(2).strip()))
+    lines = body.split("\n")
 
     sections: list[tuple[str, int, str, int, int]] = []
-
-    if not headings:
-        content = body.strip()
-        if content:
-            end_line = body_line + max(0, len(lines) - 1)
-            sections.append(("", 0, content, body_line, end_line))
-        return sections
-
-    if headings[0][0] > 0:
-        preamble = "\n".join(lines[: headings[0][0]]).strip()
-        if preamble:
-            sections.append(
-                ("", 0, preamble, body_line, body_line + headings[0][0] - 1)
-            )
-
-    for hi, (idx, level, title) in enumerate(headings):
-        stack: list[str] = []
-        for j in range(hi + 1):
-            hj_idx, hj_level, hj_title = headings[j]
-            if hj_level <= level or j == hi:
-                stack = stack[: hj_level - 1] + [""] * max(0, hj_level - 1 - len(stack)) + [hj_title]
-        breadcrumb = " › ".join(h for h in stack if h)
-
-        end_idx = len(lines)
-        for j in range(hi + 1, len(headings)):
-            next_idx, next_level, _ = headings[j]
-            if next_level <= level:
-                end_idx = next_idx
-                break
-
-        section_text = "\n".join(lines[idx:end_idx]).strip()
-        start_line = body_line + idx
-        end_line = body_line + end_idx - 1 if end_idx > idx else start_line
-        if section_text:
-            sections.append((breadcrumb, level, section_text, start_line, end_line))
-
+    for span in split_sections(lines):
+        start_idx = span.heading_line if span.heading_line >= 0 else span.body_start
+        section_text = "\n".join(lines[start_idx : span.body_end]).strip()
+        if not section_text:
+            continue
+        breadcrumb = BREADCRUMB_SEP.join(span.breadcrumb)
+        start_line = body_line + start_idx
+        end_line = body_line + span.body_end - 1 if span.body_end > start_idx else start_line
+        sections.append((breadcrumb, span.level, section_text, start_line, end_line))
     return sections
 
 
@@ -156,6 +127,126 @@ def chunk_markdown(
     """Deprecated alias — markdown notes are section-indexed; max_chars/overlap ignored."""
     del max_chars, overlap
     return section_markdown(text)
+
+
+def _note_title(text: str, rel: str) -> str:
+    """Breadcrumb root for row embeds: frontmatter title, else filename stem."""
+    fm = note_frontmatter(text, rel) or {}
+    title = fm.get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    stem = rel.rsplit("/", 1)[-1]
+    for suf in (".md", ".markdown"):
+        if stem.lower().endswith(suf):
+            stem = stem[: -len(suf)]
+            break
+    return stem.replace("-", " ").replace("_", " ").strip()
+
+
+def _markdown_chunk_rows(text: str, rel: str) -> list[tuple]:
+    """Produce index rows for a markdown note: prose sections + table header/rows.
+
+    Returns 11-field pending tuples
+    ``(rel, ord, breadcrumb, text, start_line, end_line, level, chunk_id, content_hash,
+    section_bytes, meta)`` where ``meta`` is ``None`` for prose sections or a dict with
+    ``chunk_kind`` / table identity for ``table_header`` / ``table_row`` chunks.
+
+    Each table stays inside its owning section chunk (prose recall unchanged) *and*
+    additionally emits one ``table_header`` chunk plus one ``table_row`` chunk per data
+    row so natural-language queries retrieve the specific row. Tables are never split
+    mid-table.
+    """
+    from .markdown_sections import BREADCRUMB_SEP
+    from . import table_markdown as tm
+
+    id_prefix = f"markdown:{rel}"
+    model = config.MODEL_NAME
+    note_title = _note_title(text, rel)
+
+    sections = section_markdown(text)
+    rows: list[tuple] = []
+    ord_counter = 0
+
+    # Map absolute line → owning section (breadcrumb + chunk_id) for table parenting.
+    section_spans: list[tuple[int, int, str, str]] = []  # (start, end, breadcrumb, chunk_id)
+    for breadcrumb, level, ctext, start_line, end_line in sections:
+        chash = _content_hash(ctext)
+        chunk_id = compute_chunk_id(id_prefix, start_line, end_line, chash, model)
+        sec_bytes = len(ctext.encode("utf-8"))
+        rows.append(
+            (rel, ord_counter, breadcrumb, ctext, start_line, end_line, level, chunk_id, chash, sec_bytes, None)
+        )
+        ord_counter += 1
+        section_spans.append((start_line, end_line, breadcrumb, chunk_id))
+
+    body, body_line = _body_start_line(text)
+    if not body.strip():
+        return rows
+    body_lines = body.split("\n")
+    tables = tm.find_tables(body_lines)
+    # Optional vault table-contract key_column (first matching path glob wins).
+    key_column: str | None = None
+    try:
+        from .table_contract import key_column_for
+
+        key_column = key_column_for(vaults.notes_root(), rel)
+    except Exception:
+        key_column = None
+    for t in tables:
+        abs_start = body_line + t.start_line  # 1-based file line of header row
+        parent_breadcrumb = ""
+        parent_chunk_hash = ""
+        for s_start, s_end, bc, cid in section_spans:
+            if s_start <= abs_start <= s_end:
+                parent_breadcrumb = bc
+                parent_chunk_hash = cid
+        crumbs = [note_title] + [c for c in parent_breadcrumb.split(BREADCRUMB_SEP) if c]
+        table_id = tm.table_id_for(rel, abs_start, t.table_index)
+        schema_hash = tm.table_schema_hash(t.headers)
+        level = 0
+        # Header chunk — schema recall.
+        htext = tm.header_flatten_text(crumbs, t.headers)
+        hhash = _content_hash(htext)
+        hid = compute_chunk_id(id_prefix, abs_start, abs_start + 1, hhash, model)
+        rows.append(
+            (
+                rel, ord_counter, parent_breadcrumb, htext, abs_start, abs_start + 1, level,
+                hid, hhash, len(htext.encode("utf-8")),
+                {
+                    "chunk_kind": "table_header",
+                    "parent_chunk_hash": parent_chunk_hash,
+                    "table_id": table_id,
+                    "table_schema_hash": schema_hash,
+                    "row_index": None,
+                    "row_key": None,
+                },
+            )
+        )
+        ord_counter += 1
+        # One chunk per data row.
+        first_data_line = abs_start + 2  # header + delimiter
+        for ri, row in enumerate(t.rows):
+            rtext = tm.row_flatten_text(crumbs, t.headers, row)
+            rhash = _content_hash(rtext)
+            row_line = first_data_line + ri
+            rid = compute_chunk_id(id_prefix, row_line, row_line, rhash, model)
+            row_key = tm.row_key_for(t, ri, key_column=key_column)
+            rows.append(
+                (
+                    rel, ord_counter, parent_breadcrumb, rtext, row_line, row_line, level,
+                    rid, rhash, len(rtext.encode("utf-8")),
+                    {
+                        "chunk_kind": "table_row",
+                        "parent_chunk_hash": parent_chunk_hash,
+                        "table_id": table_id,
+                        "table_schema_hash": schema_hash,
+                        "row_index": ri,
+                        "row_key": row_key,
+                    },
+                )
+            )
+            ord_counter += 1
+    return rows
 
 
 
@@ -256,7 +347,12 @@ def _normalize_query(query: str) -> str:
 
 
 def query_embed(query: str) -> list[float]:
-    """Embed a search query with a short TTL cache for repeated agent lookups."""
+    """Embed a search query with a short TTL cache for repeated agent lookups.
+
+    Applies ``config.QUERY_PREFIX`` (asymmetric BGE query instruction) on the query
+    side only — the passage/index path in :func:`embed` is never prefixed, so toggling
+    the prefix needs no reindex. Cache key is the raw (unprefixed) normalized query.
+    """
     key = _normalize_query(query)
     ttl = config.QUERY_EMBED_TTL
     now = time.monotonic()
@@ -266,7 +362,8 @@ def query_embed(query: str) -> list[float]:
             if hit is not None and now - hit[0] < ttl:
                 _query_embed_cache.move_to_end(key)
                 return hit[1]
-    vec = embed([query])[0]
+    prefix = getattr(config, "QUERY_PREFIX", "") or ""
+    vec = embed([prefix + query if prefix else query])[0]
     if ttl > 0 and key and vec is not None:
         with _query_embed_lock:
             _query_embed_cache[key] = (now, vec)
@@ -476,11 +573,20 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
         # reusable" and falls back to re-embedding, so this is safe without a forced rebuild.
         ("embedding", "BLOB"),
         ("section_bytes", "INTEGER"),
+        # Table-awareness (0.6): section | table_header | table_row. NULL = section
+        # (rows written before this column existed read as plain sections).
+        ("chunk_kind", "TEXT"),
+        ("parent_chunk_hash", "TEXT"),
+        ("table_id", "TEXT"),
+        ("table_schema_hash", "TEXT"),
+        ("row_index", "INTEGER"),
+        ("row_key", "TEXT"),
     ):
         if name not in cols:
             db.execute(f"ALTER TABLE chunks ADD COLUMN {name} {ddl}")
     db.execute("CREATE INDEX IF NOT EXISTS chunks_hash ON chunks(chunk_hash)")
     db.execute("CREATE INDEX IF NOT EXISTS chunks_content_hash ON chunks(content_hash)")
+    db.execute("CREATE INDEX IF NOT EXISTS chunks_table ON chunks(table_id)")
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
@@ -719,6 +825,8 @@ def _insert_pending_chunks(
         rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id = row[:8]
         body_hash = row[8] if len(row) > 8 else _content_hash(ctext)
         section_bytes = row[9] if len(row) > 9 else len(ctext.encode("utf-8"))
+        meta = row[10] if len(row) > 10 else None
+        meta = meta if isinstance(meta, dict) else None
         blob = sqlite_vec.serialize_float32(vec)
         chunk_rows.append(
             (
@@ -734,14 +842,22 @@ def _insert_pending_chunks(
                 body_hash,
                 blob,
                 section_bytes,
+                (meta or {}).get("chunk_kind") or "section",
+                (meta or {}).get("parent_chunk_hash"),
+                (meta or {}).get("table_id"),
+                (meta or {}).get("table_schema_hash"),
+                (meta or {}).get("row_index"),
+                (meta or {}).get("row_key"),
             )
         )
         vec_rows.append((rid, blob))
         fts_rows.append((rid, ctext))
     db.executemany(
         """INSERT INTO chunks(id, path, ord, heading, text, start_line, end_line, heading_level,
-                               chunk_hash, content_hash, embedding, section_bytes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               chunk_hash, content_hash, embedding, section_bytes,
+                               chunk_kind, parent_chunk_hash, table_id, table_schema_hash,
+                               row_index, row_key)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         chunk_rows,
     )
     db.executemany("INSERT INTO vec_chunks(rowid, embedding) VALUES (?,?)", vec_rows)
@@ -1055,38 +1171,36 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
 
         if is_yaml_note(rel):
             fm = parse_yaml_document(text) or {}
-            chunk_iter = chunk_yaml_note(text, rel, fm)
             id_prefix = f"yaml:{rel}"
             fm_json = json.dumps(fm, default=str)
             wikilinks: list = []
+            note_rows: list[tuple] = []
+            for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
+                chunk_yaml_note(text, rel, fm)
+            ):
+                chash = _content_hash(ctext)
+                chunk_id = compute_chunk_id(id_prefix, start_line, end_line, chash, config.MODEL_NAME)
+                note_rows.append(
+                    (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, chash,
+                     len(ctext.encode("utf-8")), None)
+                )
         else:
-            chunk_iter = section_markdown(text)
-            id_prefix = f"markdown:{rel}"
             fm_json = note_catalog_json(text, rel)
             wikilinks = _extract_wikilinks(text)
-        for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(chunk_iter):
-            sec_bytes = len(ctext.encode("utf-8"))
-            if sec_bytes > config.SECTION_WARN_BYTES:
+            note_rows = _markdown_chunk_rows(text, rel)
+        for row in note_rows:
+            sec_bytes = row[9]
+            if sec_bytes > config.SECTION_WARN_BYTES and (row[10] is None):
                 import logging
 
                 logging.getLogger("apo.index").warning(
                     "section %s:%s is %d bytes (> %d)",
                     rel,
-                    heading or "(preamble)",
+                    row[2] or "(preamble)",
                     sec_bytes,
                     config.SECTION_WARN_BYTES,
                 )
-            chash = _content_hash(ctext)
-            chunk_id = compute_chunk_id(
-                id_prefix,
-                start_line,
-                end_line,
-                chash,
-                config.MODEL_NAME,
-            )
-            pending.append(
-                (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, chash, sec_bytes)
-            )
+            pending.append(row)
         if wikilinks:
             db.executemany(
                 "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
@@ -1159,6 +1273,10 @@ class Hit:
     mtime: float = 0.0
     file_bytes: int = 0
     section_bytes: int = 0
+    content_hash: str = ""
+    chunk_kind: str = "section"
+    row_key: str = ""
+    table_id: str = ""
 
 
 def count_chunks() -> int:
@@ -1169,24 +1287,30 @@ def count_chunks() -> int:
 def lookup_chunk(chunk_hash: str, *, include_text: bool = True) -> dict | None:
     """Look up a chunk by hash. Set ``include_text=False`` for write-anchor metadata only."""
     db = reader_connect()
+    tail = (
+        "COALESCE(chunk_kind, 'section'), table_id, row_index, row_key, "
+        "parent_chunk_hash, COALESCE(content_hash, '')"
+    )
     if include_text:
         row = db.execute(
-            """SELECT path, heading, text, start_line, end_line, heading_level, chunk_hash
+            f"""SELECT path, heading, text, start_line, end_line, heading_level, chunk_hash, {tail}
                FROM chunks WHERE chunk_hash = ? LIMIT 1""",
             (chunk_hash,),
         ).fetchone()
     else:
         row = db.execute(
-            """SELECT path, heading, start_line, end_line, heading_level, chunk_hash
+            f"""SELECT path, heading, start_line, end_line, heading_level, chunk_hash, {tail}
                FROM chunks WHERE chunk_hash = ? LIMIT 1""",
             (chunk_hash,),
         ).fetchone()
     if not row:
         return None
     if include_text:
-        rel, heading, text, start_line, end_line, hlevel, chash = row
+        (rel, heading, text, start_line, end_line, hlevel, chash,
+         chunk_kind, table_id, row_index, row_key, parent, content_hash) = row
     else:
-        rel, heading, start_line, end_line, hlevel, chash = row
+        (rel, heading, start_line, end_line, hlevel, chash,
+         chunk_kind, table_id, row_index, row_key, parent, content_hash) = row
         text = None
     root = vaults.notes_root()
     out = {
@@ -1197,9 +1321,42 @@ def lookup_chunk(chunk_hash: str, *, include_text: bool = True) -> dict | None:
         "end_line": end_line,
         "heading_level": hlevel,
         "chunk_hash": chash,
+        "chunk_kind": chunk_kind or "section",
+        "table_id": table_id,
+        "row_index": row_index,
+        "row_key": row_key,
+        "parent_chunk_hash": parent,
+        "index_content_hash": content_hash or "",
     }
     if include_text:
         out["content"] = text
+    return out
+
+
+def note_chunk_order(rel: str) -> list[dict]:
+    """Ordered chunk cursors for a note — nav prev/next, sibling, and ToC.
+
+    One row per chunk (``ord`` order): title/breadcrumb, chunk_hash, kind, level.
+    Reads the index only — no vault file read.
+    """
+    db = reader_connect()
+    out: list[dict] = []
+    for heading, chash, hlevel, kind, sbytes, row_key in db.execute(
+        """SELECT heading, chunk_hash, heading_level, COALESCE(chunk_kind,'section'),
+                  COALESCE(section_bytes, LENGTH(text)), COALESCE(row_key,'')
+           FROM chunks WHERE path=? ORDER BY ord""",
+        (rel,),
+    ):
+        out.append(
+            {
+                "heading": heading or "",
+                "chunk_hash": chash or "",
+                "heading_level": int(hlevel or 0),
+                "chunk_kind": kind or "section",
+                "section_bytes": int(sbytes or 0),
+                "row_key": row_key or "",
+            }
+        )
     return out
 
 
@@ -1385,35 +1542,22 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
 
         if is_yaml_note(rel):
             fm = parse_yaml_document(text) or {}
-            chunk_iter = chunk_yaml_note(text, rel, fm)
             id_prefix = f"yaml:{plan.rel}"
             plan.frontmatter_json = json.dumps(fm, default=str)
             plan.wikilinks = []
+            for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
+                chunk_yaml_note(text, rel, fm)
+            ):
+                body_hash = _content_hash(ctext)
+                chunk_id = compute_chunk_id(id_prefix, start_line, end_line, body_hash, config.MODEL_NAME)
+                plan.pending.append(
+                    (plan.rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id,
+                     body_hash, len(ctext.encode("utf-8")), None)
+                )
         else:
-            chunk_iter = section_markdown(text)
-            id_prefix = f"markdown:{plan.rel}"
             plan.frontmatter_json = note_catalog_json(text, rel)
             plan.wikilinks = _extract_wikilinks(text)
-        for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(chunk_iter):
-            body_hash = _content_hash(ctext)
-            chunk_id = compute_chunk_id(
-                id_prefix, start_line, end_line, body_hash, config.MODEL_NAME
-            )
-            sec_bytes = len(ctext.encode("utf-8"))
-            plan.pending.append(
-                (
-                    plan.rel,
-                    ordi,
-                    heading,
-                    ctext,
-                    start_line,
-                    end_line,
-                    hlevel,
-                    chunk_id,
-                    body_hash,
-                    sec_bytes,
-                )
-            )
+            plan.pending.extend(_markdown_chunk_rows(text, rel))
         plans.append(plan)
 
     active = plans
@@ -1512,6 +1656,27 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         db.commit()  # mtime-only updates
 
     return stamped + len(purge_rels)
+
+
+def reembed_one(rel: str, *, verbose: bool = False) -> int:
+    """Watcher-only re-embed of a single note by vault-relative path.
+
+    Named entry point for the sole index-writer (watch / CLI). Delegates to
+    :func:`index_files`, which reuses per-chunk vectors by ``content_hash`` — so a
+    one-cell table edit re-embeds only the changed ``table_row`` chunk, not the whole
+    table. MCP/RPC must never call this; they enqueue the path and let the watcher run.
+    """
+    return index_files([vaults.notes_root() / rel], verbose=verbose)
+
+
+def reembed_batch(rels: list[str] | set[str], *, verbose: bool = False) -> int:
+    """Watcher-only batched re-embed (CSV import / column ops touch many rows at once).
+
+    Routes through :func:`index_files` so unchanged rows are reused and only the
+    changed rows hit the embed backend in one batched call.
+    """
+    root = vaults.notes_root()
+    return index_files([root / r for r in rels], verbose=verbose)
 
 
 def _delete_path_by_rel(db: sqlite3.Connection, rel: str) -> None:
@@ -1660,7 +1825,11 @@ def search(
         for row in db.execute(
             f"""SELECT c.id, c.path, c.heading, c.text, c.chunk_hash, c.heading_level,
                        c.start_line, c.end_line, f.mtime, COALESCE(f.bytes, 0),
-                       COALESCE(c.section_bytes, LENGTH(c.text))
+                       COALESCE(c.section_bytes, LENGTH(c.text)),
+                       COALESCE(c.content_hash, ''),
+                       COALESCE(c.chunk_kind, 'section'),
+                       COALESCE(c.row_key, ''),
+                       COALESCE(c.table_id, '')
                 FROM chunks c LEFT JOIN files f ON f.path = c.path
                 WHERE c.id IN ({placeholders})""",
             ids,
@@ -1684,6 +1853,10 @@ def search(
             mtime,
             file_bytes,
             section_bytes,
+            content_hash,
+            chunk_kind,
+            row_key,
+            table_id,
         ) = row
         if folder_prefix and not path.startswith(folder_prefix + "/"):
             continue
@@ -1705,6 +1878,10 @@ def search(
                 mtime=float(mtime or 0.0),
                 file_bytes=int(file_bytes or 0),
                 section_bytes=int(section_bytes or 0),
+                content_hash=content_hash or "",
+                chunk_kind=chunk_kind or "section",
+                row_key=row_key or "",
+                table_id=table_id or "",
             )
         )
         full_texts.append(text)

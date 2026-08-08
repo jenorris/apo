@@ -226,6 +226,8 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/quickstart.md](docs/quickstart.md) | Install, MCP registration, verify, troubleshoot |
 | [docs/onboard-prompt.md](docs/onboard-prompt.md) | Infer vault rules → propose persistent agent instructions |
 | [docs/agent-throughput.md](docs/agent-throughput.md) | Agent habits that make Apo fast (`folder=`, `fields=`, anchors, `expected_mtime`) |
+| [docs/tables.md](docs/tables.md) | Table row indexing, JSON transit, row-key `patch_note` ops, column-op gate |
+| [docs/toc-navigation.md](docs/toc-navigation.md) | `read_note(mode=toc)`, sibling hops, hash staleness, pagination |
 | [docs/patch-note-ops.md](docs/patch-note-ops.md) | `patch_note` wire contract (typed ops, aliases, error codes) |
 | [docs/search-quality.md](docs/search-quality.md) | Eval harness, measured hit@k / MRR, reranker guidance |
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |

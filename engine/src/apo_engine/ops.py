@@ -649,6 +649,7 @@ def search(
     exclude: list[str] | None = None,
     hybrid: bool = True,
     limit: int | None = None,
+    offset: int = 0,
 ) -> dict[str, Any]:
     try:
         targets = _resolve_search_bindings(vault, vaults)
@@ -657,6 +658,10 @@ def search(
     k, err = resolve_top_k(top_k, limit)
     if err:
         return _err(error="bad_request", message=err)
+    if offset < 0:
+        return _err(error="bad_request", message="offset must be >= 0")
+    # Over-fetch one past the page so has_more is exact without an extra count query.
+    fetch_k = k + offset + 1
     if folder.strip() and folders:
         return _err(
             error="bad_request",
@@ -690,7 +695,7 @@ def search(
                 rows, w, reranked, applied_default = _search_one_vault(
                     query,
                     b,
-                    k=k,
+                    k=fetch_k,
                     folder_clean=folder_clean,
                     snippet_chars=snippet_chars,
                     exclude=exclude,
@@ -733,7 +738,10 @@ def search(
 
     if total_attempts > 1:
         all_rows.sort(key=lambda r: float(r.get("score") or 0.0), reverse=True)
-        all_rows = all_rows[:k]
+
+    # Page the fused/ranked rows: offset window + exact has_more from the over-fetch.
+    has_more = len(all_rows) > offset + k
+    all_rows = all_rows[offset : offset + k]
 
     if fanout_vaults:
         out: dict[str, Any] = {
@@ -754,6 +762,9 @@ def search(
         out["default_exclude_by_vault"] = default_exclude_by_vault
     if any_reranked:
         out["reranked"] = True
+    out["has_more"] = has_more
+    if offset:
+        out["offset"] = offset
     if warnings:
         out["warning"] = "; ".join(warnings)
     return _attach_search_size_tips(_attach_folder_tip(out, folder_tip, root=tip_root))
@@ -775,6 +786,81 @@ def _apply_read_frontmatter(
         out["frontmatter"] = raw_fm
 
 
+def _short_title(heading: str) -> str:
+    """Last breadcrumb segment — the section's own title, not the full trail."""
+    if not heading:
+        return ""
+    return heading.split(" › ")[-1].strip()
+
+
+def _chunk_nav(order: list[dict], idx: int) -> dict[str, Any]:
+    """Lean prev/next cursors + position for a chunk at ``idx`` in ord order."""
+    def _cursor(i: int) -> dict[str, Any] | None:
+        if i < 0 or i >= len(order):
+            return None
+        c = order[i]
+        cur: dict[str, Any] = {
+            "title": _short_title(c["heading"]) or (c.get("row_key") or ""),
+            "chunk_hash": c["chunk_hash"],
+            "chunk_kind": c["chunk_kind"],
+        }
+        return cur
+
+    nav: dict[str, Any] = {"position": {"index": idx, "total": len(order)}}
+    prev = _cursor(idx - 1)
+    nxt = _cursor(idx + 1)
+    if prev:
+        nav["prev"] = prev
+    if nxt:
+        nav["next"] = nxt
+    return nav
+
+
+def _resolve_sibling(order: list[dict], idx: int, direction: str) -> str | None:
+    """Same-depth neighbor chunk_hash: same kind + heading_level, prev or next."""
+    if idx < 0 or idx >= len(order):
+        return None
+    cur = order[idx]
+    step = -1 if direction == "prev" else 1
+    j = idx + step
+    while 0 <= j < len(order):
+        c = order[j]
+        if c["chunk_kind"] == cur["chunk_kind"] and c["heading_level"] == cur["heading_level"]:
+            return c["chunk_hash"]
+        j += step
+    return None
+
+
+def _table_from_file(file_text: str, rel: str, table_id: str | None):
+    """Return the parsed table whose id matches ``table_id`` (or None)."""
+    from . import table_markdown as tm
+
+    body, body_line = core._body_start_line(file_text)
+    for t in tm.find_tables(body.split("\n")):
+        abs_start = body_line + t.start_line
+        if tm.table_id_for(rel, abs_start, t.table_index) == table_id:
+            return t
+    return None
+
+
+def _build_toc(rel: str, file_bytes: int) -> dict[str, Any]:
+    """Lean outline from the index (section + table_header chunks) — no file read."""
+    toc: list[dict[str, Any]] = []
+    for c in core.note_chunk_order(rel):
+        if c["chunk_kind"] not in ("section", "table_header"):
+            continue
+        toc.append(
+            {
+                "level": c["heading_level"],
+                "title": _short_title(c["heading"]) or c["heading"],
+                "chunk_hash": c["chunk_hash"],
+                "chunk_kind": c["chunk_kind"],
+                "section_bytes": c["section_bytes"],
+            }
+        )
+    return {"toc": toc, "file_bytes": file_bytes}
+
+
 def _read_from_chunk(
     chunk_hash: str,
     *,
@@ -782,8 +868,11 @@ def _read_from_chunk(
     force: bool = False,
     path_guard: str | None = None,
     fields: list[str] | None = None,
+    format: str = "markdown",
+    sibling: str | None = None,
+    siblings: bool = False,
 ) -> dict[str, Any]:
-    """Return an indexed markdown section by search hit chunk_hash."""
+    """Return an indexed markdown section/row by search hit chunk_hash."""
     try:
         b = _binding(vault)
     except OpsError as e:
@@ -791,6 +880,11 @@ def _read_from_chunk(
 
     if fields is not None and not isinstance(fields, list):
         return _err(error="bad_request", message="fields must be a list of strings")
+
+    if sibling is not None and sibling not in ("prev", "next"):
+        return _err(error="bad_request", message="sibling must be 'prev' or 'next'")
+    if format not in ("markdown", "json", "row"):
+        return _err(error="bad_request", message="format must be markdown|json|row")
 
     with vaults.bind(b):
         chunk = core.lookup_chunk(chunk_hash, include_text=True)
@@ -807,6 +901,22 @@ def _read_from_chunk(
         return _err(
             error="bad_request",
             message=f"path {path_guard!r} does not match chunk path {rel!r}",
+        )
+
+    # Same-depth navigation: hop to the sibling and read *that* chunk instead.
+    with vaults.bind(b):
+        order = core.note_chunk_order(rel)
+    cur_idx = next((i for i, c in enumerate(order) if c["chunk_hash"] == chunk_hash), -1)
+    if sibling is not None:
+        target = _resolve_sibling(order, cur_idx, sibling) if cur_idx >= 0 else None
+        if not target:
+            return _err(
+                error="no_sibling",
+                message=f"no {sibling} sibling at this depth for chunk_hash {chunk_hash!r}",
+            )
+        return _read_from_chunk(
+            target, vault=vault, force=force, path_guard=path_guard,
+            fields=fields, format=format, siblings=siblings,
         )
 
     try:
@@ -828,6 +938,9 @@ def _read_from_chunk(
     truncated = section_bytes > preview_limit and not force
     display = body[:preview_chars] if truncated else body
 
+    chunk_kind = chunk.get("chunk_kind") or "section"
+    breadcrumb = [c for c in (heading_raw.split(" › ") if heading_raw else []) if c]
+
     out_sec: dict[str, Any] = {
         "ok": True,
         "path": rel,
@@ -836,8 +949,24 @@ def _read_from_chunk(
         "content": display,
         "section_bytes": section_bytes,
         "scope": "section",
+        "chunk_kind": chunk_kind,
         "vault": b.name,
     }
+    if breadcrumb:
+        out_sec["breadcrumb"] = breadcrumb
+    if chunk_kind == "table_row" and chunk.get("row_key"):
+        out_sec["row_key"] = chunk.get("row_key")
+    if chunk.get("table_id"):
+        out_sec["table_id"] = chunk.get("table_id")
+    if cur_idx >= 0:
+        out_sec["nav"] = _chunk_nav(order, cur_idx)
+        if siblings:
+            out_sec["siblings"] = [
+                {"title": _short_title(c["heading"]) or c.get("row_key", ""),
+                 "chunk_hash": c["chunk_hash"], "chunk_kind": c["chunk_kind"]}
+                for c in order
+                if c["chunk_kind"] == chunk_kind and c["heading_level"] == int(chunk.get("heading_level") or 0)
+            ]
     if truncated:
         out_sec["preview_truncated"] = True
         out_sec["tip"] = (
@@ -857,6 +986,16 @@ def _read_from_chunk(
             hlevel,
         )
         attach_region_hashes(out_sec, file_text, section=section)
+        # Table chunks are indexed as flattened strings, not ATX section spans —
+        # region hashing above would hash the preamble (heading_level=0). Prefer
+        # the index content_hash so expected_content_hash from a row read matches
+        # search hits and patch preconditions.
+        if chunk_kind in ("table_row", "table_header"):
+            idx_hash = chunk.get("index_content_hash") or ""
+            if idx_hash:
+                out_sec["content_hash"] = idx_hash
+            elif body:
+                out_sec["content_hash"] = region_content_hash(body)
         _record_path_touch(
             b.name, rel, float(file_mtime), file_text, heading=heading_label or None
         )
@@ -866,7 +1005,60 @@ def _read_from_chunk(
     else:
         out_sec["content_hash"] = region_content_hash(body) if body else ""
 
+    # Structured (opt-in) — default stays markdown to avoid token bloat.
+    if format in ("json", "row"):
+        _attach_structured_table(out_sec, chunk, rel, file_text, format)
+
     return out_sec
+
+
+def _attach_structured_table(
+    out_sec: dict[str, Any],
+    chunk: dict[str, Any],
+    rel: str,
+    file_text: str,
+    format: str,
+) -> None:
+    """Attach ``format=json|row`` table payloads by re-parsing the on-disk table."""
+    from . import table_markdown as tm
+
+    chunk_kind = chunk.get("chunk_kind") or "section"
+    if not file_text:
+        out_sec["format_warning"] = "file unavailable; structured payload skipped"
+        return
+
+    if format == "row":
+        if chunk_kind != "table_row":
+            out_sec["format_warning"] = "format=row only valid on a table_row chunk_hash"
+            return
+        table = _table_from_file(file_text, rel, chunk.get("table_id"))
+        ri = chunk.get("row_index")
+        if table is None or ri is None or ri >= len(table.rows):
+            out_sec["format_warning"] = "row not found on disk (re-search after reindex)"
+            return
+        out_sec["format"] = "row"
+        out_sec["columns"] = dict(zip(table.headers, table.rows[ri]))
+        out_sec["row_key"] = chunk.get("row_key") or tm.row_key_for(table, ri)
+        out_sec["row_hash"] = tm.row_raw_hash(table.rows[ri])
+        return
+
+    # format == "json": header/section chunk → whole table.
+    table = _table_from_file(file_text, rel, chunk.get("table_id"))
+    if table is None and chunk_kind == "section":
+        body, body_line = core._body_start_line(file_text)
+        found = tm.find_tables(body.split("\n"))
+        start = int(chunk.get("start_line", 1))
+        end = int(chunk.get("end_line", start))
+        for t in found:
+            abs_start = body_line + t.start_line
+            if start <= abs_start <= end:
+                table = t
+                break
+    if table is None:
+        out_sec["format_warning"] = "no table found in this chunk"
+        return
+    out_sec["format"] = "json"
+    out_sec["table"] = {"headers": table.headers, "rows": table.rows}
 
 
 def read_note(
@@ -881,6 +1073,10 @@ def read_note(
     raw: bool = False,
     force: bool = False,
     fields: list[str] | None = None,
+    format: str = "markdown",
+    mode: str = "auto",
+    sibling: str | None = None,
+    siblings: bool = False,
 ) -> dict[str, Any]:
     path_s = (path or "").strip()
     ch = (chunk_hash or "").strip()
@@ -911,10 +1107,17 @@ def read_note(
             force=force,
             path_guard=path_s or None,
             fields=fields,
+            format=format,
+            sibling=sibling,
+            siblings=siblings,
         )
 
     if fields is not None and not isinstance(fields, list):
         return _err(error="bad_request", message="fields must be a list of strings")
+
+    mode = (mode or "auto").strip().lower()
+    if mode not in ("auto", "toc", "section"):
+        return _err(path=path_s, error="bad_request", message="mode must be auto|toc|section")
 
     try:
         b = _binding(vault)
@@ -928,6 +1131,14 @@ def read_note(
         return _err(path=path_s, error="not_found", message=f"note not found: {path_s}")
 
     text = full.read_text(encoding="utf-8")
+    file_bytes = full.stat().st_size
+
+    # Explicit ToC: lean outline from the index, no body.
+    if mode == "toc" and heading is None:
+        with vaults.bind(b):
+            toc_out = _build_toc(path_s, file_bytes)
+        toc_out.update({"ok": True, "path": path_s, "vault": b.name, "scope": "toc"})
+        return toc_out
     out: dict[str, Any] = {
         "ok": True,
         "path": path_s,
@@ -966,6 +1177,40 @@ def read_note(
     out["start_line"] = shaped["start_line"]
     out["end_line"] = shaped["end_line"]
     out["truncated"] = shaped["truncated"]
+
+    # Unified preview gate: a large heading-scoped section truncates like chunk mode
+    # unless the caller passed force / max_chars / an explicit line range.
+    if (
+        heading is not None
+        and not raw
+        and max_chars is None
+        and start_line is None
+        and end_line is None
+        and not force
+    ):
+        sec_bytes = len(out["content"].encode("utf-8"))
+        if sec_bytes > config.SECTION_PREVIEW_BYTES:
+            out["content"] = out["content"][: config.SECTION_PREVIEW_CHARS]
+            out["section_bytes"] = sec_bytes
+            out["preview_truncated"] = True
+            out["tip"] = (
+                f"section is {sec_bytes} bytes — pass force=true for the full body, "
+                "or max_chars= / start_line=/end_line= for a sub-range"
+            )
+    elif (
+        mode == "auto"
+        and heading is None
+        and not raw
+        and start_line is None
+        and end_line is None
+        and file_bytes > config.FILE_TIP_BYTES
+    ):
+        out.setdefault(
+            "tip",
+            f"note is {file_bytes} bytes — read_note(path, mode=toc) for a lean outline, "
+            "then read_note(chunk_hash=) a section",
+        )
+
     attach_region_hashes(out, text, heading=heading)
     _record_path_touch(
         b.name, path_s, float(out["mtime"]), text, heading=heading
@@ -1052,7 +1297,7 @@ def expand_chunk(
     return _read_from_chunk(chunk_hash, vault=vault)
 
 
-def backlinks(path: str, *, limit: int = 100, vault: str = "") -> dict[str, Any]:
+def backlinks(path: str, *, limit: int = 100, offset: int = 0, vault: str = "") -> dict[str, Any]:
     try:
         b = _binding(vault)
         root = b.resolved().root
@@ -1061,6 +1306,8 @@ def backlinks(path: str, *, limit: int = 100, vault: str = "") -> dict[str, Any]
         return _err(path=path, error=e.code, message=e.message)
     except ValueError as e:
         return _err(path=path, error="bad_path", message=str(e))
+    if offset < 0:
+        return _err(path=path, error="bad_request", message="offset must be >= 0")
 
     rel = str(Path(path.replace("\\", "/"))).removesuffix(".md")
     targets = {Path(rel).name.lower(), rel.lower()}
@@ -1074,15 +1321,22 @@ def backlinks(path: str, *, limit: int = 100, vault: str = "") -> dict[str, Any]
                 exclude_source = str(full.relative_to(root))
         except ValueError:
             pass
-        rows = core.list_backlinks(targets, exclude_source, limit)
+        # Over-fetch one past the page for exact has_more.
+        rows = core.list_backlinks(targets, exclude_source, limit + offset + 1)
+    has_more = len(rows) > offset + limit
+    rows = rows[offset : offset + limit]
     hits = [{"path": src, "line": line, "text": text} for src, line, text in rows]
-    return {
+    out = {
         "ok": True,
         "target": path,
         "total": len(hits),
+        "has_more": has_more,
         "backlinks": hits,
         "vault": b.name,
     }
+    if offset:
+        out["offset"] = offset
+    return out
 
 
 _HISTORY_TZ = ZoneInfo("America/New_York")
@@ -1120,6 +1374,7 @@ def _parse_history_bound(
 def history(
     *,
     limit: int = 10,
+    offset: int = 0,
     folder: str = "",
     path: str = "",
     vault: str = "",
@@ -1249,10 +1504,12 @@ def history(
     if not base.exists():
         return _err(error="not_found", message=f"folder not found: {folder}")
     heading_clean = (heading or "").strip()
+    if offset < 0:
+        return _err(error="bad_request", message="offset must be >= 0")
     try:
         with vaults.bind(b):
             rows = core.recent_notes_preview(
-                limit,
+                limit + offset + 1,
                 folder,
                 since=since_ts,
                 until=until_ts,
@@ -1262,6 +1519,8 @@ def history(
             )
     except ValueError as e:
         return _err(error="bad_request", message=str(e))
+    has_more = len(rows) > offset + limit
+    rows = rows[offset : offset + limit]
     notes: list[dict[str, Any]] = []
     for row in rows:
         note: dict[str, Any] = {
@@ -1276,7 +1535,9 @@ def history(
         if fields is not None:
             note["frontmatter"] = project_frontmatter(row.get("frontmatter"), fields)
         notes.append(note)
-    out: dict[str, Any] = {"ok": True, "notes": notes, "vault": b.name}
+    out: dict[str, Any] = {"ok": True, "notes": notes, "has_more": has_more, "vault": b.name}
+    if offset:
+        out["offset"] = offset
     if since_ts is not None:
         out["since"] = datetime.fromtimestamp(since_ts, tz=_HISTORY_TZ).isoformat(timespec="seconds")
     if until_ts is not None:
@@ -1297,23 +1558,76 @@ def history(
 ###############################################################################
 
 
+def _assemble_structured_note(
+    frontmatter: dict[str, Any] | None,
+    sections: list[dict[str, Any]] | None,
+) -> str:
+    """Build a full markdown note from a frontmatter object + typed sections.
+
+    Section ``content_type`` is ``markdown`` (default), ``csv``, or ``json`` /
+    ``table_json`` — CSV/JSON are serialized to a GFM table so they index as
+    ``table_row`` chunks like any hand-authored table. Frontmatter is emitted as a
+    YAML fence; OKF stamp/validate still runs downstream on the assembled body.
+    """
+    import yaml
+
+    from . import table_markdown as tm
+
+    parts: list[str] = []
+    if frontmatter:
+        fm = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).strip()
+        parts.append(f"---\n{fm}\n---")
+    for s in sections or []:
+        ctype = str(s.get("content_type") or "markdown").lower()
+        raw = s.get("content", "")
+        if ctype == "csv":
+            block = tm.csv_to_gfm(raw if isinstance(raw, str) else "")
+        elif ctype in ("json", "table_json"):
+            block = tm.json_to_gfm(raw)
+        else:
+            block = raw if isinstance(raw, str) else str(raw)
+        heading = s.get("heading")
+        if heading:
+            level = int(s.get("level", 2) or 2)
+            parts.append(f"{'#' * level} {heading}\n\n{block.rstrip()}")
+        else:
+            parts.append(block.rstrip())
+    return "\n\n".join(parts).rstrip() + "\n"
+
+
 def write_note(
     path: str,
     content: str | None = None,
     *,
     text: str | None = None,
     body: str | None = None,
+    sections: list[dict[str, Any]] | None = None,
+    frontmatter: dict[str, Any] | None = None,
     expected_mtime: float | None = None,
     expected_frontmatter_hash: str | None = None,
     expected_body_hash: str | None = None,
     expected_content_hash: str | None = None,
     vault: str = "",
 ) -> dict[str, Any]:
-    body, alias_key, body_err = resolve_body_text(
-        text, content, body=body, prefer="content"
-    )
-    if body_err:
-        return _err(path=path, error="bad_request", message=body_err)
+    structured = sections is not None or frontmatter is not None
+    if structured:
+        if any(v is not None for v in (content, text, body)):
+            return _err(
+                path=path,
+                error="bad_request",
+                message="pass content= OR sections[]/frontmatter, not both",
+            )
+        try:
+            body = _assemble_structured_note(frontmatter, sections)
+        except (ValueError, TypeError) as e:
+            return _err(path=path, error="bad_request", message=f"invalid section content: {e}")
+        alias_key = None
+    else:
+        body, alias_key, body_err = resolve_body_text(
+            text, content, body=body, prefer="content"
+        )
+        if body_err:
+            return _err(path=path, error="bad_request", message=body_err)
     assert body is not None
     content = body
 
@@ -1569,6 +1883,370 @@ def append_note(
     return out
 
 
+class _TableOpError(Exception):
+    def __init__(self, code: str, message: str, suggestions: list[dict] | None = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.suggestions = suggestions or []
+
+
+def _table_ops_present(dict_ops: list[dict[str, Any]]) -> bool:
+    from .patch_ops import TABLE_OPS
+
+    return any(o.get("op") in TABLE_OPS for o in dict_ops)
+
+
+def _locate_table(content: str, rel: str, table_id: str | None, heading: str | None):
+    """Return ``(table, (start0, end0))`` — full-file 0-based inclusive line span."""
+    from . import table_markdown as tm
+
+    full_lines = content.split("\n")
+    body, body_line = core._body_start_line(content)
+    fm_off = body_line - 1
+    tables = tm.find_tables(body.split("\n"))
+    if not tables:
+        raise _TableOpError("no_table", "note has no GFM table")
+
+    def span(t):
+        return (fm_off + t.start_line, fm_off + t.end_line)
+
+    if table_id:
+        for t in tables:
+            if tm.table_id_for(rel, body_line + t.start_line, t.table_index) == table_id:
+                return t, span(t)
+        raise _TableOpError("table_not_found", f"table_id {table_id!r} not found (re-search after reindex)")
+    if heading:
+        sec = find_section(full_lines, heading)
+        matches = [
+            t for t in tables
+            if sec.heading_line <= (fm_off + t.start_line) < sec.body_end
+        ]
+        if not matches:
+            raise _TableOpError("table_not_found", f"no table under heading {heading!r}")
+        if len(matches) > 1:
+            raise _TableOpError(
+                "table_ambiguous",
+                f"heading {heading!r} contains {len(matches)} tables; pass table_id=",
+            )
+        return matches[0], span(matches[0])
+    if len(tables) == 1:
+        return tables[0], span(tables[0])
+    raise _TableOpError("table_ambiguous", "multiple tables in note; pass table_id= or heading=")
+
+
+def _row_content_hash_map(content: str, rel: str) -> dict[tuple[str, int], str]:
+    """(table_id, row_index) → indexed flattened content_hash for the current content."""
+    out: dict[tuple[str, int], str] = {}
+    for row in core._markdown_chunk_rows(content, rel):
+        meta = row[10]
+        if isinstance(meta, dict) and meta.get("chunk_kind") == "table_row":
+            out[(meta["table_id"], meta["row_index"])] = row[8]
+    return out
+
+
+def _fresh_row_hashes(content: str, rel: str) -> dict[tuple[str, str], tuple[str, str]]:
+    """(table_id, row_key) → (content_hash, row_hash) for every data row in ``content``."""
+    from . import table_markdown as tm
+    from .table_contract import key_column_for
+
+    key_column = key_column_for(vaults.notes_root(), rel)
+    hmap = _row_content_hash_map(content, rel)
+    out: dict[tuple[str, str], tuple[str, str]] = {}
+    body, body_line = core._body_start_line(content)
+    for t in tm.find_tables(body.split("\n")):
+        tid = tm.table_id_for(rel, body_line + t.start_line, t.table_index)
+        for i, cells in enumerate(t.rows):
+            rk = tm.row_key_for(t, i, key_column=key_column)
+            out[(tid, rk)] = (hmap.get((tid, i), ""), tm.row_raw_hash(cells))
+    return out
+
+
+def _find_row_index(table, row_key: str, *, key_column: str | None = None) -> int:
+    from . import table_markdown as tm
+
+    for i in range(len(table.rows)):
+        if tm.row_key_for(table, i, key_column=key_column) == row_key:
+            return i
+    return -1
+
+
+def _col_index(table, column: str) -> int:
+    from . import table_markdown as tm
+
+    target = tm.normalize_header(column)
+    for i, h in enumerate(table.headers):
+        if tm.normalize_header(h) == target:
+            return i
+    return -1
+
+
+def _splice_table(content: str, span: tuple[int, int], new_gfm: str) -> str:
+    full_lines = content.split("\n")
+    merged = full_lines[: span[0]] + new_gfm.split("\n") + full_lines[span[1] + 1 :]
+    return "\n".join(merged)
+
+
+def _apply_one_table_op(content: str, rel: str, op: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Apply a single table op to ``content``; return (new_content, result meta)."""
+    from . import table_markdown as tm
+    from .table_contract import key_column_for
+
+    kind = op["op"]
+    table, span = _locate_table(content, rel, op.get("table_id"), op.get("heading"))
+    table_id = tm.table_id_for(
+        rel, core._body_start_line(content)[1] + table.start_line, table.table_index
+    )
+    key_column = key_column_for(vaults.notes_root(), rel)
+
+    def _require_row_precondition(ri: int) -> None:
+        exp_c = op.get("expected_content_hash")
+        exp_r = op.get("expected_row_hash")
+        if not exp_c and not exp_r:
+            raise _TableOpError(
+                "precondition_required",
+                f"{kind} requires expected_content_hash or expected_row_hash "
+                "(from a search row hit or read_note(format=row))",
+            )
+        cur_r = tm.row_raw_hash(table.rows[ri])
+        if exp_r and exp_r != cur_r:
+            raise _TableOpError("stale_write", f"row_hash stale; fresh row_hash={cur_r}")
+        if exp_c:
+            cur_c = _row_content_hash_map(content, rel).get((table_id, ri), "")
+            if exp_c != cur_c:
+                raise _TableOpError("stale_write", f"content_hash stale; fresh content_hash={cur_c}")
+
+    if kind in ("update_cell", "update_row", "delete_row"):
+        ri = _find_row_index(table, op["row_key"], key_column=key_column)
+        if ri < 0:
+            raise _TableOpError("row_not_found", f"row_key {op['row_key']!r} not found")
+        _require_row_precondition(ri)
+
+    if kind == "update_cell":
+        ci = _col_index(table, op["column"])
+        if ci < 0:
+            raise _TableOpError("unknown_column", f"column {op['column']!r} not in table")
+        table.rows[ri][ci] = str(op.get("value", ""))
+    elif kind == "update_row":
+        for col, val in (op.get("columns") or {}).items():
+            ci = _col_index(table, col)
+            if ci < 0:
+                raise _TableOpError("unknown_column", f"column {col!r} not in table")
+            table.rows[ri][ci] = str(val)
+    elif kind == "delete_row":
+        del table.rows[ri]
+    elif kind == "append_row":
+        row_map = op.get("row") or {}
+        cells = [""] * len(table.headers)
+        for col, val in row_map.items():
+            ci = _col_index(table, col)
+            if ci < 0:
+                raise _TableOpError(
+                    "unknown_column",
+                    f"column {col!r} not in table; use alter_table_schema to add it",
+                )
+            cells[ci] = str(val)
+        table.rows.append(cells)
+        # Capture the new row_key for the response (after append, last index).
+        op = {**op, "row_key": tm.row_key_for(table, len(table.rows) - 1, key_column=key_column)}
+    elif kind == "replace_table":
+        _apply_replace_table(table, op)
+    elif kind == "alter_table_schema":
+        _apply_alter_schema(table, op)
+    else:  # pragma: no cover - guarded by TABLE_OPS
+        raise _TableOpError("invalid_op", f"unknown table op {kind!r}")
+
+    new_gfm = tm.records_to_gfm(table.headers, table.rows, alignments=table.alignments)
+    new_content = _splice_table(content, span, new_gfm)
+
+    meta: dict[str, Any] = {"op": kind, "status": "ok", "table_id": table_id}
+    if op.get("row_key"):
+        meta["row_key"] = op["row_key"]
+    return new_content, meta
+
+
+def _apply_replace_table(table, op: dict[str, Any]) -> None:
+    from . import table_markdown as tm
+
+    if op.get("csv") is not None:
+        headers_in, records = tm.csv_to_records(op["csv"])
+    elif op.get("rows") is not None:
+        records = [{str(k): str(v) for k, v in r.items()} for r in op["rows"]]
+        headers_in = []
+        for r in records:
+            for k in r:
+                if k not in headers_in:
+                    headers_in.append(k)
+    else:
+        raise _TableOpError("bad_request", "replace_table requires rows= or csv=")
+
+    merge = op.get("merge", "replace")
+    if merge == "replace":
+        table.headers[:] = headers_in
+        table.rows[:] = tm.dicts_to_rows(headers_in, records)
+        table.alignments[:] = []
+        return
+
+    # append / upsert keep existing schema; map incoming headers (fuzzy, ambiguity-reject).
+    try:
+        mapping = tm.fuzzy_header_map(
+            headers_in, table.headers, allow_new_columns=op.get("allow_new_columns", False)
+        )
+    except tm.HeaderAmbiguous as e:
+        raise _TableOpError("header_ambiguous", str(e), e.suggestions)
+
+    mapped_records: list[dict[str, str]] = []
+    for rec in records:
+        mapped_records.append({mapping.get(k, k): v for k, v in rec.items()})
+
+    if merge == "append":
+        table.rows.extend(tm.dicts_to_rows(table.headers, mapped_records))
+        return
+    if merge == "upsert":
+        existing = {tm.row_key_for(table, i): i for i in range(len(table.rows))}
+        seen: set[str] = set()
+        for rec in mapped_records:
+            cells = [str(rec.get(h, "")) for h in table.headers]
+            key = next((c for c in cells if c.strip()), "")
+            if key in seen:
+                # last-wins within this import
+                pass
+            seen.add(key)
+            if key in existing:
+                table.rows[existing[key]] = cells
+            else:
+                table.rows.append(cells)
+        return
+    raise _TableOpError("bad_request", f"unknown merge mode {merge!r}")
+
+
+def _apply_alter_schema(table, op: dict[str, Any]) -> None:
+    from . import table_markdown as tm
+
+    if not op.get("confirm"):
+        raise _TableOpError(
+            "confirm_required",
+            "alter_table_schema changes every row's embedding; pass confirm=true",
+        )
+    renames = op.get("rename_columns") or {}
+    if renames:
+        for i, h in enumerate(table.headers):
+            for old, new in renames.items():
+                if tm.normalize_header(h) == tm.normalize_header(old):
+                    table.headers[i] = new
+    add = op.get("add_column")
+    if add:
+        table.headers.append(add)
+        for row in table.rows:
+            row.append("")
+        if table.alignments:
+            table.alignments.append("")
+    drop = op.get("drop_column")
+    if drop:
+        di = _col_index(table, drop)
+        if di < 0:
+            raise _TableOpError("unknown_column", f"column {drop!r} not in table")
+        del table.headers[di]
+        for row in table.rows:
+            if di < len(row):
+                del row[di]
+        if table.alignments and di < len(table.alignments):
+            del table.alignments[di]
+
+
+def _apply_table_ops(
+    b,
+    root: Path,
+    full: Path,
+    rel: str,
+    content: str,
+    dict_ops: list[dict[str, Any]],
+    *,
+    strict: bool,
+    dry_run: bool,
+    expected_mtime: float | None,
+) -> dict[str, Any]:
+    """Row-keyed table mutations. MCP never writes the index — the file is rewritten
+    and the path enqueued so the watcher re-embeds (only changed rows re-embed via
+    content-hash reuse). Responses return content_hash + ``reembed=pending``, not a
+    live searchable chunk_hash."""
+    from .patch_ops import TABLE_OPS
+
+    if any(o.get("op") not in TABLE_OPS for o in dict_ops):
+        return _err(
+            path=rel,
+            error="bad_request",
+            message="table row ops cannot be mixed with prose/frontmatter ops in one call",
+        )
+    if expected_mtime is not None:
+        stale = _check_mtime(full, expected_mtime, rel)
+        if stale:
+            return stale
+
+    new_content = content
+    results: list[dict[str, Any]] = []
+    applied = 0
+    for i, op in enumerate(dict_ops):
+        try:
+            new_content, meta = _apply_one_table_op(new_content, rel, op)
+            meta["op_index"] = i
+            results.append(meta)
+            applied += 1
+        except _TableOpError as e:
+            results.append(
+                {"op_index": i, "op": op.get("op"), "status": "error", "code": e.code, "message": e.message}
+            )
+            if strict:
+                return _err(
+                    path=rel, applied=0, results=results, error=e.code,
+                    message=e.message, suggestions=e.suggestions or None,
+                )
+
+    if applied == 0:
+        first = next((r for r in results if r["status"] == "error"), None)
+        return _err(
+            path=rel, applied=0, results=results,
+            error=(first or {}).get("code", "table_op_failed"),
+            message=(first or {}).get("message", "no table op applied"),
+        )
+
+    if dry_run:
+        return {"ok": True, "path": rel, "dry_run": True, "applied": applied, "results": results, "vault": b.name}
+
+    full.write_text(new_content, encoding="utf-8")
+    _enqueue_index(b, full)
+
+    # New content_hash per touched row — keyed by (table_id, row_key) so multi-table
+    # notes never hit table_ambiguous when attaching fresh hashes.
+    fresh = _fresh_row_hashes(new_content, rel)
+    for r in results:
+        if r["status"] != "ok" or not r.get("row_key") or not r.get("table_id"):
+            continue
+        pair = fresh.get((r["table_id"], r["row_key"]))
+        if pair:
+            r["content_hash"], r["row_hash"] = pair
+
+    failed = sum(1 for r in results if r["status"] == "error")
+    out = {
+        "ok": failed == 0,
+        "path": rel,
+        "applied": applied,
+        "failed": failed,
+        "partial": bool(failed and applied),
+        "results": results,
+        "reembed": "pending",
+        "bytes": full.stat().st_size,
+        "mtime": _mtime(full),
+        "vault": b.name,
+    }
+    out = _finalize_write(out, vault=b.name, path=rel, expected_mtime=expected_mtime, content=new_content)
+    return _attach_tip(
+        out,
+        "table rows rewritten on disk; re-search or wait for the watcher before "
+        "read_note(chunk_hash=) — address rows by row_key/table_id meanwhile",
+    )
+
+
 def patch_note(
     path: str,
     ops: list[Any],
@@ -1599,6 +2277,17 @@ def patch_note(
         dict_ops = ops_to_dicts(ops)
     except (TypeError, ValueError) as e:
         return _err(path=path, error="bad_request", message=str(e))
+
+    # Row-keyed table ops take a dedicated, strict path (no markdown section apply).
+    if _table_ops_present(dict_ops):
+        if is_yaml_note(path):
+            return _err(path=path, error="unsupported_format", message="table ops are markdown-only")
+        return _apply_table_ops(
+            b, root, full, path, content, dict_ops,
+            strict=strict if strict else True,  # table ops default strict=true
+            dry_run=dry_run,
+            expected_mtime=expected_mtime,
+        )
 
     materialized = materialize_ops_chunk_hashes(b, path, dict_ops)
     if not materialized.get("ok"):

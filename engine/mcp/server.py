@@ -398,7 +398,21 @@ async def write_note(
     path: str,
     content: Annotated[
         str | None,
-        Field(description="Note body (required for create/overwrite)."),
+        Field(description="Note body (required for create/overwrite). XOR with sections[]/frontmatter."),
+    ] = None,
+    sections: Annotated[
+        list[dict] | None,
+        Field(
+            description=(
+                "Structured body (XOR content=): [{heading, content, content_type}]. "
+                "content_type is markdown (default), csv, or json/table_json — CSV/JSON "
+                "serialize to a GFM table indexed as table rows."
+            ),
+        ),
+    ] = None,
+    frontmatter: Annotated[
+        dict | None,
+        Field(description="Frontmatter object (XOR content=); serialized to a YAML fence, then OKF-validated."),
     ] = None,
     expected_mtime: Annotated[
         float | None,
@@ -423,11 +437,13 @@ async def write_note(
     ] = None,
     vault: str = "",
 ) -> dict:
-    """Create or overwrite a note. Use content=. Prefer append_note / patch_note for edits."""
+    """Create or overwrite a note. Use content= (or sections[]/frontmatter). Prefer append_note / patch_note for edits."""
     return await asyncio.to_thread(
         apo_ops.write_note,
         path,
         content,
+        sections=sections,
+        frontmatter=frontmatter,
         expected_mtime=expected_mtime,
         expected_frontmatter_hash=expected_frontmatter_hash,
         expected_body_hash=expected_body_hash,
@@ -582,6 +598,33 @@ async def read_note(
             ),
         ),
     ] = False,
+    mode: Annotated[
+        str,
+        Field(
+            description=(
+                "Path mode: auto (default; body + size tip) | toc (lean outline from "
+                "index: level/title/chunk_hash per section, no body) | section."
+            ),
+        ),
+    ] = "auto",
+    format: Annotated[
+        str,
+        Field(
+            description=(
+                "chunk_hash mode: markdown (default) | json (whole table as "
+                "{headers, rows}) | row (single table_row as {columns, row_key}). "
+                "Structured payloads are opt-in to avoid token bloat."
+            ),
+        ),
+    ] = "markdown",
+    sibling: Annotated[
+        str | None,
+        Field(description="chunk_hash mode: hop to same-depth 'prev' or 'next' section/row."),
+    ] = None,
+    siblings: Annotated[
+        bool,
+        Field(description="chunk_hash mode: include full same-depth siblings[] list (default off)."),
+    ] = False,
 ) -> dict:
     """Read by path or search hit chunk_hash. Search → read_note(chunk_hash=)."""
     return await asyncio.to_thread(
@@ -596,6 +639,10 @@ async def read_note(
         raw=raw,
         force=force,
         fields=fields,
+        mode=mode,
+        format=format,
+        sibling=sibling,
+        siblings=siblings,
     )
 
 
@@ -625,6 +672,10 @@ async def search_notes(
         int | None,
         Field(description="Max hits (default 5)."),
     ] = None,
+    offset: Annotated[
+        int,
+        Field(description="Skip this many top hits for pagination; response carries has_more."),
+    ] = 0,
     exclude: Annotated[
         list[str] | None,
         Field(
@@ -645,6 +696,7 @@ async def search_notes(
         vaults=vaults,
         snippet_chars=snippet_chars,
         limit=limit,
+        offset=offset,
         exclude=exclude,
     )
 
@@ -688,14 +740,18 @@ async def filter_notes(
 
 
 @mcp.tool(annotations=_RO)
-async def backlinks(path: str, limit: int = 100, vault: str = "") -> dict:
+async def backlinks(path: str, limit: int = 100, offset: int = 0, vault: str = "") -> dict:
     """Index-backed inbound [[wiki-links]] to this path/stem/title (target need not exist on disk)."""
-    return await asyncio.to_thread(apo_ops.backlinks, path, limit=limit, vault=vault)
+    return await asyncio.to_thread(apo_ops.backlinks, path, limit=limit, offset=offset, vault=vault)
 
 
 @mcp.tool(annotations=_RO)
 async def history(
     limit: int = 10,
+    offset: Annotated[
+        int,
+        Field(description="Browse only: skip this many newest notes for pagination (has_more in response)."),
+    ] = 0,
     folder: str = "",
     path: Annotated[
         str,
@@ -752,6 +808,7 @@ async def history(
     return await asyncio.to_thread(
         apo_ops.history,
         limit=limit,
+        offset=offset,
         folder=folder,
         path=path,
         vault=vault,

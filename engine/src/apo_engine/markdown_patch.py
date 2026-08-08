@@ -53,26 +53,25 @@ def join_lines(lines: list[str], had_trailing_newline: bool) -> str:
 
 
 def parse_sections(lines: list[str]) -> list[Section]:
-    headings: list[tuple[int, int, str]] = []
-    for i, line in enumerate(lines):
-        m = _HEADING_RE.match(line)
-        if m:
-            headings.append((i, len(m.group(1)), m.group(2).strip()))
+    """Heading sections with hierarchical bodies (a ``##`` owns its nested ``###``).
 
-    if not headings:
-        return []
+    Delegates boundary detection to :mod:`apo_engine.markdown_sections` so patch
+    spans match index/read spans. The preamble (level 0) is not returned here —
+    section ops address named headings only.
+    """
+    from .markdown_sections import split_sections
 
-    sections: list[Section] = []
-    for idx, (line_idx, level, title) in enumerate(headings):
-        body_start = line_idx + 1
-        if idx + 1 < len(headings):
-            body_end = headings[idx + 1][0]
-        else:
-            body_end = len(lines)
-        sections.append(
-            Section(level=level, title=title, heading_line=line_idx, body_start=body_start, body_end=body_end)
+    return [
+        Section(
+            level=span.level,
+            title=span.title,
+            heading_line=span.heading_line,
+            body_start=span.body_start,
+            body_end=span.body_end,
         )
-    return sections
+        for span in split_sections(lines)
+        if span.heading_line >= 0
+    ]
 
 
 def _normalize_heading(title: str) -> str:

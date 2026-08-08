@@ -28,3 +28,17 @@ queries:
   - query: "backup strategy decision"
     exclude: ["inbox/daily/*"]
     expect: ["areas/ops/backup-strategy.md"]
+
+  # --- Table-row retrieval (0.6) ------------------------------------------- #
+  # Each markdown table indexes as one chunk per row, flattened with its heading
+  # breadcrumb + column labels, so a natural-language question should surface the
+  # note (and, in ops.search, the row_key). Acceptance target: >=80% hit@3 across
+  # ~15 such queries with no prose regression. Point these at your own vault.
+  - query: "when did the pacifica get its brakes flushed"
+    expect: ["areas/vehicle/pacifica.md"]
+  - query: "oil change mileage on the van"
+    expect: ["areas/vehicle/pacifica.md"]
+  - query: "what columns does the maintenance log track"
+    expect: ["areas/vehicle/pacifica.md"]
+  - query: "reclaim subscription renewal cost"
+    expect: ["areas/threads/reclaim-subscription-teardown.md"]
