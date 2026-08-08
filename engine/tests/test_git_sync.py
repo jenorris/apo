@@ -290,6 +290,79 @@ class GitSyncRepoTest(unittest.TestCase):
         self.assertTrue(cleared["ok"])
         self.assertNotEqual(cleared["status"]["state"], "blocked")
 
+    def test_rebase_recovers_from_diverge_and_pushes(self):
+        # Remote advances with a file the local side never touches.
+        clone = self.tmp / "other"
+        _git(self.tmp, "clone", str(self.bare), str(clone))
+        _git(clone, "config", "user.email", "test@example.com")
+        _git(clone, "config", "user.name", "Test")
+        (clone / "remote_only.md").write_text("# remote\n", encoding="utf-8")
+        _git(clone, "add", "remote_only.md")
+        _git(clone, "commit", "-m", "remote change")
+        _git(clone, "push", "origin", "HEAD:main")
+
+        # Local diverges with an unrelated file — same scenario that blocks pull_ff_only.
+        (self.vault / "local_only.md").write_text("# local\n", encoding="utf-8")
+        _git(self.vault, "add", "local_only.md")
+        _git(self.vault, "commit", "-m", "local change")
+
+        blocked = git_sync.pull_ff_only(self.vault)
+        self.assertFalse(blocked["ok"])
+        self.assertEqual(git_sync.read_status(self.vault)["state"], "blocked")
+
+        cleared = git_sync.clear_block(self.vault)
+        self.assertNotEqual(cleared["state"], "blocked")
+
+        out = git_sync.rebase_onto_remote(self.vault)
+        self.assertTrue(out["ok"], msg=out)
+        self.assertTrue(out["rebased"])
+        self.assertTrue(out["pushed"])
+        self.assertEqual(git_sync.read_status(self.vault)["state"], "ok")
+
+        self.assertTrue((self.vault / "remote_only.md").exists())
+        self.assertTrue((self.vault / "local_only.md").exists())
+
+        # Rebase kept push a fast-forward: bare tip == local HEAD, no force needed.
+        local_head = _git(self.vault, "rev-parse", "HEAD").stdout.strip()
+        remote_head = _git(self.bare, "rev-parse", "main").stdout.strip()
+        self.assertEqual(local_head, remote_head)
+
+    def test_rebase_conflict_aborts_cleanly_and_blocks(self):
+        # Remote and local both edit note.md's only line — guaranteed conflict.
+        clone = self.tmp / "other"
+        _git(self.tmp, "clone", str(self.bare), str(clone))
+        _git(clone, "config", "user.email", "test@example.com")
+        _git(clone, "config", "user.name", "Test")
+        (clone / "note.md").write_text("# remote change\n", encoding="utf-8")
+        _git(clone, "add", "note.md")
+        _git(clone, "commit", "-m", "remote edits note")
+        _git(clone, "push", "origin", "HEAD:main")
+
+        (self.vault / "note.md").write_text("# local change\n", encoding="utf-8")
+        _git(self.vault, "add", "note.md")
+        _git(self.vault, "commit", "-m", "local edits note")
+
+        out = git_sync.rebase_onto_remote(self.vault)
+        self.assertFalse(out["ok"], msg=out)
+        self.assertEqual(out["error"], "rebase_conflict")
+        self.assertEqual(git_sync.read_status(self.vault)["state"], "blocked")
+
+        # Aborted, not left mid-rebase: no REBASE_HEAD, note.md clean (no unmerged
+        # markers) — untracked .apo/ status file and system/ contract dir from
+        # this test's own setup are expected noise, not rebase fallout.
+        self.assertIsNone(git_sync.unsafe_git_state(self.vault))
+        status = _git(self.vault, "status", "--porcelain")
+        self.assertNotIn("note.md", status.stdout)
+        self.assertNotIn("UU", status.stdout)
+        self.assertEqual(
+            (self.vault / "note.md").read_text(encoding="utf-8"), "# local change\n"
+        )
+
+        # Blocked is sticky, same as any other sync failure, until explicitly cleared.
+        again = git_sync.rebase_onto_remote(self.vault)
+        self.assertFalse(again["ok"])
+        self.assertEqual(again["error"], "blocked")
+
     def test_sync_disabled_status(self):
         _write_contract(self.vault, enabled=False)
         st = ops.git_sync_op("status")

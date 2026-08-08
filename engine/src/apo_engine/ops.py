@@ -3018,11 +3018,13 @@ def git_sync_op(
     message: str = "",
     vault: str = "",
 ) -> dict[str, Any]:
-    """Git contract sync: status | run | pull | clear_block.
+    """Git contract sync: status | run | pull | rebase | clear_block.
 
     ``run`` commits all dirty paths except ``never_commit`` / gitignore, then pushes.
     Auto path uses path-aware template message; pass ``message`` to override subject
-    (tool-triggered). A Paths body trailer is always attached.
+    (tool-triggered). A Paths body trailer is always attached. ``rebase`` recovers
+    from a diverged remote (fetch + rebase local commits, push if configured) when
+    ``pull`` (ff-only) has blocked.
     """
     try:
         b = _binding(vault)
@@ -3031,10 +3033,10 @@ def git_sync_op(
         return _err(error=e.code, message=e.message)
 
     act = (action or "status").strip().lower()
-    if act not in ("status", "run", "pull", "clear_block"):
+    if act not in ("status", "run", "pull", "rebase", "clear_block"):
         return _err(
             error="bad_action",
-            message="action must be status|run|pull|clear_block",
+            message="action must be status|run|pull|rebase|clear_block",
             vault=b.name,
         )
     out = git_sync.run_action(

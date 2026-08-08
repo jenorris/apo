@@ -43,7 +43,7 @@ Fill `remote` / `host` for *this* vault. Keep `never_commit` aligned with the va
 
 1. **Never commit** paths matching `never_commit` (especially `*.db`, `.env`, `.apo/`, Passport keys, `*.sqlite`).
 2. **Do not** force-push the vault’s default branch.
-3. Apo MCP writes update files on disk; with `sync.enabled`, the watcher debounces commit+push. Prefer MCP `git_sync` for status / force run / clear_block.
+3. Apo MCP writes update files on disk; with `sync.enabled`, the watcher debounces commit+push. Prefer MCP `git_sync` for status / force run / rebase / clear_block.
 4. Tool-triggered `git_sync` `action=run` should pass an agent `message` (subject). Empty message / auto commits use `sync.commit_message_template` with `{iso_local}` → `YYYY-MM-DD HH:MM ET`, plus path tokens `{path_count}`, `{top_folders}` / `{paths_summary}`. A capped `Paths:` body trailer is always attached.
 5. When binaries are stored: use Git LFS if `lfs.enabled`; keep `.sha256` digest sidecars in **plain** git (not LFS pointers only).
 6. After a bare-metal restore: clone → point `APO_VAULTS` / `APO_NOTES_ROOT` at the checkout → `just index --vault <id>` (or equivalent). Do not copy old `index.db` from backups unless debugging.
@@ -56,9 +56,11 @@ Fill `remote` / `host` for *this* vault. Keep `never_commit` aligned with the va
 | `history(path=)` git log | Contract YAML + work tree |
 | Auto commit+push | `sync.enabled` + Apo write debounce (watcher) |
 | Auto pull | `sync.enabled` + idle schedule (`git pull --ff-only`) |
-| MCP/RPC `git_sync` | Contract active; `action=status\|run\|pull\|clear_block` |
+| MCP/RPC `git_sync` | Contract active; `action=status\|run\|pull\|rebase\|clear_block` |
 
 On conflict / non-ff / push reject: **stop and surface** — status in `.apo/git-sync-status.json` (`state=blocked`) and tool payload. No force-push, no auto-resolve.
+
+`action=rebase` is the explicit recovery when `pull` (ff-only) blocks because local commits exist the remote doesn't (another session's sync won the race): fetch, then replay local commits onto `origin/<default_branch>` so the follow-up push stays a fast-forward. It is never run implicitly — only on explicit tool call. On a rebase conflict, Apo aborts the rebase immediately (working tree never carries `<<<<<<<` markers into a note) and blocks same as any other failure; still no content auto-resolve.
 
 `blocked` is sticky: every later commit and pull returns early until `git_sync action=clear_block`. Nothing else surfaces it, so set `sync.on_block_command` to get told — it fires once per block episode (not per tick) with `$APO_SYNC_ERROR` and `$APO_VAULT_ROOT` exported, and a failing hook never masks the block.
 
@@ -81,7 +83,7 @@ Add vault-specific secrets and local UI state as needed. Match `never_commit` in
 
 ## Out of scope
 
-- Auto-resolve / stash / reset / rebase pulls
+- Auto-resolve / stash / reset — and rebase is opt-in via explicit `action=rebase`, never automatic on the idle pull path
 - Laravel gateway `GitRemote` drivers, webhooks, or ECS git-sync sidecars
 - Pull-before-commit on the write path (pull is idle/scheduled only)
 - Choosing a host for you — fill `remote` when the vault has one

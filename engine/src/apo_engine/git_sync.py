@@ -3,6 +3,14 @@
 Opt-in via ``sync.enabled`` in ``system/contracts/git-contract.schema.yaml``
 (legacy ``system/config/`` still loaded).
 Conflicts / non-ff / push reject → block and surface (no auto-resolve).
+
+``pull_ff_only`` blocks the moment local commits exist that the remote
+doesn't have (e.g. another session's sync won the race) — by design, it
+never merges. ``rebase_onto_remote`` is the explicit recovery for exactly
+that case: it replays local commits on top of the remote tip so a plain
+``git push`` afterward stays a fast-forward. It still never auto-resolves
+content — a rebase conflict aborts back to the pre-rebase state and blocks,
+the same as any other sync failure.
 """
 
 from __future__ import annotations
@@ -28,7 +36,7 @@ _STATUS_REL = Path(".apo") / "git-sync-status.json"
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
 
-Action = Literal["status", "run", "pull", "clear_block"]
+Action = Literal["status", "run", "pull", "rebase", "clear_block"]
 
 
 @dataclass(frozen=True)
@@ -586,13 +594,86 @@ def pull_ff_only(vault_root: Path) -> dict[str, Any]:
     return {"ok": True, "pulled": True, "status": read_status(vault_root), "branch": settings.default_branch}
 
 
+def rebase_onto_remote(vault_root: Path) -> dict[str, Any]:
+    """Fetch + rebase local commits onto ``origin/<default_branch>``.
+
+    Recovers the case ``pull_ff_only`` cannot: local commits exist that the
+    remote doesn't have (typically another session's sync won the race and
+    pushed first). Never merges — replays local commits on top of the fetched
+    remote tip so the eventual push stays a fast-forward (no ``--force``
+    needed, same push path as everything else here).
+
+    On conflict, aborts the rebase immediately so the working tree never
+    carries ``<<<<<<<`` markers into a note the vault would otherwise index,
+    then blocks with the conflict detail. This is a rollback, not a
+    resolution — content conflicts still require a human/agent to look and
+    re-apply, matching the "no auto-resolve" contract of the rest of this
+    module.
+    """
+    settings = sync_settings(vault_root)
+    st = read_status(vault_root)
+    reason = unsafe_git_state(vault_root)
+    if reason:
+        _block(vault_root, f"unsafe_git_state: {reason}", st=st)
+        return {"ok": False, "error": "unsafe_git_state", "message": reason, "status": read_status(vault_root)}
+    if is_blocked(vault_root):
+        return {
+            "ok": False,
+            "error": "blocked",
+            "message": st.get("error") or "git sync blocked; clear_block first",
+            "status": st,
+        }
+
+    fetch = _run_git(vault_root, "fetch", "origin", settings.default_branch)
+    if fetch.returncode != 0:
+        err = (fetch.stderr or fetch.stdout or "git fetch failed").strip()
+        _block(vault_root, err, st=st)
+        return {"ok": False, "error": "fetch_failed", "message": err[:500], "status": read_status(vault_root)}
+
+    proc = _run_git(vault_root, "rebase", f"origin/{settings.default_branch}")
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "git rebase failed").strip()
+        abort = _run_git(vault_root, "rebase", "--abort")
+        if abort.returncode != 0:
+            abort_err = (abort.stderr or abort.stdout or "").strip()[:200]
+            err = f"{err} (rebase --abort also failed: {abort_err}; working tree may still be mid-rebase)"
+        _block(vault_root, f"rebase_conflict: {err}", st=st)
+        return {"ok": False, "error": "rebase_conflict", "message": err[:500], "status": read_status(vault_root)}
+
+    st = read_status(vault_root)
+    st["last_pull"] = {
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ok": True,
+        "summary": f"rebased onto origin/{settings.default_branch}: {(proc.stdout or '').strip()[:380]}",
+    }
+    st["state"] = "ok"
+    st["error"] = None
+    st["blocked_at"] = None
+    write_status(vault_root, st)
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "rebased": True,
+        "pushed": False,
+        "status": read_status(vault_root),
+        "branch": settings.default_branch,
+    }
+    if settings.auto_push:
+        push_result = _push(vault_root, settings)
+        if not push_result["ok"]:
+            return push_result
+        result["pushed"] = True
+        result["status"] = push_result["status"]
+    return result
+
+
 def run_action(
     vault_root: Path,
     action: Action,
     *,
     message: str | None = None,
 ) -> dict[str, Any]:
-    """MCP/RPC entry: status | run | pull | clear_block."""
+    """MCP/RPC entry: status | run | pull | rebase | clear_block."""
     with _lock_for(vault_root):
         if action == "status":
             st = read_status(vault_root)
@@ -607,7 +688,7 @@ def run_action(
         if action == "clear_block":
             st = clear_block(vault_root)
             return {"ok": True, "action": "clear_block", "status": st}
-        if not sync_enabled(vault_root) and action in ("run", "pull"):
+        if not sync_enabled(vault_root) and action in ("run", "pull", "rebase"):
             # Tool may still run when contract active but sync disabled? MVP: opt-in.
             # Allow explicit tool run even if sync.enabled false when contract active —
             # agents need force sync. Only require contract active.
@@ -619,6 +700,8 @@ def run_action(
                 }
         if action == "pull":
             return {**pull_ff_only(vault_root), "action": "pull"}
+        if action == "rebase":
+            return {**rebase_onto_remote(vault_root), "action": "rebase"}
         if action == "run":
             return {**commit_and_push(vault_root, message=message), "action": "run"}
         return {"ok": False, "error": "bad_action", "message": f"unknown action {action!r}"}

@@ -101,6 +101,25 @@ class ApoAdminCatalogTest(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"], "confirm_required")
 
+    def test_admin_invoke_requires_confirm_for_git_sync_rebase(self):
+        out = apo_admin.admin_invoke(
+            "git_sync",
+            parameters={"action": "rebase"},
+            confirm=False,
+            handlers={"git_sync": lambda *_a, **_k: {"ok": True}},
+        )
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "confirm_required")
+
+    def test_admin_invoke_allows_git_sync_status_without_confirm(self):
+        out = apo_admin.admin_invoke(
+            "git_sync",
+            parameters={"action": "status"},
+            confirm=False,
+            handlers={"git_sync": lambda *_a, **_k: {"ok": True}},
+        )
+        self.assertTrue(out["ok"])
+
 
 class ApoAdminMcpSurfaceTest(unittest.TestCase):
     def test_tool_count_and_names(self):
