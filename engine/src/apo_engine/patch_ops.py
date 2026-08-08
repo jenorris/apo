@@ -212,6 +212,57 @@ class PlaceOp(_OpBase):
     fields: dict[str, Any] | None = None
 
 
+# --------------------------------------------------------------------------- #
+# Table row ops (0.6) — row-keyed, require expected_content_hash|expected_row_hash.
+# A table locator is table_id (from a search row hit) or heading (section title);
+# when the note has exactly one table both may be omitted.
+# --------------------------------------------------------------------------- #
+class _TableOpBase(_OpBase):
+    table_id: str | None = None
+    heading: str | None = None
+    expected_content_hash: str | None = None
+    expected_row_hash: str | None = None
+
+
+class UpdateCellOp(_TableOpBase):
+    op: Literal["update_cell"]
+    row_key: str
+    column: str
+    value: str = ""
+
+
+class UpdateRowOp(_TableOpBase):
+    op: Literal["update_row"]
+    row_key: str
+    columns: dict[str, Any]
+
+
+class AppendRowOp(_TableOpBase):
+    op: Literal["append_row"]
+    row: dict[str, Any]
+
+
+class DeleteRowOp(_TableOpBase):
+    op: Literal["delete_row"]
+    row_key: str
+
+
+class ReplaceTableOp(_TableOpBase):
+    op: Literal["replace_table"]
+    rows: list[dict[str, Any]] | None = None
+    csv: str | None = None
+    merge: Literal["replace", "append", "upsert"] = "replace"
+    allow_new_columns: bool = False
+
+
+class AlterTableSchemaOp(_TableOpBase):
+    op: Literal["alter_table_schema"]
+    rename_columns: dict[str, str] | None = None
+    add_column: str | None = None
+    drop_column: str | None = None
+    confirm: bool = False
+
+
 PatchOp = Annotated[
     Union[
         SetFieldOp,
@@ -222,9 +273,19 @@ PatchOp = Annotated[
         PrependOp,
         AppendEofOp,
         PlaceOp,
+        UpdateCellOp,
+        UpdateRowOp,
+        AppendRowOp,
+        DeleteRowOp,
+        ReplaceTableOp,
+        AlterTableSchemaOp,
     ],
     Field(discriminator="op"),
 ]
+
+TABLE_OPS = frozenset(
+    {"update_cell", "update_row", "append_row", "delete_row", "replace_table", "alter_table_schema"}
+)
 
 OPS_FIELD_DESC = (
     "Deterministic mutators; discriminated by op. "

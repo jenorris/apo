@@ -31,6 +31,14 @@ MODEL_NAME: str = os.environ.get("APO_MODEL", _DEFAULT_MODEL.get(EMBED_BACKEND, 
 # Ollama endpoint (required when EMBED_BACKEND=ollama).
 OLLAMA_URL: str = os.environ.get("APO_OLLAMA_URL", "http://localhost:11434").rstrip("/")
 
+# Optional query-side instruction prefix (BGE-family models are often asymmetric:
+# a query instruction prefix, no passage prefix). Applied in query_embed() ONLY —
+# the index/passage path is never prefixed, so no reindex is needed to toggle this.
+# Empty by default: turn on only after the search-eval harness shows a win for the
+# active APO_MODEL (getting query/passage prefixing backwards measurably hurts recall).
+# Example for bge: "Represent this sentence for searching relevant passages: "
+QUERY_PREFIX: str = os.environ.get("APO_QUERY_PREFIX", "")
+
 # YAML catalog chunking (Markdown is section-indexed — see section_markdown).
 YAML_MAX_CHARS: int = int(
     os.environ.get("APO_YAML_MAX_CHARS", os.environ.get("APO_MAX_CHARS", "1200"))

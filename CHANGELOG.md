@@ -4,6 +4,41 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-08-08
+
+Bugbot follow-ups on the 0.6.0 table/ToC surface.
+
+### Fixed
+
+- **`read_note` on `table_row` / `table_header`** now returns the index `content_hash` (flattened row text), not a preamble section hash — so `expected_content_hash` from a row read matches search hits and patch preconditions.
+- **Search hits include `table_id`** alongside `row_key` / `chunk_kind`, so multi-table notes can be patched without re-reading the file.
+- **Table-contract `key_column`** is loaded from `system/contracts/table-contract.schema.yaml` and used when emitting `row_key` (and when resolving row ops).
+- **`heading=` table locator** raises `table_ambiguous` when a section contains more than one table (was silently mutating the first).
+- **Patch responses** attach fresh `content_hash` / `row_hash` keyed by `(table_id, row_key)` even on multi-table notes.
+
+## [0.6.0] — 2026-08-08
+
+Table awareness + document navigation. Markdown pipe tables now index as retrievable rows, `read_note` gains a table-of-contents mode and sibling hops, and `write_note`/`patch_note` accept structured (CSV/JSON) content. **Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads. **Reindex once** (`apo_admin` → `reindex(mode=rebuild)`) so existing notes emit table-row chunks.
+
+### Added
+
+- **Table row indexing** — each GFM table emits a `table_header` chunk plus one `table_row` chunk per data row, flattened with its heading breadcrumb + column labels (`Pacifica > Maintenance History — Date: 2026-06-07, …`) so natural-language queries hit the specific row. Search hits carry `chunk_kind` and `row_key`.
+- **`read_note(mode=toc)`** — lean heading outline (title, level, `chunk_hash`, byte size) with no section bodies; the ToC-first → section fetch → row patch flow.
+- **`read_note(sibling=prev|next)`** — hop to the same-depth section; responses include a `nav` cursor (`position`, prev/next `chunk_hash`) instead of always-on sibling arrays.
+- **`read_note(format=json|row)`** — structured table payloads: `format=json` returns `{headers, rows}` for a section table; `format=row` returns `{columns, row_key, row_hash}` for a single row chunk.
+- **Row-keyed `patch_note` ops** — `update_cell`, `update_row`, `append_row`, `delete_row`, `replace_table` (merge `replace|append|upsert`), `alter_table_schema`. Address rows by `row_key` + `table_id`/`heading`. Row edits **require** `expected_content_hash` or `expected_row_hash` (hard reject on stale). `alter_table_schema` requires `confirm=true`.
+- **`write_note(sections=[…], frontmatter={…})`** — structured note assembly (XOR with `content=`); `content_type` `csv`/`json`/`table_json` sections serialize to GFM tables that index as rows.
+- **Fuzzy CSV/JSON header mapping with ambiguity reject** — `replace_table` upsert/append maps incoming columns to existing ones; a tie or low-confidence match errors with `header_ambiguous` + per-column suggestions unless `allow_new_columns=true`.
+- **`offset` + `has_more`** on `search_notes`, `history`, `backlinks` — cursor pagination for large result sets.
+- **`APO_QUERY_PREFIX`** — query-side instruction prefix for asymmetric embedders (e.g. bge-m3); applied to the query only, never to indexed passages, and the cache keys on the raw query.
+- **`core.reembed_one` / `core.reembed_batch`** — named watcher-only re-embed entry points; single-cell edits re-embed only the changed row via `content_hash` reuse.
+
+### Changed
+
+- **Unified section boundaries** — a new `markdown_sections` module is the single source of truth for hierarchical heading spans, so an index hit, a read, and a patch resolve to the *same* byte range (previously the indexer treated a `##` as owning its nested `###` bodies while the patch engine treated headings as flat siblings).
+- **`patch_note` table ops default `strict=true`** and never mix with prose/frontmatter ops in one call.
+- **Search-hit `content_hash`** now returns the full-chunk hash from the index (was hashing the snippet), so it is usable as a write precondition.
+
 ## [0.5.0] — 2026-08-07
 
 MCP surface consolidation — **10 top-level tools**, **5 admin capabilities**. **Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads.
