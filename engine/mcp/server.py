@@ -167,7 +167,7 @@ _MCP_INSTRUCTIONS = (
     "files are source of truth. "
     "apo_admin(action=list|describe|invoke): engine ops (memory_status, reindex, "
     "delete_note, reload_config, git_sync). Destructive invoke requires "
-    "confirm=true (delete_note always; reindex force=true; git_sync run/pull). "
+    "confirm=true (delete_note always; reindex force=true; git_sync run/pull/rebase). "
     "vault(action=list|contracts|describe|merge|project|stats): registry + contracts + "
     "optional habit KPIs (stats). "
     "Routing: write_note=create/overwrite (content=); "
@@ -903,7 +903,7 @@ async def apo_admin(
         Field(
             description=(
                 "invoke only: required true for delete_note, reindex(force=true), "
-                "and git_sync(action=run|pull)."
+                "and git_sync(action=run|pull|rebase)."
             ),
         ),
     ] = False,

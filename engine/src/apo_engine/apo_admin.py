@@ -60,14 +60,15 @@ _ADMIN_CATALOG: dict[str, dict[str, Any]] = {
     },
     "git_sync": {
         "description": (
-            "Git contract sync: status, commit+push (run), ff-only pull, or "
+            "Git contract sync: status, commit+push (run), ff-only pull, rebase "
+            "local commits onto the remote tip when pull can't fast-forward, or "
             "clear_block. Opt-in via sync.enabled."
         ),
         "read_only": False,
         "destructive": False,
-        "confirm_policy": "action=run|pull",
+        "confirm_policy": "action=run|pull|rebase",
         "parameters": {
-            "action": "status | run | pull | clear_block (default status)",
+            "action": "status | run | pull | rebase | clear_block (default status)",
             "message": "commit subject for action=run (optional)",
             "vault": "vault name (default registry default)",
         },
@@ -98,7 +99,7 @@ def _needs_confirm(name: str, parameters: dict[str, Any]) -> bool:
         return True
     if name == "git_sync":
         action = str(parameters.get("action") or "status").strip().lower()
-        return action in ("run", "pull")
+        return action in ("run", "pull", "rebase")
     return False
 
 

@@ -4,6 +4,18 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-08-08
+
+Recovers `git_sync` from diverged branches without hand-editing the vault repo.
+
+### Fixed
+
+- **`git_sync` could get permanently stuck on a diverged remote.** `action=pull` is (and stays) fast-forward-only by design, so the moment another concurrent session's sync won the push race, every subsequent `pull`/`run` just re-blocked with the same "fetch first" rejection — `clear_block` reset the status flag but the underlying divergence was still there to hit again on the next attempt.
+
+### Added
+
+- **`git_sync action=rebase`** — explicit recovery for exactly that case: fetches, then replays local commits onto `origin/<default_branch>` so the follow-up push stays a fast-forward (no `--force` ever). On a rebase conflict it aborts back to the pre-rebase state immediately (working tree never carries `<<<<<<<` markers into a note the vault would otherwise index) and blocks, same "no auto-resolve of content" contract as the rest of `git_sync`. Reached via `apo_admin(action=invoke, name=git_sync, parameters={action: "rebase"}, confirm=true)`; `confirm=true` is required, same as `run`/`pull`.
+
 ## [0.6.2] — 2026-08-08
 
 Telemetry collection alignment + durable watcher start.
