@@ -58,7 +58,17 @@ cmd_start() {
     return
   fi
 
-  if [[ ! -d "${APO_NOTES_ROOT:-}" ]]; then
+  # APO_VAULTS (multi-vault registry) supersedes APO_NOTES_ROOT — see .env.
+  # Only fall back to checking APO_NOTES_ROOT as a directory when no registry
+  # is configured; otherwise a legitimate multi-vault-only setup (no
+  # APO_NOTES_ROOT at all) always failed this guard with "Vault does not
+  # exist: unset" even though APO_VAULTS pointed at a perfectly good registry.
+  if [[ -n "${APO_VAULTS:-}" ]]; then
+    if [[ ! -f "${APO_VAULTS}" ]]; then
+      warn "Vault registry does not exist: ${APO_VAULTS}"
+      return 1
+    fi
+  elif [[ ! -d "${APO_NOTES_ROOT:-}" ]]; then
     warn "Vault does not exist: ${APO_NOTES_ROOT:-unset}"
     return 1
   fi

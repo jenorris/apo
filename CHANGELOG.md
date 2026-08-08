@@ -4,6 +4,12 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-08-08
+
+### Fixed
+
+- **`watch.sh start`'s directory guard rejected valid multi-vault-only setups.** It checked `-d "$APO_NOTES_ROOT"` unconditionally, but `APO_VAULTS` (the multi-vault registry) supersedes `APO_NOTES_ROOT` per `.env`'s own comment — a host with only `APO_VAULTS` set (no `APO_NOTES_ROOT` at all, the normal multi-vault desk config) always failed with `Vault does not exist: unset` even though the registry was fine. The guard now checks `APO_VAULTS` (as a file) when set, falling back to the `APO_NOTES_ROOT` directory check only for legacy single-vault setups.
+
 ## [0.6.3] — 2026-08-08
 
 Recovers `git_sync` from diverged branches without hand-editing the vault repo.
