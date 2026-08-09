@@ -12,6 +12,7 @@ compatibility table.
 
 - **No Apo-stamped vault was a conformant OKF bundle.** SPEC §11 requires a non-empty `type` on every concept frontmatter block, but the contract set `type_field: okf_type` and demoted `type` to `legacy_type_field`. `okf_export` never emitted `type` either, so exports were non-conformant too, and `okf_lint` accepted `okf_type or type` — a check *weaker* than the spec, passing bundles the spec rejects. Apo now emits `type` alongside `okf_type`; §11 explicitly forbids consumers rejecting a bundle for unknown additional keys, so carrying both is spec-legal and needs no vault migration.
 - **The bundle-root `index.md` was asked for a concept `type`.** §11.1/§11.2 scope to *non-reserved* files; reserved filenames are governed by §11.3 and the root index legitimately carries only `okf_version`.
+- **`okf validate` reported a vault with no contract as clean.** Without a contract every check is a no-op, so a newcomer running `validate --profile okf` before `okf init` got `0 violations` and exit 0 — a false clean bill of health on something that is not an OKF bundle at all. `--profile okf` now fails with a `contract` violation pointing at `okf init`; `--profile apo` warns and passes, since OKF-off is a legitimate state for a vault that never opted in.
 
 ### Added
 

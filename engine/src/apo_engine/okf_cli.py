@@ -33,6 +33,7 @@ class ValidateSummary:
     scanned: int = 0
     violations: list[dict[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    contract: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -43,6 +44,7 @@ class ValidateSummary:
             "ok": self.ok,
             "profile": self.profile,
             "scanned": self.scanned,
+            "contract": self.contract,
             "violations": self.violations,
             "warnings": self.warnings,
         }
@@ -96,6 +98,29 @@ def validate_vault(
 ) -> ValidateSummary:
     summary = ValidateSummary(profile=profile)
     root = root.resolve()
+
+    # Without a contract the engine is convention-agnostic and every check is a
+    # no-op — which would otherwise report "0 violations" and hand someone a
+    # false clean bill of health on a vault that is not an OKF bundle at all.
+    contract_path = okf.resolve_contract_path(root)
+    if contract_path is None:
+        if profile == "okf":
+            summary.violations.append(
+                {
+                    "path": ".",
+                    "field": "contract",
+                    "expected": "system/contracts/okf-contract.schema.yaml "
+                    "(run `apo-engine okf init`)",
+                }
+            )
+        else:
+            summary.warnings.append(
+                "no OKF contract found — OKF is off for this vault; "
+                "run `apo-engine okf init` to adopt one"
+            )
+        return summary
+    summary.contract = str(contract_path)
+
     for note in sorted(iter_notes(root, paths)):
         rel = note.relative_to(root).as_posix()
         try:
@@ -116,8 +141,16 @@ def validate_vault(
 
 
 def format_validate(summary: ValidateSummary) -> str:
-    lines = [f"{v['path']}: missing {v['field']} (expected {v['expected']})" for v in summary.violations]
+    lines = [
+        f"{v['path']}: missing {v['field']} (expected {v['expected']})"
+        for v in summary.violations
+    ]
     lines.extend(f"WARN {w}" for w in summary.warnings)
+    if summary.contract is None:
+        lines.append(
+            f"profile={summary.profile}: no OKF contract — nothing was checked"
+        )
+        return "\n".join(lines)
     lines.append(
         f"profile={summary.profile}: scanned {summary.scanned} note(s); "
         f"{len(summary.violations)} violation(s), {len(summary.warnings)} warning(s)"

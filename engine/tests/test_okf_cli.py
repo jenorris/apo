@@ -110,10 +110,46 @@ class ValidateTests(OkfCliBase):
         self.assertEqual(summary.scanned, 1)
         self.assertTrue(summary.ok)
 
+    def test_no_contract_fails_the_okf_profile(self):
+        """A vault with no contract is not an OKF bundle — do not report it clean."""
+        bare = Path(self.tmp.name) / "bare"
+        (bare / "notes").mkdir(parents=True)
+        (bare / "notes" / "a.md").write_text("# A\n", encoding="utf-8")
+        summary = okf_cli.validate_vault(bare, profile="okf")
+        self.assertFalse(summary.ok)
+        self.assertEqual(summary.violations[0]["field"], "contract")
+        self.assertIsNone(summary.contract)
+
+    def test_no_contract_only_warns_under_apo_profile(self):
+        """OKF off is a legitimate state for a vault that never opted in."""
+        bare = Path(self.tmp.name) / "bare2"
+        (bare / "notes").mkdir(parents=True)
+        (bare / "notes" / "a.md").write_text("# A\n", encoding="utf-8")
+        summary = okf_cli.validate_vault(bare, profile="apo")
+        self.assertTrue(summary.ok)
+        self.assertTrue(any("no OKF contract" in w for w in summary.warnings))
+
+    def test_contract_path_reported_when_present(self):
+        summary = okf_cli.validate_vault(self.root, profile="okf")
+        self.assertIsNotNone(summary.contract)
+        self.assertTrue(summary.contract.endswith("okf-contract.schema.yaml"))
+
+    def test_init_then_validate_is_the_adoption_path(self):
+        """The on-ramp a new adopter follows must actually work end to end."""
+        fresh = Path(self.tmp.name) / "adopt"
+        (fresh / "notes").mkdir(parents=True)
+        (fresh / "notes" / "a.md").write_text("# A\n\nbody\n", encoding="utf-8")
+
+        self.assertFalse(okf_cli.validate_vault(fresh, profile="okf").ok)
+        okf_cli.init_bundle(fresh)
+        okf_cli.fix_vault(fresh)
+        self.assertTrue(okf_cli.validate_vault(fresh, profile="okf").ok)
+
     def test_summary_json_shape(self):
         payload = okf_cli.validate_vault(self.root, profile="okf").as_dict()
         self.assertEqual(
-            set(payload), {"ok", "profile", "scanned", "violations", "warnings"}
+            set(payload),
+            {"ok", "profile", "scanned", "contract", "violations", "warnings"},
         )
         json.dumps(payload)  # must be serializable
 

@@ -25,6 +25,7 @@
 
 - [Why Apo](#why-apo)
 - [Structured notes (OKF and friends)](#structured-notes-okf-and-friends)
+  - [OKF conformance](#okf-conformance)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
@@ -66,6 +67,28 @@ No separate issue tracker required for “show me open X in folder Y.” Prefer 
 **Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard. Legacy `system/config/` still resolves. Templates: [docs/contracts/](docs/contracts/). Desk: `vault(action=merge|project)` + `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
 
 **Multi-vault:** set `APO_VAULTS` to a JSON registry (per-root `index` + `collection`). Tools take `vault=`; watch runs one thread per vault. See [docs/multi-vault.md](docs/multi-vault.md).
+
+### OKF conformance
+
+Apo speaks [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) as a first-class vault contract — it is still local markdown memory, not an OKF product.
+
+| | State |
+|---|---|
+| **Produces** | Conformant **v0.1** bundles. Every stamped concept carries the spec's `type` alongside Apo's native `okf_type`; §11 permits both, so no vault migration is needed. |
+| **Reads** | **v0.1 and v0.2.** Both readers always run, so the §13.1 fallbacks work: `generated.at` else `timestamp`, `sources` else a `# Citations` body list. Plus §7 actors, `verified`, `status` / `stale_after`, `usage_window`. |
+| **Emits from v0.2** | `generated: {by, at}`, opt-in via `generated_policy: forward`. The other v0.2 families are read-only. |
+| **Consumes foreign bundles** | `okf ingest` mounts one as a **read-only** vault — searchable via `vault=`, never writable. |
+| **Not implemented** | Attested Computation (`runtime` / `executor` / `attester`); emitting `sources` / `verified`. |
+
+Adopt it on any vault:
+
+```bash
+just okf init     --vault-root ~/Notes/Yours   # contract + bundle-root index
+just okf fix      --vault-root ~/Notes/Yours   # stamp the gaps
+just okf validate --vault-root ~/Notes/Yours --profile okf   # SPEC §11 exactly
+```
+
+`--profile okf` checks **only** what the spec requires and will not fail you for missing `description` / `timestamp`; `--profile apo` (default) is the stricter house style. A vault with no contract reports that rather than claiming to be clean. Field-by-field table and policy knobs: [docs/contracts/okf-bundle.md](docs/contracts/okf-bundle.md).
 
 
 ## Features
@@ -231,6 +254,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/patch-note-ops.md](docs/patch-note-ops.md) | `patch_note` wire contract (typed ops, aliases, error codes) |
 | [docs/search-quality.md](docs/search-quality.md) | Eval harness, measured hit@k / MRR, reranker guidance |
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
+| [docs/contracts/okf-bundle.md](docs/contracts/okf-bundle.md) | OKF conformance table, `apo-engine okf` CLI, type/provenance policies |
 | [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_VAULTS`) |
 | [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC for local gateways (out-of-repo clients) |
 | [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection (`body` + `guidance`) |
@@ -242,5 +266,6 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 - **Scope:** one machine, one vault root, local engine — no cloud gateway in this repo.
 - **Embeddings:** default stack needs Ollama + `bge-m3` running locally; ONNX is opt-in, not a drop-in without reindex.
 - **Maturity:** daily-driver + shareable install path; Hermes projection and usage contracts ship for autonomous hosts.
+- **Interop:** produces conformant OKF v0.1 bundles and reads v0.1 + v0.2; a foreign bundle mounts read-only via `okf ingest`. Apo stays local markdown memory — OKF is a contract it honors, not its identity.
 - **Layouts:** PARA / OKF / thread workflows are optional vault **contracts** (or a [template](docs/contracts/)), not engine requirements — frontmatter filtering works either way.
 
