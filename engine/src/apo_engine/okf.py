@@ -139,6 +139,18 @@ class OkfContract:
     reserved_filenames: list[str] = field(default_factory=lambda: ["index.md", "log.md"])
     path_rules: list[PathRule] = field(default_factory=list)
     legacy_type_map: dict[str, str] = field(default_factory=dict)
+    # --- OKF interchange conformance (SPEC §11) -------------------------------
+    # SPEC requires a non-empty ``type`` on every concept frontmatter block.
+    # Apo's native field is ``okf_type``; ``type`` is emitted alongside it so a
+    # stamped vault is a conformant bundle. Unknown extra keys are explicitly
+    # tolerated by SPEC §11 consumer obligations, so dual-emission is spec-legal.
+    spec_type_field: str = "type"
+    # fill   — write ``type`` only when absent/empty (preserves legacy taxonomies)
+    # mirror — always force ``type`` to the resolved OKF type
+    # off    — never emit ``type``
+    spec_type_policy: str = "fill"
+    # Consumer/spec validation profile: SPEC §11 requires exactly this much.
+    spec_required: list[str] = field(default_factory=lambda: ["type"])
 
 
 @dataclass
@@ -193,6 +205,44 @@ def enforcement_override() -> str | None:
     if raw in {"off", "soft", "hard"}:
         return raw
     return None
+
+
+def spec_type_policy_override() -> str | None:
+    """``APO_OKF_SPEC_TYPE=fill|mirror|off`` — escape hatch for ``type`` emission."""
+    raw = os.environ.get("APO_OKF_SPEC_TYPE", "").strip().lower()
+    if raw in {"fill", "mirror", "off"}:
+        return raw
+    return None
+
+
+def spec_type_updates(
+    contract: OkfContract,
+    scalars: dict[str, str],
+    resolved_type: str,
+) -> dict[str, str]:
+    """Return the ``{type: …}`` update needed to make this concept OKF-conformant.
+
+    SPEC §11 conformance clause 2 requires a non-empty ``type`` on every
+    frontmatter block. Apo keeps ``okf_type`` as its native field and emits
+    ``type`` alongside it; SPEC §11 forbids consumers rejecting a bundle for
+    unknown additional keys, so carrying both is conformant.
+
+    Under the default ``fill`` policy an existing non-empty ``type`` is left
+    untouched — vaults that use ``type`` as a legacy taxonomy (Apo's
+    ``legacy_type_map``) stay conformant on their own value rather than having
+    it overwritten.
+    """
+    spec_field = (contract.spec_type_field or "").strip()
+    policy = spec_type_policy_override() or contract.spec_type_policy
+    if policy == "off" or not spec_field or spec_field == contract.type_field:
+        return {}
+    value = (resolved_type or "").strip()
+    if not value:
+        return {}
+    existing = (scalars.get(spec_field) or "").strip()
+    if policy == "mirror":
+        return {} if existing == value else {spec_field: value}
+    return {} if existing else {spec_field: value}
 
 
 def _parse_scalars(text: str, rel_path: str = "") -> dict[str, str]:
@@ -263,11 +313,18 @@ def load_contract(path: Path) -> OkfContract:
     if not isinstance(legacy, dict):
         legacy = {}
 
+    spec_policy = str(data.get("spec_type_policy") or "fill").lower()
+    if spec_policy not in {"fill", "mirror", "off"}:
+        spec_policy = "fill"
+
     return OkfContract(
         path=path,
         okf_version=str(data.get("okf_version") or "0.1"),
         type_field=str(data.get("type_field") or "okf_type"),
         legacy_type_field=str(data.get("legacy_type_field") or "type"),
+        spec_type_field=str(data.get("spec_type_field") or "type"),
+        spec_type_policy=spec_policy,
+        spec_required=[str(x) for x in (data.get("spec_required") or ["type"])],
         core_required=[str(x) for x in (data.get("core_required") or ["okf_type", "description", "timestamp"])],
         core_soft=[str(x) for x in (data.get("core_soft") or ["title", "resource"])],
         default_enforcement=str(data.get("default_enforcement") or "soft").lower(),
@@ -416,6 +473,11 @@ def process_concept(
         updates[type_field] = inferred
         stamped.append(type_field)
 
+    # OKF interchange: emit the spec's ``type`` next to Apo's ``okf_type``.
+    for key, val in spec_type_updates(contract, scalars, inferred).items():
+        updates[key] = val
+        stamped.append(key)
+
     h1 = _first_h1(content, rel)
     stem = Path(rel).stem
 
@@ -504,6 +566,117 @@ def process_concept(
         enforcement=enf,
         ok=True,
     )
+
+
+@dataclass
+class ValidationReport:
+    """Read-only conformance check — no stamping, no mutation."""
+
+    rel_path: str
+    profile: str = "apo"
+    okf_type: str | None = None
+    enforcement: str = "off"
+    violations: list[dict[str, str]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.violations
+
+
+def validate_concept(
+    *,
+    vault_root: Path,
+    rel_path: str,
+    content: str,
+    profile: str = "apo",
+) -> ValidationReport:
+    """Validate an existing note without mutating it.
+
+    ``profile="okf"`` checks **exactly** SPEC §11 conformance: parseable
+    frontmatter on every non-reserved ``.md``, a non-empty ``type`` in it, and
+    reserved filenames carrying no concept frontmatter. It deliberately does
+    **not** require Apo's ``description`` / ``timestamp`` — §11 forbids a
+    consumer rejecting a bundle for missing optional fields.
+
+    ``profile="apo"`` is the stricter producer profile: the contract's
+    ``core_required`` plus any ``path_rules[].required_fields``.
+    """
+    rel = rel_path.replace("\\", "/").lstrip("/")
+    prof = (profile or "apo").lower()
+    report = ValidationReport(rel_path=rel, profile=prof)
+
+    contract = get_contract(vault_root)
+    if contract is None:
+        return report
+
+    rule = match_rule(contract, rel)
+    enf = rule.enforcement if rule else contract.default_enforcement
+    report.enforcement = enf
+
+    has_fm = _has_frontmatter(content, rel)
+    scalars = _parse_scalars(content, rel)
+    spec_field = (contract.spec_type_field or "type").strip()
+
+    if enf == "reserved":
+        if has_fm:
+            report.violations.append(
+                {"field": "frontmatter", "expected": "absent", "path": rel}
+            )
+        return report
+
+    if prof == "okf":
+        # SPEC §11.1 — every non-reserved .md carries parseable frontmatter.
+        if not has_fm:
+            report.violations.append(
+                {"field": "frontmatter", "expected": "present", "path": rel}
+            )
+            return report
+        # SPEC §11.2 — that frontmatter has a non-empty ``type``.
+        if not (scalars.get(spec_field) or "").strip():
+            native = (scalars.get(contract.type_field) or "").strip()
+            hint = f"non-empty; okf_type={native}" if native else "non-empty"
+            report.violations.append({"field": spec_field, "expected": hint, "path": rel})
+        report.okf_type = (
+            scalars.get(contract.type_field) or scalars.get(spec_field) or ""
+        ).strip() or None
+        # SPEC §12 — bundle root may declare the target version.
+        if rel == "index.md" and has_fm and not (scalars.get("okf_version") or "").strip():
+            report.warnings.append(
+                f"{rel}: bundle root index.md should declare okf_version"
+            )
+        return report
+
+    # --- producer profile -----------------------------------------------------
+    if enf in {"off", "exempt"}:
+        report.okf_type = (scalars.get(contract.type_field) or "").strip() or None
+        return report
+
+    if not has_fm:
+        report.violations.append({"field": "frontmatter", "expected": "present", "path": rel})
+        return report
+
+    required = list(contract.core_required)
+    if rule and rule.required_fields:
+        for f in rule.required_fields:
+            if f not in required:
+                required.append(f)
+
+    for f in required:
+        if f == "timestamp":
+            if not any(
+                (scalars.get(k) or "").strip()
+                for k in ("timestamp", "updated", "ingested_at", "date")
+            ):
+                report.violations.append(
+                    {"field": "timestamp", "expected": "ISO-8601", "path": rel}
+                )
+            continue
+        if not (scalars.get(f) or "").strip():
+            report.violations.append({"field": f, "expected": "non-empty", "path": rel})
+
+    report.okf_type = (scalars.get(contract.type_field) or "").strip() or None
+    return report
 
 
 # Back-compat aliases (pre-contracts rename)

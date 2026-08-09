@@ -37,7 +37,19 @@ from lib.vault_env import resolve_under_vault
 
 
 
-def lint_path(path: Path, strict: bool) -> list[str]:
+def lint_path(path: Path, strict: bool, profile: str = "apo") -> list[str]:
+    """Lint one file.
+
+    ``profile="okf"`` checks SPEC §11 conformance exactly: parseable
+    frontmatter on every non-reserved ``.md``, a non-empty **``type``** in it,
+    and reserved filenames carrying no concept frontmatter. It does not accept
+    ``okf_type`` as a substitute for ``type`` and does not require Apo's
+    ``description`` / ``timestamp`` — §11 forbids rejecting a bundle for
+    missing optional fields.
+
+    ``profile="apo"`` is the historical producer profile (``okf_type`` or
+    ``type`` satisfies the type check; ``--strict`` adds the recommended set).
+    """
     errors: list[str] = []
     warnings: list[str] = []
     rel = rel_to_vault(path)
@@ -47,6 +59,7 @@ def lint_path(path: Path, strict: bool) -> list[str]:
         return [f"{rel}: unreadable ({exc})"]
 
     scalars, body, has_fm = split_frontmatter(text)
+    spec = profile == "okf"
 
     if path.name == "index.md":
         if is_bundle_root_index(path):
@@ -61,6 +74,14 @@ def lint_path(path: Path, strict: bool) -> list[str]:
 
     if not has_fm:
         errors.append(f"{rel}: missing YAML frontmatter")
+        return errors
+
+    if spec:
+        # SPEC §11.2 — the interchange field is `type`, not `okf_type`.
+        if not (scalars.get("type") or "").strip():
+            native = (scalars.get("okf_type") or "").strip()
+            hint = f" (okf_type: {native} — run --fix to mirror it)" if native else ""
+            errors.append(f"{rel}: missing OKF `type`{hint}")
         return errors
 
     if not (scalars.get("okf_type") or scalars.get("type")):
@@ -118,12 +139,15 @@ def fix_path(path: Path) -> bool:
     updates: dict[str, str] = {}
 
     if not has_fm:
-        # Minimal concept scaffold
+        # Minimal concept scaffold. `type` carries the OKF interchange value
+        # (SPEC §11) and `okf_type` the Apo-native one; on a fresh scaffold
+        # there is no legacy taxonomy value to preserve, so both agree.
         title = first_heading(body) or path.stem
+        okf_type = map_okf_type(path, "note", None) or "Note"
         updates = {
             "title": title,
-            "type": "note",
-            "okf_type": map_okf_type(path, "note", None) or "Note",
+            "type": okf_type,
+            "okf_type": okf_type,
             "description": title,
             "timestamp": utc_now(),
         }
@@ -153,6 +177,17 @@ def fix_path(path: Path) -> bool:
         mapped = map_okf_type(path, scalars.get("type"), None)
         if mapped:
             updates["okf_type"] = mapped
+
+    # SPEC §11.2 — ensure a non-empty `type`. Fill only; an existing legacy
+    # taxonomy value is left alone (mirrors the engine's `fill` policy).
+    if not (scalars.get("type") or "").strip():
+        resolved = (
+            updates.get("okf_type")
+            or scalars.get("okf_type")
+            or map_okf_type(path, None, None)
+            or "Note"
+        )
+        updates["type"] = resolved
 
     if not updates:
         return False
@@ -269,6 +304,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="OKF lint / fix / index regen (contract-gated)")
     parser.add_argument("paths", nargs="*", help="Files or directories (default: whole vault)")
     parser.add_argument("--strict", action="store_true", help="Fail on missing recommended fields")
+    parser.add_argument(
+        "--profile",
+        choices=("apo", "okf"),
+        default="apo",
+        help="apo = Apo producer profile (default); okf = SPEC §11 conformance exactly",
+    )
     parser.add_argument("--fix", action="store_true", help="Auto-fill safe frontmatter gaps")
     parser.add_argument(
         "--regenerate-indexes",
@@ -322,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
             if fix_path(path):
                 fixed += 1
                 print(f"fixed: {rel_to_vault(path)}")
-        issues = lint_path(path, strict=args.strict)
+        issues = lint_path(path, strict=args.strict, profile=args.profile)
         all_issues.extend(issues)
 
     for issue in all_issues:
@@ -330,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
 
     errors = [i for i in all_issues if not i.startswith("WARN ")]
     print(
-        f"scanned {len(uniq)} markdown file(s); "
+        f"profile={args.profile}: scanned {len(uniq)} markdown file(s); "
         f"{'fixed ' + str(fixed) + '; ' if args.fix else ''}"
         f"{len(errors)} error(s), {len(all_issues) - len(errors)} warning(s)"
     )
