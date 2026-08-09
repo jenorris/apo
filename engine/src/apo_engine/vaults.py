@@ -49,12 +49,19 @@ from apo_engine import config
 
 @dataclass(frozen=True)
 class VaultBinding:
-    """Runtime binding for one vault's root + sqlite index + deferred namespace."""
+    """Runtime binding for one vault's root + sqlite index + deferred namespace.
+
+    ``read_only`` vaults are indexed and searchable but reject every write op.
+    Set it via ``"read_only": true`` in the vault's ``APO_VAULTS`` entry; this
+    is how an ingested foreign OKF bundle is mounted without letting an agent
+    edit someone else's knowledge base.
+    """
 
     name: str
     root: Path
     index: Path
     collection: str
+    read_only: bool = False
 
     def resolved(self) -> VaultBinding:
         return VaultBinding(
@@ -62,6 +69,7 @@ class VaultBinding:
             root=self.root.expanduser().resolve(),
             index=self.index.expanduser().resolve(),
             collection=self.collection,
+            read_only=self.read_only,
         )
 
 
@@ -223,6 +231,7 @@ def load_bindings() -> tuple[str, dict[str, VaultBinding]]:
             root=root_path,
             index=_path(idx),
             collection=compute_vault_id(root_path),
+            read_only=bool(spec.get("read_only") or spec.get("readonly")),
         ).resolved()
 
     default = str(data.get("default") or next(iter(out)))

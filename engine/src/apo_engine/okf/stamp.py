@@ -304,6 +304,22 @@ def validate_concept(
         return report
 
     if prof == "okf":
+        # SPEC §11.1/§11.2 scope themselves to *non-reserved* files; reserved
+        # filenames are governed by §11.3 instead. The bundle-root index.md is
+        # reserved but may carry frontmatter (it declares okf_version), so it
+        # must not be asked for a concept `type`.
+        if Path(rel).name in contract.reserved_filenames:
+            if rel == "index.md":
+                if has_fm and not (scalars.get("okf_version") or "").strip():
+                    report.warnings.append(
+                        f"{rel}: bundle root index.md should declare okf_version"
+                    )
+            elif has_fm:
+                report.violations.append(
+                    {"field": "frontmatter", "expected": "absent", "path": rel}
+                )
+            return report
+
         # SPEC §11.1 — every non-reserved .md carries parseable frontmatter.
         if not has_fm:
             report.violations.append(
@@ -318,11 +334,6 @@ def validate_concept(
         report.okf_type = (
             scalars.get(contract.type_field) or scalars.get(spec_field) or ""
         ).strip() or None
-        # SPEC §12 — bundle root may declare the target version.
-        if rel == "index.md" and has_fm and not (scalars.get("okf_version") or "").strip():
-            report.warnings.append(
-                f"{rel}: bundle root index.md should declare okf_version"
-            )
         return report
 
     # --- producer profile -----------------------------------------------------

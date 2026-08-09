@@ -53,7 +53,14 @@ desk-project *ARGS:
 desk-project-claude:
     ./scripts/write-claude-skill.sh
 
-# Contract-gated vault batch tools (OKF lint/fix/…). See vault-tools/README.md
+# OKF bundle: validate | fix | init | export | ingest.
+# `okf validate --profile okf` checks SPEC §11 conformance exactly;
+# `--profile apo` (default) is the stricter house producer profile.
+okf *ARGS:
+    {{eng}} okf {{ARGS}}
+
+# Contract-gated vault batch tools (index regen, linkify). See vault-tools/README.md
+# OKF lint/fix/export there are shims over `just okf …`.
 vault-tools *ARGS:
     just --justfile "{{ justfile_directory() }}/vault-tools/justfile" {{ARGS}}
 

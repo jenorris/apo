@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-okf_lint.py — Lint / fix / regenerate indexes for an OKF vault.
+okf_lint.py — shim over ``apo-engine okf validate`` / ``apo-engine okf fix``.
 
-Requires vault system/contracts/okf-contract*.yaml.
+Conformance checking and stamping now live in ``apo_engine.okf``; this file
+used to carry a second implementation (its own frontmatter parser and its own
+``map_okf_type`` table) that could drift from the engine's contract-driven
+inference. Only ``--regenerate-indexes`` is still implemented here — it builds
+OKF §6 listings and involves no type logic, so there is nothing to drift.
 
-  VAULT_ROOT=~/Notes/Meta python3 okf_lint.py [--strict] [path…]
+  python3 okf_lint.py --vault ~/Notes/Meta [--profile okf] [--strict] [path…]
   python3 okf_lint.py --vault ~/Notes/Meta --fix [path…]
+  python3 okf_lint.py --vault ~/Notes/Meta --regenerate-indexes
 """
 
 from __future__ import annotations
@@ -21,191 +26,12 @@ from okf_common import (
     PARA_ROOTS,
     concept_description,
     concept_title,
-    first_heading,
-    is_bundle_root_index,
-    is_reserved,
-    iter_markdown,
-    map_okf_type,
     rel_to_vault,
-    set_scalar_in_frontmatter,
     should_skip_dir,
     split_frontmatter,
-    strip_frontmatter,
-    utc_now,
 )
+from okf_shim import run_engine_okf
 from lib.vault_env import resolve_under_vault
-
-
-
-def lint_path(path: Path, strict: bool, profile: str = "apo") -> list[str]:
-    """Lint one file.
-
-    ``profile="okf"`` checks SPEC §11 conformance exactly: parseable
-    frontmatter on every non-reserved ``.md``, a non-empty **``type``** in it,
-    and reserved filenames carrying no concept frontmatter. It does not accept
-    ``okf_type`` as a substitute for ``type`` and does not require Apo's
-    ``description`` / ``timestamp`` — §11 forbids rejecting a bundle for
-    missing optional fields.
-
-    ``profile="apo"`` is the historical producer profile (``okf_type`` or
-    ``type`` satisfies the type check; ``--strict`` adds the recommended set).
-    """
-    errors: list[str] = []
-    warnings: list[str] = []
-    rel = rel_to_vault(path)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return [f"{rel}: unreadable ({exc})"]
-
-    scalars, body, has_fm = split_frontmatter(text)
-    spec = profile == "okf"
-
-    if path.name == "index.md":
-        if is_bundle_root_index(path):
-            if has_fm and not scalars.get("okf_version"):
-                warnings.append(f"{rel}: root index.md should declare okf_version: \"0.1\"")
-        elif has_fm:
-            errors.append(f"{rel}: non-root index.md must not have frontmatter")
-        return errors if strict else errors + [f"WARN {w}" for w in warnings]
-
-    if path.name == "log.md":
-        return []
-
-    if not has_fm:
-        errors.append(f"{rel}: missing YAML frontmatter")
-        return errors
-
-    if spec:
-        # SPEC §11.2 — the interchange field is `type`, not `okf_type`.
-        if not (scalars.get("type") or "").strip():
-            native = (scalars.get("okf_type") or "").strip()
-            hint = f" (okf_type: {native} — run --fix to mirror it)" if native else ""
-            errors.append(f"{rel}: missing OKF `type`{hint}")
-        return errors
-
-    if not (scalars.get("okf_type") or scalars.get("type")):
-        errors.append(f"{rel}: missing type / okf_type")
-
-    if strict:
-        if not scalars.get("title") and not first_heading(body):
-            errors.append(f"{rel}: missing title (and no H1)")
-        if not (scalars.get("description") or first_heading(body)):
-            errors.append(f"{rel}: missing description (and no H1 to derive)")
-        if not (
-            scalars.get("timestamp")
-            or scalars.get("updated")
-            or scalars.get("ingested_at")
-            or scalars.get("date")
-        ):
-            errors.append(f"{rel}: missing timestamp/updated/ingested_at/date")
-
-    return errors + ([f"WARN {w}" for w in warnings] if not strict else [])
-
-
-def fix_path(path: Path) -> bool:
-    """Apply safe auto-fixes. Returns True if file changed."""
-    text = path.read_text(encoding="utf-8")
-    original = text
-
-    if path.name == "index.md" and not is_bundle_root_index(path):
-        scalars, body, has_fm = split_frontmatter(text)
-        if has_fm:
-            # Only strip when body already looks like a listing, or FM is tiny metadata.
-            listing_like = bool(
-                re_search_listing(body)
-                or len(body.strip()) < 40
-            )
-            if listing_like:
-                text = strip_frontmatter(text)
-                if not text.endswith("\n"):
-                    text += "\n"
-                if text != original:
-                    path.write_text(text, encoding="utf-8")
-                    return True
-        return False
-
-    if is_reserved(path):
-        if is_bundle_root_index(path):
-            scalars, _, has_fm = split_frontmatter(text)
-            if has_fm and not scalars.get("okf_version"):
-                text = set_scalar_in_frontmatter(text, {"okf_version": "0.1"})
-                if text != original:
-                    path.write_text(text, encoding="utf-8")
-                    return True
-        return False
-
-    scalars, body, has_fm = split_frontmatter(text)
-    updates: dict[str, str] = {}
-
-    if not has_fm:
-        # Minimal concept scaffold. `type` carries the OKF interchange value
-        # (SPEC §11) and `okf_type` the Apo-native one; on a fresh scaffold
-        # there is no legacy taxonomy value to preserve, so both agree.
-        title = first_heading(body) or path.stem
-        okf_type = map_okf_type(path, "note", None) or "Note"
-        updates = {
-            "title": title,
-            "type": okf_type,
-            "okf_type": okf_type,
-            "description": title,
-            "timestamp": utc_now(),
-        }
-        text = set_scalar_in_frontmatter(text, updates)
-        path.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
-        return True
-
-    if not scalars.get("title"):
-        h1 = first_heading(body)
-        if h1:
-            updates["title"] = h1
-
-    if not scalars.get("description"):
-        desc = concept_description(scalars, body)
-        if desc:
-            updates["description"] = desc
-
-    if not (
-        scalars.get("timestamp")
-        or scalars.get("updated")
-        or scalars.get("ingested_at")
-        or scalars.get("date")
-    ):
-        updates["timestamp"] = utc_now()
-
-    if not scalars.get("okf_type"):
-        mapped = map_okf_type(path, scalars.get("type"), None)
-        if mapped:
-            updates["okf_type"] = mapped
-
-    # SPEC §11.2 — ensure a non-empty `type`. Fill only; an existing legacy
-    # taxonomy value is left alone (mirrors the engine's `fill` policy).
-    if not (scalars.get("type") or "").strip():
-        resolved = (
-            updates.get("okf_type")
-            or scalars.get("okf_type")
-            or map_okf_type(path, None, None)
-            or "Note"
-        )
-        updates["type"] = resolved
-
-    if not updates:
-        return False
-
-    text = set_scalar_in_frontmatter(text, updates)
-    if text != original:
-        path.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
-        return True
-    return False
-
-
-def re_search_listing(body: str) -> bool:
-    import re
-
-    return bool(
-        re.search(r"(?m)^##\s+(Concepts|Subdirectories)\b", body)
-        or re.search(r"(?m)^\*\s+\[[^\]]+\]\([^)]+\)", body)
-    )
 
 
 def regenerate_index(directory: Path) -> Path:
@@ -303,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="OKF lint / fix / index regen (contract-gated)")
     parser.add_argument("paths", nargs="*", help="Files or directories (default: whole vault)")
-    parser.add_argument("--strict", action="store_true", help="Fail on missing recommended fields")
+    parser.add_argument("--strict", action="store_true", help="(accepted; the engine profile decides)")
     parser.add_argument(
         "--profile",
         choices=("apo", "okf"),
@@ -324,58 +150,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(raw)
 
     targets = [resolve_under_vault(root, p) for p in args.paths]
-    if not targets:
-        targets = [root]
 
     if args.regenerate_indexes:
-        dirs = dirs_for_indexes(targets, recursive=not args.no_recursive_indexes)
-        written = 0
+        dirs = dirs_for_indexes(targets or [root], recursive=not args.no_recursive_indexes)
         for d in dirs:
             regenerate_index(d)
-            written += 1
             print(f"index: {rel_to_vault(d / 'index.md')}")
-        print(f"regenerated {written} index.md file(s)")
+        print(f"regenerated {len(dirs)} index.md file(s)")
         return 0
 
-    files: list[Path] = []
-    for t in targets:
-        files.extend(iter_markdown(t))
+    paths = [str(p) for p in targets]
 
-    # De-dupe preserving order; drop anything outside vault (symlink escape)
-    seen: set[Path] = set()
-    uniq: list[Path] = []
-    for f in files:
-        rp = f.resolve()
-        if rp in seen:
-            continue
-        try:
-            rp.relative_to(root)
-        except ValueError:
-            print(f"vault-tools: skip path outside vault: {f}", file=sys.stderr)
-            continue
-        seen.add(rp)
-        uniq.append(f)
+    if args.fix:
+        rc = run_engine_okf("fix", root, paths)
+        if rc:
+            return rc
 
-    fixed = 0
-    all_issues: list[str] = []
-    for path in uniq:
-        if args.fix:
-            if fix_path(path):
-                fixed += 1
-                print(f"fixed: {rel_to_vault(path)}")
-        issues = lint_path(path, strict=args.strict, profile=args.profile)
-        all_issues.extend(issues)
-
-    for issue in all_issues:
-        print(issue)
-
-    errors = [i for i in all_issues if not i.startswith("WARN ")]
-    print(
-        f"profile={args.profile}: scanned {len(uniq)} markdown file(s); "
-        f"{'fixed ' + str(fixed) + '; ' if args.fix else ''}"
-        f"{len(errors)} error(s), {len(all_issues) - len(errors)} warning(s)"
-    )
-    return 1 if errors else 0
+    return run_engine_okf("validate", root, ["--profile", args.profile, *paths])
 
 
 if __name__ == "__main__":

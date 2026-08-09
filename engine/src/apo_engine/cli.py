@@ -159,6 +159,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     pd.set_defaults(func=_cmd_desk_project)
 
+    from . import okf_cli
+
+    okf_cli.add_parser(sub)
+
     pr = sub.add_parser(
         "serve",
         help="local JSON HTTP RPC for gateways (loopback; optional Unix socket)",

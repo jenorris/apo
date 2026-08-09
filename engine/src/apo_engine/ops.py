@@ -73,12 +73,18 @@ def _err(**kw: Any) -> dict[str, Any]:
     return {"ok": False, **kw}
 
 
-def _binding(vault: str = "") -> vaults.VaultBinding:
+def _binding(vault: str = "", *, write: bool = False) -> vaults.VaultBinding:
     default, bindings = vaults.load_bindings()
     key = (vault or "").strip() or default
     if key not in bindings:
         raise OpsError("bad_vault", f"unknown vault {key!r}; available: {sorted(bindings)}")
-    return bindings[key]
+    binding = bindings[key]
+    if write and binding.read_only:
+        raise OpsError(
+            "read_only_vault",
+            f"vault {key!r} is mounted read-only; searchable but not writable",
+        )
+    return binding
 
 
 def _load_bindings():
@@ -1632,7 +1638,7 @@ def write_note(
     content = body
 
     try:
-        b = _binding(vault)
+        b = _binding(vault, write=True)
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -1744,7 +1750,7 @@ def append_note(
     resolved_heading: str | None = heading
 
     try:
-        b = _binding(vault)
+        b = _binding(vault, write=True)
     except OpsError as e:
         return _err(path=path or None, error=e.code, message=e.message)
 
@@ -2261,7 +2267,7 @@ def patch_note(
     vault: str = "",
 ) -> dict[str, Any]:
     try:
-        b = _binding(vault)
+        b = _binding(vault, write=True)
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -2571,7 +2577,7 @@ def patch_notes(
     do not fold them into this batch.
     """
     try:
-        b = _binding(vault)
+        b = _binding(vault, write=True)
     except OpsError as e:
         return _err(error=e.code, message=e.message)
 
@@ -2748,7 +2754,7 @@ def place_note(
       (same as former ``send_note``; leaves src; optional ``fields`` merge).
     """
     try:
-        b = _binding(vault)
+        b = _binding(vault, write=True)
         root = b.resolved().root.resolve()
     except OpsError as e:
         return _err(src=src, dst=dst, error=e.code, message=e.message)
@@ -2837,7 +2843,7 @@ def move_note(
     vault: str = "",
 ) -> dict[str, Any]:
     try:
-        b = _binding(vault)
+        b = _binding(vault, write=True)
         root = b.resolved().root
         src_full = _safe_resolve(root, src)
         dst_full = _safe_resolve(root, dst)
@@ -2988,7 +2994,7 @@ def send_note(
 
 def delete_note(path: str, *, vault: str = "") -> dict[str, Any]:
     try:
-        b = _binding(vault)
+        b = _binding(vault, write=True)
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -3027,7 +3033,7 @@ def git_sync_op(
     ``pull`` (ff-only) has blocked.
     """
     try:
-        b = _binding(vault)
+        b = _binding(vault, write=True)
         root = b.resolved().root
     except OpsError as e:
         return _err(error=e.code, message=e.message)
