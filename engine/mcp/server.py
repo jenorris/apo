@@ -272,6 +272,7 @@ def _memory_status_sync() -> dict:
         "default_vault": DEFAULT_VAULT,
         "vaults": vaults,
         "watcher": apo_ops.watcher_status(),
+        "index_visibility": apo_ops.index_visibility(),
         "runtime_file": str(_runtime_config_path()),
     }
 

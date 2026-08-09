@@ -59,7 +59,7 @@ read_note(chunk_hash=row, format=row) → expected_row_hash    → patch_note(ro
 - **Orient with `mode=toc`** before dumping a big note — the outline carries a `chunk_hash` per heading with no bodies.
 - **Address rows by `row_key` + `table_id`** (both come from a search row hit) or by `heading` when the note has one table.
 - **Row ops require a precondition** — pass `expected_content_hash` (from the search hit) or `expected_row_hash` (from `read_note(format=row)`); a stale hash hard-rejects.
-- **After a row/table write, re-search** (or wait for the watcher) before reading by `chunk_hash` — the response returns `reembed: pending`, not a live searchable hash.
+- **After a row/table write, re-search** (or wait for the watcher) before reading by `chunk_hash` — the response returns `reembed: pending`, not a live searchable hash. A write is on disk immediately but reaches the index only after the watcher runs; the bound is `APO_WATCH_DEBOUNCE` (default 2s) with a live watcher, unbounded without one. **Poll for the content — do not sleep for the bound.** See [index-concurrency.md](index-concurrency.md#read-after-write-visibility-bound) and `ops.index_visibility()`.
 - **Bulk ingest**: `write_note(sections=[{content_type: csv|json, …}])` for a new note; `patch_note(replace_table, merge=upsert)` for an existing one — fuzzy header mapping rejects ambiguous columns unless `allow_new_columns=true`.
 - **Column renames/adds/drops** go through `alter_table_schema` with `confirm=true` (they re-embed every row).
 

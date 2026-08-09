@@ -30,6 +30,8 @@ from apo_engine.okf.contract import (
     _compile_glob,
     clear_contract_cache,
     enforcement_override,
+    generated_policy_override,
+    generated_updates,
     get_contract,
     load_contract,
     match_rule,
@@ -53,6 +55,7 @@ from apo_engine.okf.frontmatter import (
     parse_mapping,
     parse_scalars,
     set_fields,
+    set_structured_fields,
 )
 from apo_engine.okf.model import (
     Actor,
@@ -164,6 +167,8 @@ __all__ = [
     "detect_version",
     "enforcement_override",
     "first_h1",
+    "generated_policy_override",
+    "generated_updates",
     "get_contract",
     "get_profile",
     "has_frontmatter",
@@ -179,6 +184,7 @@ __all__ = [
     "resolve_contract_path",
     "resolve_profile_path",
     "set_fields",
+    "set_structured_fields",
     "spec_type_policy_override",
     "spec_type_updates",
     "utc_now",

@@ -73,13 +73,15 @@ Env:
 - `APO_OKF_ENFORCEMENT=soft|hard|off`
 - `APO_OKF_SPEC_TYPE=fill|mirror|off` — overrides `spec_type_policy`
 
-Offline twin in Meta: `just okf lint` / `just okf fix`.
-
-Conformance check (SPEC §11 exactly, not the house style):
+CLI (one implementation; `vault-tools/tools/okf/` are shims over it):
 
 ```sh
-just -f vault-tools/justfile okf-lint --vault ~/Notes/Meta --profile=okf
-just -f vault-tools/justfile okf-fix  --vault ~/Notes/Meta   # fills missing `type`
+just okf validate --vault meta --profile okf   # SPEC §11 exactly
+just okf validate --vault meta                 # Apo producer profile (default)
+just okf fix      --vault meta                 # stamp gaps via the normal write path
+just okf init     --vault-root ~/Notes/New     # scaffold contract + bundle root
+just okf export   --vault meta /tmp/bundle --okf-version 0.2
+just okf ingest   /tmp/foreign-bundle --name foreign   # mount read-only
 ```
 
 ## Agent behaviors
@@ -92,9 +94,9 @@ just -f vault-tools/justfile okf-fix  --vault ~/Notes/Meta   # fills missing `ty
 ## Conformance: Apo ↔ OKF v0.1 ↔ v0.2
 
 Field-by-field state of Apo against the [OKF SPEC](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
-**match** = emitted and read per spec · **partial** = present under a different
-name or shape · **conflict** = spec disagrees with Apo · **planned** = not
-implemented yet.
+**match** = emitted and read per spec · **read-only** = read but never
+emitted · **partial** = present under a different name or shape ·
+**conflict** = spec disagrees with Apo.
 
 ### Core
 
@@ -112,13 +114,13 @@ implemented yet.
 
 | Field | Family | State | Note |
 |-------|--------|-------|------|
-| `generated: {by, at}` | trust | **planned** | Phase 1 read / Phase 3 emit |
-| `verified: [{by, at}]` | trust | **planned** | Bare mapping must be read as a one-element list (§11) |
-| `sources: [{resource, …}]` | provenance | **planned** | Supersedes the `# Citations` body list |
-| `usage_window: {from, to}` | provenance | **planned** | Frames `usage_count` |
+| `generated: {by, at}` | trust | **match** | Read always; emitted when `generated_policy: forward` |
+| `verified: [{by, at}]` | trust | **read-only** | Read (bare mapping → one-element list per §11); Apo never asserts verification itself |
+| `sources: [{resource, …}]` | provenance | **read-only** | Read, with `# Citations` fallback; not yet emitted |
+| `usage_window: {from, to}` | provenance | **read-only** | Read; frames every `usage_count` beneath it |
 | `usage_count` | provenance | **conflict** | Lives *inside* a `sources[]` entry and counts uses of that source. Apo's `metrics.duckdb` counts MCP tool calls — a different quantity. Not a wiring task. |
-| `status` | lifecycle | **partial** | Apo vaults already use `status`; spec enum is `draft \| stable \| deprecated` |
-| `stale_after` | lifecycle | **planned** | |
+| `status` | lifecycle | **partial** | Read, default `stable`; unknown values surfaced not rejected. Apo vaults already use `status` with their own values |
+| `stale_after` | lifecycle | **read-only** | Read; `ConceptMeta.is_stale()` |
 | `runtime` / `parameters` / `computation` / `executor` / `attester` | computation | **out of scope** | Attested Computation is not an Apo concept type |
 
 ### Structural (§11 conformance clauses)
@@ -147,6 +149,33 @@ implemented yet.
 | `fill` (default) | Write `type` only when absent. A vault using `type` as a legacy taxonomy (`legacy_type_map`) keeps its own values and is still conformant, since the spec requires only that `type` be non-empty and forbids rejecting unknown type values. |
 | `mirror` | Force `type` to the resolved OKF type, overwriting a legacy value. Choose this when the vault has no separate taxonomy to preserve. |
 | `off` | Never emit `type`. The vault is then not a conformant bundle; exports still get `type` added at export time. |
+
+### Producer provenance (v0.2)
+
+`generated: {by, at}` supersedes the v0.1 `timestamp` (SPEC §13.1). Emission is
+**opt-in and forward-only** — set in the vault contract:
+
+```yaml
+generated_policy: forward        # off (default) | forward
+generated_by: "apo/engine"       # SPEC §7 actor: <producer>/<version>, human:<id>, process:<id>
+```
+
+(env override `APO_OKF_GENERATED=off|forward`)
+
+| Behavior | Rule |
+|----------|------|
+| New concept | `generated` stamped alongside `timestamp` |
+| Existing concept with `generated` | Left alone unless this write also refreshed `timestamp` |
+| Existing concept without `generated` | **Not backfilled** |
+
+> [!warning] Why no backfill
+> The engine does not know who generated content it did not write. Stamping
+> `generated: {by: apo/engine}` on an old note would assert authorship that
+> never happened, and `generated.by` is exactly what the trust family keys on.
+> An unstamped note simply falls back to `timestamp`, which the dual-version
+> read already handles.
+
+`timestamp` keeps being written too, so v0.1 consumers are unaffected.
 
 ## Mixing
 

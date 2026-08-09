@@ -137,6 +137,13 @@ class OkfContract:
     spec_type_policy: str = "fill"
     # Consumer/spec validation profile: SPEC §11 requires exactly this much.
     spec_required: list[str] = field(default_factory=lambda: ["type"])
+    # --- v0.2 producer provenance (SPEC §5, §13.1) ---------------------------
+    # off     — emit nothing (default; v0.1 `timestamp` remains the only stamp)
+    # forward — stamp `generated: {by, at}` on writes, alongside `timestamp`
+    generated_policy: str = "off"
+    #: Actor recorded in ``generated.by``. SPEC §7 forms: ``<producer>/<version>``,
+    #: ``human:<id>``, ``process:<id>``.
+    generated_by: str = "apo/engine"
 
 
 def utc_now() -> str:
@@ -174,6 +181,48 @@ def spec_type_policy_override() -> str | None:
     if raw in {"fill", "mirror", "off"}:
         return raw
     return None
+
+
+def generated_policy_override() -> str | None:
+    """``APO_OKF_GENERATED=off|forward`` — escape hatch for provenance emission."""
+    raw = os.environ.get("APO_OKF_GENERATED", "").strip().lower()
+    if raw in {"off", "forward"}:
+        return raw
+    return None
+
+
+def generated_updates(
+    contract: OkfContract,
+    scalars: dict[str, str],
+    *,
+    refreshed: bool = False,
+    now: str | None = None,
+) -> dict[str, dict[str, str]]:
+    """Return the ``{generated: …}`` update for a write, or ``{}``.
+
+    SPEC §13.1 supersedes the v0.1 ``timestamp`` with ``generated: {by, at}``.
+    Emission is **forward-only**: a concept gets ``generated`` when it is first
+    written under this policy, and its ``at`` is refreshed only when the same
+    write also refreshed ``timestamp``. Existing notes are never backfilled —
+    the engine does not know who generated content it did not write, and
+    inventing an actor would poison the trust family it is meant to feed.
+
+    The value is a real mapping; ``frontmatter.set_structured_fields`` renders
+    it as a single-line flow mapping in Markdown frontmatter (the scalar setter
+    would quote it into a string) and as a nested block in YAML notes.
+    """
+    policy = generated_policy_override() or contract.generated_policy
+    if policy != "forward":
+        return {}
+    existing = (scalars.get("generated") or "").strip()
+    if existing and not refreshed:
+        return {}
+    return {
+        "generated": {
+            "by": contract.generated_by or "apo/engine",
+            "at": now or utc_now(),
+        }
+    }
 
 
 def spec_type_updates(
@@ -236,6 +285,10 @@ def load_contract(path: Path) -> OkfContract:
     if spec_policy not in {"fill", "mirror", "off"}:
         spec_policy = "fill"
 
+    gen_policy = str(data.get("generated_policy") or "off").lower()
+    if gen_policy not in {"off", "forward"}:
+        gen_policy = "off"
+
     return OkfContract(
         path=path,
         okf_version=str(data.get("okf_version") or "0.1"),
@@ -244,6 +297,8 @@ def load_contract(path: Path) -> OkfContract:
         spec_type_field=str(data.get("spec_type_field") or "type"),
         spec_type_policy=spec_policy,
         spec_required=[str(x) for x in (data.get("spec_required") or ["type"])],
+        generated_policy=gen_policy,
+        generated_by=str(data.get("generated_by") or "apo/engine"),
         core_required=[str(x) for x in (data.get("core_required") or ["okf_type", "description", "timestamp"])],
         core_soft=[str(x) for x in (data.get("core_soft") or ["title", "resource"])],
         default_enforcement=str(data.get("default_enforcement") or "soft").lower(),

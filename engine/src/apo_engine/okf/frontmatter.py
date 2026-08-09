@@ -115,6 +115,59 @@ def set_fields(content: str, updates: dict[str, str], *, rel_path: str = "") -> 
     return join_lines(lines, had_nl)
 
 
+def _flow_mapping(value: dict[str, Any]) -> str:
+    """Render a shallow mapping as a single-line YAML flow mapping."""
+    parts = []
+    for key, val in value.items():
+        text = str(val).replace("\\", "\\\\").replace('"', '\\"')
+        parts.append(f'{key}: "{text}"')
+    return "{ " + ", ".join(parts) + " }"
+
+
+def set_structured_fields(
+    content: str,
+    updates: dict[str, dict[str, Any]],
+    *,
+    rel_path: str = "",
+) -> str:
+    """Set frontmatter keys whose values are nested mappings (OKF v0.2 families).
+
+    The scalar setter in ``markdown_patch`` quotes everything it writes, which
+    would turn ``generated: { by: …, at: … }`` into a *string* rather than a
+    mapping. Markdown notes therefore get the flow mapping written verbatim;
+    YAML notes go through the YAML document setter, which takes real objects.
+    """
+    if not updates:
+        return content
+    if is_yaml_note(rel_path):
+        from apo_engine.yaml_patch import set_yaml_fields
+
+        return set_yaml_fields(content, updates)
+
+    from apo_engine.markdown_patch import _frontmatter_bounds
+
+    had_nl = content.endswith("\n")
+    lines = normalize_lines(content)
+
+    for key, value in updates.items():
+        rendered = _flow_mapping(value)
+        new_line = f"{key}: {rendered}"
+        bounds = _frontmatter_bounds(lines)
+        if bounds is None:
+            lines = ["---", new_line, "---", ""] + lines
+            continue
+        start, end = bounds
+        prefix = f"{key}:"
+        for i in range(start + 1, end):
+            if lines[i].split("#", 1)[0].strip().startswith(prefix):
+                lines[i] = new_line
+                break
+        else:
+            lines.insert(end, new_line)
+
+    return join_lines(lines, had_nl)
+
+
 # Legacy private aliases — the stamp module and tests reached for these names.
 _parse_scalars = parse_scalars
 _first_h1 = first_h1

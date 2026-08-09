@@ -16,6 +16,7 @@ from apo_engine.okf.contract import (
     OkfContract,
     PathRule,
     enforcement_override,
+    generated_updates,
     get_contract,
     match_rule,
     spec_type_updates,
@@ -26,6 +27,7 @@ from apo_engine.okf.frontmatter import (
     has_frontmatter as _has_frontmatter,
     parse_scalars as _parse_scalars,
     set_fields as _set_fields,
+    set_structured_fields,
 )
 
 @dataclass
@@ -176,6 +178,12 @@ def process_concept(
             updates["timestamp"] = utc_now()
             stamped.append("timestamp")
 
+    # v0.2 provenance, forward-only. Refreshes `generated.at` only when this
+    # same write refreshed `timestamp`, so the two never disagree. Nested
+    # value, so it is applied separately from the scalar updates below.
+    structured = generated_updates(contract, scalars, refreshed="timestamp" in stamped)
+    stamped.extend(structured)
+
     if not (scalars.get("title") or "").strip():
         title = h1 or stem
         updates["title"] = title
@@ -190,6 +198,7 @@ def process_concept(
     # Never overwrite existing non-empty okf_type / resource — only set if missing (above)
 
     new_content = _set_fields(content, updates, rel_path=rel)
+    new_content = set_structured_fields(new_content, structured, rel_path=rel)
     final_scalars = _parse_scalars(new_content, rel)
     okf_type = (final_scalars.get(type_field) or inferred).strip() or None
 

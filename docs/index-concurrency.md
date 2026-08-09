@@ -23,6 +23,38 @@ Write enqueue already wakes the watcher (`wake-*`). Lean desk hides `reindex_def
 (`apo_admin` → `memory_status`); use it only for diagnostics. Otherwise the watcher picks up
 queues on fsevents or the periodic hash scan (`WATCH_INTERVAL`, default 30s).
 
+## Read-after-write visibility bound
+
+Because MCP never writes `index.db`, a successful write is **durable on disk immediately**
+but is **not searchable** until the watcher indexes it. That delay used to be undocumented.
+The bound is:
+
+| Situation | Bound on scheduling delay |
+|-----------|---------------------------|
+| Watcher running, write enqueued with `wake` (**every write op does this**) | `APO_WATCH_DEBOUNCE` (default **2s**) |
+| Watcher running, wake missed / fs-event only | `APO_WATCH_DEBOUNCE + WATCH_INTERVAL` (default **32s**) |
+| Watcher not running | **Unbounded** — nothing consumes the queue |
+
+This is a bound on **scheduling only**. `embed()` is a network call to Ollama whose duration
+depends on batch size and model residency, and is not included.
+
+> [!important] Do not sleep for `bound_seconds`
+> A caller that needs read-after-write certainty must **poll for the content**, not sleep for
+> the bound. The bound tells you when the watcher will *start*, not when the vector is queryable.
+
+Query it at runtime:
+
+```python
+from apo_engine import ops
+ops.index_visibility()
+# {'watcher_running': True, 'bound_seconds': 2.0, 'path': 'wake',
+#  'debounce_seconds': 2.0, 'poll_interval_seconds': 30.0,
+#  'note': 'scheduling bound only; embed() time is additional'}
+```
+
+It is also reported by `apo_admin(action=invoke, name=memory_status)` under `index_visibility`,
+alongside `watcher`. Successful writes already carry a `warning` when no watcher is detected.
+
 ## Write transaction shape
 
 Indexing embeds via Ollama **off-DB**, then opens a short SQLite transaction for inserts:

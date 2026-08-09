@@ -399,6 +399,51 @@ def watcher_status() -> dict[str, Any]:
     return status
 
 
+def index_visibility(*, woken: bool = True, running: bool | None = None) -> dict[str, Any]:
+    """Documented bound on how long a completed write stays invisible to search.
+
+    MCP never writes ``index.db``; the watcher is the sole writer. That means a
+    successful write is durable on disk immediately but is not searchable until
+    the watcher indexes it, and until now no bound on that delay was written
+    down anywhere.
+
+    The bound is **scheduling latency only**:
+
+    * watcher running, write enqueued with ``wake`` (the default on every write
+      op) — ``APO_WATCH_DEBOUNCE`` seconds, since the wake file makes the
+      watcher drain queues immediately and the per-path debounce timer is the
+      only thing left in the way.
+    * watcher running, wake missed / fs-event-only — add ``WATCH_INTERVAL``,
+      the periodic hash scan.
+    * watcher not running — unbounded. Nothing consumes the queue.
+
+    Embedding time is **not** included: ``embed()`` is a network call to Ollama
+    and its duration depends on batch size and model load. Callers that need
+    read-after-write certainty must poll for the content rather than sleep for
+    ``bound_seconds``.
+    """
+    alive = watcher_status().get("running") if running is None else running
+    debounce = float(config.WATCH_DEBOUNCE)
+    poll = float(config.WATCH_POLL_INTERVAL)
+
+    if not alive:
+        return {
+            "watcher_running": False,
+            "bound_seconds": None,
+            "path": "blocked",
+            "note": _WATCHER_TIP,
+        }
+    bound = debounce if woken else debounce + poll
+    return {
+        "watcher_running": True,
+        "bound_seconds": round(bound, 1),
+        "path": "wake" if woken else "poll",
+        "debounce_seconds": debounce,
+        "poll_interval_seconds": poll,
+        "note": "scheduling bound only; embed() time is additional",
+    }
+
+
 def _attach_watcher_tip(out: dict[str, Any]) -> dict[str, Any]:
     """Surface missing watcher on successful writes."""
     if not out.get("ok"):
