@@ -20,14 +20,18 @@ The engine is **contract-driven** — no single vault’s taxonomy is hardcoded 
 
 ## Frontmatter (primary type)
 
-**Canonical type field:** `okf_type` (OKF `type`).
+**Canonical type field:** `okf_type` (Apo-native) — **plus** `type`, the OKF
+interchange field the spec always requires. Apo stamps both; see
+[Conformance](#conformance-apo--okf-v01--v02) for the policy that decides
+when `type` is written.
 
 Do **not** treat a Meta-style `type: note` enum as the semantic type. Prefer specific OKF types (`Project`, `Thread`, `Fact`, `EvidenceRequest`, …). Catch-all `okf_type: Note` only when nothing else fits.
 
 ```yaml
 ---
 title: Human title
-okf_type: Project
+type: Project          # OKF interchange (SPEC §11) — required by the spec
+okf_type: Project      # Apo-native; what filter_notes queries
 description: One-line summary
 timestamp: "2026-07-17T19:51:00Z"
 resource: ""
@@ -67,8 +71,16 @@ Env:
 
 - `APO_OKF_CONTRACT` — path to YAML (alias: `APO_OKF_PROFILE`)
 - `APO_OKF_ENFORCEMENT=soft|hard|off`
+- `APO_OKF_SPEC_TYPE=fill|mirror|off` — overrides `spec_type_policy`
 
 Offline twin in Meta: `just okf lint` / `just okf fix`.
+
+Conformance check (SPEC §11 exactly, not the house style):
+
+```sh
+just -f vault-tools/justfile okf-lint --vault ~/Notes/Meta --profile=okf
+just -f vault-tools/justfile okf-fix  --vault ~/Notes/Meta   # fills missing `type`
+```
 
 ## Agent behaviors
 
@@ -76,6 +88,65 @@ Offline twin in Meta: `just okf lint` / `just okf fix`.
 2. Prefer `filter_notes({"okf_type": "…"}, folder=…)` for typed corpora before opening dashboard/tracker notes.
 3. Non-root `index.md`: **no** concept frontmatter (OKF reserved listing).
 4. MCP tool names stay `*_note` — “concept” is the vocabulary; “note” is the file/tool colloquialism.
+
+## Conformance: Apo ↔ OKF v0.1 ↔ v0.2
+
+Field-by-field state of Apo against the [OKF SPEC](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
+**match** = emitted and read per spec · **partial** = present under a different
+name or shape · **conflict** = spec disagrees with Apo · **planned** = not
+implemented yet.
+
+### Core
+
+| Apo field | OKF v0.1 | OKF v0.2 | State | Note |
+|-----------|----------|----------|-------|------|
+| `okf_type` | `type` | `type` | **partial** | Apo-native field; the spec name is emitted alongside it (below) |
+| `type` | `type` (required) | `type` (only always-required key) | **match** | Emitted by `spec_type_policy` since Phase 0 |
+| `description` | recommended | recommended | **match** | Apo requires it on producer writes — stricter than spec, allowed |
+| `title` | recommended | recommended | **match** | |
+| `resource` | recommended | recommended | **match** | |
+| `tags` | recommended | recommended | **match** | Passed through untouched |
+| `timestamp` | core | **superseded** by `generated.at` | **partial** | v0.2 consumers MAY fall back to `timestamp`; Apo still emits it |
+
+### v0.2 families
+
+| Field | Family | State | Note |
+|-------|--------|-------|------|
+| `generated: {by, at}` | trust | **planned** | Phase 1 read / Phase 3 emit |
+| `verified: [{by, at}]` | trust | **planned** | Bare mapping must be read as a one-element list (§11) |
+| `sources: [{resource, …}]` | provenance | **planned** | Supersedes the `# Citations` body list |
+| `usage_window: {from, to}` | provenance | **planned** | Frames `usage_count` |
+| `usage_count` | provenance | **conflict** | Lives *inside* a `sources[]` entry and counts uses of that source. Apo's `metrics.duckdb` counts MCP tool calls — a different quantity. Not a wiring task. |
+| `status` | lifecycle | **partial** | Apo vaults already use `status`; spec enum is `draft \| stable \| deprecated` |
+| `stale_after` | lifecycle | **planned** | |
+| `runtime` / `parameters` / `computation` / `executor` / `attester` | computation | **out of scope** | Attested Computation is not an Apo concept type |
+
+### Structural (§11 conformance clauses)
+
+| Clause | State | Note |
+|--------|-------|------|
+| Every non-reserved `.md` has parseable frontmatter | **partial** | Paths marked `enforcement: exempt` (e.g. `inbox/daily/*.md`) may carry only `timestamp`, so they satisfy clause 1 but not clause 2 |
+| Every frontmatter block has non-empty `type` | **match** on stamped concepts, **gap** on `exempt` paths | `--profile=okf` reports the gap rather than silently stamping daily logs |
+| Reserved filenames carry no concept frontmatter | **match** | `enforcement: reserved` on `**/index.md`, `**/log.md` |
+| Consumers must not reject on unknown keys / types | **match** | `--profile=okf` checks only the three clauses above |
+
+> [!note] Producer strictness is deliberate
+> Apo's producer profile requires `okf_type` + `description` + `timestamp`.
+> SPEC §11 forbids a *consumer* rejecting a bundle for missing optional
+> fields, but says nothing against a stricter producer. The two profiles are
+> therefore split rather than merged: `--profile=apo` is the house style,
+> `--profile=okf` is what an outside consumer is allowed to demand.
+
+### Type emission policy
+
+`spec_type_policy` in the vault's `okf-contract.schema.yaml`
+(env override `APO_OKF_SPEC_TYPE`):
+
+| Policy | Behavior |
+|--------|----------|
+| `fill` (default) | Write `type` only when absent. A vault using `type` as a legacy taxonomy (`legacy_type_map`) keeps its own values and is still conformant, since the spec requires only that `type` be non-empty and forbids rejecting unknown type values. |
+| `mirror` | Force `type` to the resolved OKF type, overwriting a legacy value. Choose this when the vault has no separate taxonomy to preserve. |
+| `off` | Never emit `type`. The vault is then not a conformant bundle; exports still get `type` added at export time. |
 
 ## Mixing
 
