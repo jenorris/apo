@@ -4,6 +4,25 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+OKF spec adoption — Apo now produces conformant OKF bundles and reads both
+v0.1 and v0.2. See `docs/contracts/okf-bundle.md` for the field-by-field
+compatibility table.
+
+### Fixed
+
+- **No Apo-stamped vault was a conformant OKF bundle.** SPEC §11 requires a non-empty `type` on every concept frontmatter block, but the contract set `type_field: okf_type` and demoted `type` to `legacy_type_field`. `okf_export` never emitted `type` either, so exports were non-conformant too, and `okf_lint` accepted `okf_type or type` — a check *weaker* than the spec, passing bundles the spec rejects. Apo now emits `type` alongside `okf_type`; §11 explicitly forbids consumers rejecting a bundle for unknown additional keys, so carrying both is spec-legal and needs no vault migration.
+- **The bundle-root `index.md` was asked for a concept `type`.** §11.1/§11.2 scope to *non-reserved* files; reserved filenames are governed by §11.3 and the root index legitimately carries only `okf_version`.
+
+### Added
+
+- **`apo-engine okf validate | fix | init | export | ingest`** — one OKF implementation. `vault-tools/tools/okf/` previously carried a second copy with its own frontmatter parser and its own type map; those scripts are now shims over the engine. Only `--regenerate-indexes` is still implemented there (§6 listings, no type logic to drift).
+- **Two validation profiles.** `--profile okf` is SPEC §11 conformance exactly and deliberately does *not* require `description` / `timestamp`, since §11 forbids a consumer rejecting a bundle for missing optional fields. `--profile apo` (default) keeps the stricter house producer profile.
+- **`spec_type_policy: fill | mirror | off`** (env `APO_OKF_SPEC_TYPE`). Default `fill` writes `type` only when absent, so vaults using `type` as a legacy taxonomy keep their own values and stay conformant on them.
+- **OKF v0.2 read support.** `okf.py` became a package with `v0_1` / `v0_2` readers behind `okf.read_concept()`, which runs both so the §13.1 fallbacks work: `generated.at` else `timestamp`, `sources` else a `# Citations` body list. Also the §11 bare-`verified`-mapping rule, the §7 actor convention, `status` / `stale_after` lifecycle, and the shared `usage_window` framing sources beneath it.
+- **`generated_policy: off | forward`** (env `APO_OKF_GENERATED`) — forward-only `generated: {by, at}` emission. Existing notes are never backfilled: the engine does not know who generated content it did not write, and `generated.by` is what the trust family keys on.
+- **Read-only vaults.** `"read_only": true` in an `APO_VAULTS` entry makes a vault searchable but rejects every write op with `read_only_vault`. This is what backs `okf ingest`, which registers an external bundle as its own read-only vault rather than copying foreign notes into your vault root.
+- **A documented read-after-write visibility bound.** MCP never writes `index.db`, so a write is durable immediately but searchable only after the watcher runs — previously with no bound written down anywhere. `ops.index_visibility()` computes it from live config and `memory_status` reports it. It is a *scheduling* bound; `embed()` is extra, and callers needing certainty must poll rather than sleep.
+
 ## [0.6.4] — 2026-08-08
 
 ### Fixed
