@@ -4,6 +4,21 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+Tool-call telemetry can now be exported as OpenTelemetry spans, so per-session
+analysis is possible for the first time.
+
+### Added
+
+- **OTLP metrics backend (`store.backend: otlp | both`).** One span per `tools/call`, exported to a local OTel Collector. Contract gains `store.endpoint` (env override `APO_OTLP_ENDPOINT`, default `http://localhost:4318/v1/traces`). Optional install extra: `pip install 'apo-engine[otlp]'` — absent OpenTelemetry the backend logs once and no-ops rather than breaking tool calls. Existing `TelemetryPolicy` filtering is applied before dispatch, so `note_path` / `heading` / `chunk_hash` obey the vault contract exactly as they do for DuckDB.
+  - Why spans rather than Prometheus metrics: this data is per-event forensics ("what did session X do, in what order, failing how"). Prometheus stores aggregates and cannot answer that, and a session id as a metric label is unbounded cardinality. Aggregates are derived downstream by the collector's `spanmetrics` connector instead — instrument once, get both shapes.
+- **`both` fan-out backend** for the DuckDB→OTLP cutover: spans start flowing before the read path moves, so there is never a window with no telemetry surface. A failing sink cannot take down another, or the tool call.
+- **Process-scoped session id fallback.** `conversation_id` was NULL on 100% of recorded calls, because clients are expected to supply one via MCP `_meta` or an `_apo` arg block and Claude Code sends neither (the only shipped injector is a Cursor hook). Under stdio, Apo is spawned as one subprocess per client session — so the process *is* the session, making a process-scoped id correct rather than merely convenient. Explicit `_meta`/`_apo` ids still win; `APO_SESSION_ID` overrides. Does **not** hold for a long-lived HTTP/SSE server shared by several clients.
+
+### Fixed
+
+- **Unknown `store.backend` values were coerced to `embedded` in silence.** That is how the shipped contract's `backend: duckdb` — never a valid value — went unnoticed. Unrecognised values now warn; `duckdb` and `local` are accepted aliases for `embedded`.
+- **Spans queued at shutdown were lost.** MCP clients terminate stdio servers with a signal, and `atexit` does not run on one, so the final (frequently the only) spans of a session never left the process. Flush is now also driven from a SIGTERM/SIGINT handler that chains to the previous one; the batch delay dropped 5s → 1s.
+
 ## [0.6.4] — 2026-08-08
 
 ### Fixed

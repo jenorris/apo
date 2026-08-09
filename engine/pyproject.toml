@@ -33,6 +33,12 @@ mcp = [
     "fastmcp>=2.0.0",
     "httpx>=0.27",
 ]
+# Optional OTLP span export (store.backend = otlp | both). Kept optional so the
+# engine still installs without it; OtlpBackend fails closed if absent.
+otlp = [
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
+]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

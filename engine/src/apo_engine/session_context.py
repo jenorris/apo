@@ -3,12 +3,35 @@
 from __future__ import annotations
 
 import contextvars
+import os
+import uuid
 from contextlib import contextmanager
 from collections.abc import Iterator
 from typing import Any
 
 META_CONVERSATION_ID = "apo/conversation_id"
 META_GENERATION_ID = "apo/generation_id"
+
+# Last-resort session identity.
+#
+# Clients are supposed to supply a conversation id via MCP ``_meta`` or an
+# ``_apo`` arg block, but Claude Code sends neither and the only shipped
+# injector is a Cursor hook. The result was conversation_id NULL on 100% of
+# recorded calls, which made every per-session analysis impossible.
+#
+# Under stdio transport Apo is spawned as one subprocess per client session,
+# so the process *is* the session. That makes a process-scoped id a correct
+# (not merely convenient) fallback there.
+#
+# CAVEAT: this equivalence does not hold for a long-lived HTTP/SSE server
+# shared by several clients. Explicit ``_meta`` / ``_apo`` ids always win, and
+# APO_SESSION_ID overrides for callers that manage their own identity.
+def _initial_session_id() -> str:
+    """Env-supplied id when the caller manages its own identity, else generated."""
+    return os.environ.get("APO_SESSION_ID", "").strip() or f"proc-{uuid.uuid4().hex[:12]}"
+
+
+_PROCESS_SESSION_ID = _initial_session_id()
 
 _conversation_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "apo_conversation_id", default=None
@@ -120,14 +143,27 @@ def strip_session_body(body: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def process_session_id() -> str:
+    """Stable id for this engine process — the stdio-session fallback."""
+    return _PROCESS_SESSION_ID
+
+
 def request_conversation_id() -> str | None:
-    """Active request conversation id (MCP/RPC layer), else legacy fallbacks."""
+    """Active request conversation id (MCP/RPC layer), else legacy fallbacks.
+
+    Resolution order: per-request contextvar, then the legacy env/file
+    fallback, then this process's id. Never returns None in practice, which is
+    the point — an unattributed call is an unanalysable call.
+    """
     cid = (_conversation_id.get() or "").strip()
     if cid:
         return cid
     from apo_engine import telemetry_contract as tc
 
-    return tc.conversation_id_from_env()
+    legacy = tc.conversation_id_from_env()
+    if legacy:
+        return legacy
+    return _PROCESS_SESSION_ID
 
 
 def request_generation_id() -> str | None:
