@@ -12,17 +12,21 @@ Config (optional) — ``APO_VAULTS`` path to JSON or inline JSON:
   "vaults": {
     "meta": {
       "root": "/Users/me/Notes/Meta",
-      "index": "/Users/me/.apo/index-meta.db",
-      "collection": "meta"
+      "index": "/Users/me/.apo/index-meta.db"
     },
     "work": {
       "root": "/Users/me/Notes/Work",
-      "index": "/Users/me/.apo/index-work.db",
-      "collection": "work"
+      "index": "/Users/me/.apo/index-work.db"
     }
   }
 }
 ```
+
+``collection`` (the deferred-queue namespace and telemetry partition key) is
+not configurable — it's derived from the vault root by ``compute_vault_id``:
+the short hash of the vault's git root commit when the root is a git repo
+(stable across renames of the vault's ``vaults.json`` key or directory),
+else a random id cached per-root in ``~/.apo/vault-ids.json``.
 
 With no ``APO_VAULTS``, a single vault named ``default`` is built from
 ``APO_NOTES_ROOT`` / ``APO_INDEX`` / ``APO_COLLECTION`` (legacy single-vault).
@@ -32,6 +36,8 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
+import subprocess
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -57,6 +63,66 @@ class VaultBinding:
             index=self.index.expanduser().resolve(),
             collection=self.collection,
         )
+
+
+_vault_id_cache: dict[str, str] = {}
+_FALLBACK_ID_STORE = Path.home() / ".apo" / "vault-ids.json"
+
+
+def _git_root_id(root: Path) -> str | None:
+    """Short hash of the vault's git root commit(s), or None if not a git repo."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-list", "--max-parents=0", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    # Sort for a deterministic pick when a repo has multiple root commits
+    # (unrelated histories merged together).
+    hashes = sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
+    return hashes[0][:12] if hashes else None
+
+
+def _fallback_id(root: Path) -> str:
+    """Random id for non-git vault roots, cached so it's stable across runs."""
+    key = str(root)
+    store = _FALLBACK_ID_STORE
+    data: dict[str, str] = {}
+    if store.exists():
+        try:
+            data = json.loads(store.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+    existing = data.get(key)
+    if existing:
+        return str(existing)
+    new_id = secrets.token_hex(6)
+    data[key] = new_id
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return new_id
+
+
+def compute_vault_id(root: Path) -> str:
+    """Stable per-vault collection id: git root-commit hash, else a cached random id.
+
+    Memoized per resolved root for the life of the process — this runs on
+    every ``load_bindings()`` call, so a subprocess spawn per lookup would
+    add real per-request latency.
+    """
+    resolved = root.expanduser().resolve()
+    key = str(resolved)
+    cached = _vault_id_cache.get(key)
+    if cached is not None:
+        return cached
+    vault_id = _git_root_id(resolved) or _fallback_id(resolved)
+    _vault_id_cache[key] = vault_id
+    return vault_id
 
 
 _binding: ContextVar[VaultBinding | None] = ContextVar("apo_vault_binding", default=None)
@@ -151,12 +217,12 @@ def load_bindings() -> tuple[str, dict[str, VaultBinding]]:
         if not idx:
             # Sensible default under ~/.apo/
             idx = Path.home() / ".apo" / f"index-{name}.db"
-        coll = spec.get("collection") or name
+        root_path = _path(root)
         out[str(name)] = VaultBinding(
             name=str(name),
-            root=_path(root),
+            root=root_path,
             index=_path(idx),
-            collection=str(coll),
+            collection=compute_vault_id(root_path),
         ).resolved()
 
     default = str(data.get("default") or next(iter(out)))

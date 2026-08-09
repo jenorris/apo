@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,8 +20,13 @@ class VaultRegistryTests(unittest.TestCase):
             self._env[key] = os.environ.pop(key, None)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        # conftest's autouse _isolated_apo_runtime fixture already redirects
+        # vaults._FALLBACK_ID_STORE into a per-test tmp dir; just clear the
+        # in-process memo cache so each test re-derives from a clean slate.
+        vaults._vault_id_cache.clear()
 
     def tearDown(self):
+        vaults._vault_id_cache.clear()
         self.tmp.cleanup()
         for key, val in self._env.items():
             if val is None:
@@ -60,12 +66,10 @@ class VaultRegistryTests(unittest.TestCase):
                         "alpha": {
                             "root": str(a),
                             "index": str(self.root / "alpha.db"),
-                            "collection": "alpha",
                         },
                         "beta": {
                             "root": str(b),
                             "index": str(self.root / "beta.db"),
-                            "collection": "beta",
                         },
                     },
                 }
@@ -76,7 +80,42 @@ class VaultRegistryTests(unittest.TestCase):
         default, bindings = vaults.load_bindings()
         self.assertEqual(default, "alpha")
         self.assertEqual(set(bindings), {"alpha", "beta"})
-        self.assertEqual(bindings["beta"].collection, "beta")
+        # collection is no longer configurable — derived, non-empty, distinct per root
+        self.assertTrue(bindings["alpha"].collection)
+        self.assertTrue(bindings["beta"].collection)
+        self.assertNotEqual(bindings["alpha"].collection, bindings["beta"].collection)
+
+    def test_collection_derived_from_git_root(self):
+        repo = self.root / "git-vault"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        (repo / "note.md").write_text("# hi\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "root"], cwd=repo, check=True)
+        root_hash = subprocess.run(
+            ["git", "-C", str(repo), "rev-list", "--max-parents=0", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+        vault_id = vaults.compute_vault_id(repo)
+        self.assertEqual(vault_id, root_hash[:12])
+        # stable across repeated calls (memoized, and re-derivable from git either way)
+        self.assertEqual(vaults.compute_vault_id(repo), vault_id)
+        self.assertFalse(vaults._FALLBACK_ID_STORE.exists())
+
+    def test_collection_fallback_random_and_cached(self):
+        plain = self.root / "not-a-git-repo"
+        plain.mkdir()
+        first = vaults.compute_vault_id(plain)
+        vaults._vault_id_cache.clear()  # force re-derivation, not just in-process memoization
+        second = vaults.compute_vault_id(plain)
+        self.assertEqual(first, second)
+        store = json.loads(vaults._FALLBACK_ID_STORE.read_text(encoding="utf-8"))
+        self.assertEqual(store[str(plain.resolve())], first)
 
     def test_bind_switches_index_key(self):
         a = self.root / "a"

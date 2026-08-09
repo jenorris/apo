@@ -14,17 +14,17 @@ Separate indexes are intentional: isolation (no cross-vault ranking bleed), inde
   "vaults": {
     "meta": {
       "root": "/Users/YOU/Notes/Meta",
-      "index": "/Users/YOU/.apo/index-meta.db",
-      "collection": "meta"
+      "index": "/Users/YOU/.apo/index-meta.db"
     },
     "work": {
       "root": "/Users/YOU/Notes/Work",
-      "index": "/Users/YOU/.apo/index-work.db",
-      "collection": "work"
+      "index": "/Users/YOU/.apo/index-work.db"
     }
   }
 }
 ```
+
+The deferred-queue/telemetry `collection` id isn't set here — it's derived from each vault's git root commit (or a random id cached in `~/.apo/vault-ids.json` for non-git roots), so it survives renaming a vault's key in this file or its directory.
 
 ```bash
 export APO_VAULTS="$HOME/.apo/vaults.json"

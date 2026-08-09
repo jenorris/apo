@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from apo_engine import deferred, ops, tool_metrics
+from apo_engine import deferred, ops, tool_metrics, vaults
 
 
 @pytest.fixture(autouse=True)
@@ -21,3 +21,7 @@ def _isolated_apo_runtime(tmp_path, monkeypatch):
     # A dev shell exporting APO_VAULTS must not leak real vaults into tests
     # (tests that need a registry set it explicitly).
     monkeypatch.delenv("APO_VAULTS", raising=False)
+    # Non-git vault roots in tests (plain tempdirs) hit compute_vault_id's
+    # fallback path — must not write into the real ~/.apo/vault-ids.json.
+    monkeypatch.setattr(vaults, "_FALLBACK_ID_STORE", runtime / "vault-ids.json")
+    vaults._vault_id_cache.clear()
