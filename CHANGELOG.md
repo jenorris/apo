@@ -4,6 +4,17 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-10
+
+Catalog sort for frontmatter sweeps (archive-ready coldest-N, stale `last_checked`, memory-reflect).
+
+**Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads schemas. **No force reindex** — sort uses existing indexed frontmatter.
+
+### Added
+
+- **`filter_notes` `sort=` / `order=`** — default remains `mtime` / `desc`. Pass a safe frontmatter key (e.g. `last_activity`) with `order=asc` for oldest-first catalog pages. Missing sort values sort last for both directions.
+- **`filter_notes` `has_more`** — pagination parity with `history` / `search_notes` (`offset + len(notes) < total`).
+
 ## [0.6.4] — 2026-08-08
 
 ### Fixed
