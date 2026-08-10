@@ -728,6 +728,20 @@ async def filter_notes(
             ),
         ),
     ] = None,
+    sort: Annotated[
+        str,
+        Field(
+            description=(
+                "Catalog sort key. Default mtime. Pass a safe frontmatter key "
+                "(e.g. last_activity) for oldest/newest-by-field sweeps. "
+                "Missing values sort last. Response includes has_more."
+            ),
+        ),
+    ] = "mtime",
+    order: Annotated[
+        Literal["asc", "desc"],
+        Field(description="Sort direction (default desc — newest/largest first)."),
+    ] = "desc",
 ) -> dict:
     """Frontmatter catalog (no embeddings). Prefer where=; omit where or pass {} to list."""
     return await asyncio.to_thread(
@@ -738,6 +752,8 @@ async def filter_notes(
         vault=vault,
         offset=offset,
         fields=fields,
+        sort=sort,
+        order=order,
     )
 
 

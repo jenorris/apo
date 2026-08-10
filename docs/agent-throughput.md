@@ -4,7 +4,7 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 
 ## Decision tree (before any Apo call)
 
-1. **Catalog / status / `okf_type`** → `filter_notes` + `fields=` (+ `folder=`) — works for MD frontmatter **and** `.yaml` / `.yml` catalog notes
+1. **Catalog / status / `okf_type`** → `filter_notes` + `fields=` (+ `folder=`) — works for MD frontmatter **and** `.yaml` / `.yml` catalog notes. For oldest/newest-by-field pages (e.g. cold threads): `sort=last_activity`, `order=asc` (Apo ≥0.7.0); do not re-sort client-side or use OKF `timestamp` as age.
 2. **Known path** → `read_note` / `append_note` / `patch_note` / `write_note` (skip search)
 3. **Meaning recall** → `search_notes` with **`folder=`** or **`folders=[]`** when PARA bucket is known
 4. **Need more than a snippet** → `read_note(chunk_hash=)` (not full-file `read_note`)
@@ -29,9 +29,10 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 ## Fast path (cheat card)
 
 ```
-filter(+fields) → search(+folder|folders) → read_note(chunk_hash) → append(chunk_hash)  # path optional (MD)
+filter(+fields[, sort, order]) → search(+folder|folders) → read_note(chunk_hash) → append(chunk_hash)  # path optional (MD)
                                               ↘ patch(set_field|…, chunk_hash|heading) + expected_mtime
 YAML atoms: filter(+fields) → patch(set_field dotted path) + expected_mtime
+# Coldest-N: filter(where, folder, sort=last_activity, order=asc, limit, offset) → has_more
 ```
 
 ## Soft engine tips

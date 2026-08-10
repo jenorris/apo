@@ -110,6 +110,7 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         ),
         "top_k": "filter_notes uses limit= (and offset=), not top_k.",
         "filters": "filter_notes uses where= (not filters=).",
+        "order_by": "filter_notes uses sort= (mtime or FM key) and order=asc|desc, not order_by.",
     },
 }
 

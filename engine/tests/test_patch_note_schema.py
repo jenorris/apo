@@ -132,6 +132,8 @@ class PatchNoteSchemaTest(unittest.TestCase):
         self.assertIn("where", filter_params)
         self.assertNotIn("filters", filter_params)
         self.assertIn("fields", filter_params)
+        self.assertIn("sort", filter_params)
+        self.assertIn("order", filter_params)
 
         vault_params = _tool_params(by_name["vault"])
         self.assertIn("action", vault_params)

@@ -75,6 +75,37 @@ class PaginationTest(unittest.TestCase):
         h2 = ops.history(limit=3, offset=3)
         self.assertEqual(h2["offset"], 3)
 
+    def test_filter_notes_offset_has_more(self):
+        p1 = ops.filter_notes({}, limit=3, offset=0)
+        self.assertTrue(p1["ok"], p1)
+        self.assertEqual(p1["total"], 8)
+        self.assertTrue(p1["has_more"])
+        self.assertEqual(len(p1["notes"]), 3)
+        p2 = ops.filter_notes({}, limit=3, offset=6)
+        self.assertTrue(p2["ok"], p2)
+        self.assertEqual(len(p2["notes"]), 2)
+        self.assertFalse(p2["has_more"])
+
+    def test_filter_notes_sort_order_ops(self):
+        for i, day in enumerate(("2026-07-10", "2026-08-01", "2026-07-20")):
+            (self.vault / f"act{i}.md").write_text(
+                f"---\nstatus: active\nlast_activity: '{day} 12:00'\n---\n\n# A{i}\n\nbody\n",
+                encoding="utf-8",
+            )
+        core.index_vault(rebuild=True, verbose=False)
+        out = ops.filter_notes(
+            {"status": "active"},
+            sort="last_activity",
+            order="asc",
+            fields=["last_activity"],
+        )
+        self.assertTrue(out["ok"], out)
+        paths = [n["path"] for n in out["notes"]]
+        self.assertEqual(paths, ["act0.md", "act2.md", "act1.md"])
+        bad = ops.filter_notes({}, sort="not valid!")
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"], "bad_request")
+
 
 if __name__ == "__main__":
     unittest.main()

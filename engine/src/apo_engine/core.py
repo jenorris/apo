@@ -20,6 +20,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from functools import cmp_to_key
 from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
@@ -1958,27 +1959,73 @@ def _sql_json_scalar(v: Any) -> Any:
     return str(v)
 
 
+def _normalize_filter_sort(sort: str = "mtime", order: str = "desc") -> tuple[str, str]:
+    """Validate ``sort`` / ``order`` for ``filter_notes``. Returns (sort, order)."""
+    sort_key = (sort or "mtime").strip()
+    order_key = (order or "desc").strip().lower()
+    if order_key not in ("asc", "desc"):
+        raise ValueError("order must be 'asc' or 'desc'")
+    if sort_key != "mtime" and not _FM_KEY_SAFE.match(sort_key):
+        raise ValueError(
+            "sort must be 'mtime' or a safe frontmatter key "
+            "(letter/underscore start, alphanumeric + underscore)"
+        )
+    return sort_key, order_key
+
+
+def _filter_notes_cmp(
+    a: tuple[float, str, dict],
+    b: tuple[float, str, dict],
+    *,
+    sort: str,
+    order: str,
+) -> int:
+    """Compare two filter matches. Null / missing FM sort values sort last for both orders."""
+    if sort == "mtime":
+        c = _loose_cmp(a[0], b[0])
+        return c if order == "asc" else -c
+    va, vb = a[2].get(sort), b[2].get(sort)
+    if va is None and vb is None:
+        return _loose_cmp(a[0], b[0])  # mtime tie-break
+    if va is None:
+        return 1
+    if vb is None:
+        return -1
+    c = _loose_cmp(va, vb)
+    if c == 0:
+        return _loose_cmp(a[0], b[0])
+    return c if order == "asc" else -c
+
+
 def filter_notes(
     where: dict,
     folder: str = "",
     limit: int = 20,
     offset: int = 0,
+    *,
+    sort: str = "mtime",
+    order: str = "desc",
 ) -> tuple[int, list[tuple[float, str, dict]]]:
     """Deterministic frontmatter query over the cached `files.frontmatter` column.
 
-    Returns (total_matches, page of matches), each match (mtime, path, frontmatter),
-    sorted by mtime desc. ``offset`` skips that many matches (0-based). No filesystem
+    Returns (total_matches, page of matches), each match (mtime, path, frontmatter).
+    Default sort is mtime desc. Pass ``sort`` as ``mtime`` or a safe frontmatter key
+    (e.g. ``last_activity``) and ``order`` as ``asc`` / ``desc``. Missing FM sort
+    values sort last. ``offset`` skips that many matches (0-based). No filesystem
     walk — reads the index only. ``$exists`` (and empty ``where``) push into SQL via
     ``json_extract``; equality and richer operators use the Python matcher (correct for
     list-valued fields and loose type coercion).
 
-    SQL-pushdown path uses ``COUNT(*)`` plus ``ORDER BY mtime DESC LIMIT/OFFSET`` —
-    never materializes every matching frontmatter blob just to page ``limit`` rows.
+    When ``sort=mtime`` and predicates are SQL-pushable, uses ``COUNT(*)`` plus
+    ``ORDER BY mtime … LIMIT/OFFSET`` — never materializes every matching frontmatter
+    blob just to page ``limit`` rows. Frontmatter ``sort`` uses SQL ``json_extract``
+    ordering on the pushdown path, or Python sort after match on the complex path.
     """
     if offset < 0:
         raise ValueError("offset must be >= 0")
     if limit < 0:
         raise ValueError("limit must be >= 0")
+    sort_key, order_key = _normalize_filter_sort(sort, order)
     folder_prefix = folder.replace("\\", "/").strip("/")
     db = reader_connect()
     sql_pred = _sql_pushdown_predicates(where) if where else ("1", [])
@@ -1994,10 +2041,23 @@ def filter_notes(
         params.extend(pred_params)
         where_sql = " AND ".join(where_parts)
         total = int(db.execute(f"SELECT COUNT(*) FROM files WHERE {where_sql}", params).fetchone()[0])
+        dir_sql = "ASC" if order_key == "asc" else "DESC"
+        order_params: list[Any] = []
+        if sort_key == "mtime":
+            order_sql = f"mtime {dir_sql}"
+        else:
+            # Null / missing FM values last for both asc and desc.
+            jpath = f"$.{sort_key}"
+            order_sql = (
+                f"(json_extract(frontmatter, ?) IS NULL) ASC, "
+                f"json_extract(frontmatter, ?) {dir_sql}, "
+                f"mtime DESC"
+            )
+            order_params.extend([jpath, jpath])
         rows = db.execute(
             f"SELECT path, mtime, frontmatter FROM files WHERE {where_sql} "
-            f"ORDER BY mtime DESC LIMIT ? OFFSET ?",
-            [*params, limit, offset],
+            f"ORDER BY {order_sql} LIMIT ? OFFSET ?",
+            [*params, *order_params, limit, offset],
         ).fetchall()
         matches: list[tuple[float, str, dict]] = []
         for path, mtime, fm_json in rows:
@@ -2008,7 +2068,7 @@ def filter_notes(
             matches.append((mtime, path, fm))
         return total, matches
 
-    # Complex operators — folder-scoped fetch, then Python match.
+    # Complex operators — folder-scoped fetch, then Python match + sort.
     scope_sql = " AND ".join(where_parts)
     rows = db.execute(
         f"SELECT path, mtime, frontmatter FROM files WHERE {scope_sql}",
@@ -2022,7 +2082,11 @@ def filter_notes(
             fm = {}
         if all(_match_condition(fm.get(k), cond) for k, cond in where.items()):
             matches.append((mtime, path, fm))
-    matches.sort(key=lambda t: t[0], reverse=True)
+    matches.sort(
+        key=cmp_to_key(
+            lambda a, b: _filter_notes_cmp(a, b, sort=sort_key, order=order_key)
+        )
+    )
     return len(matches), matches[offset : offset + limit]
 
 
