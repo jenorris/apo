@@ -216,3 +216,27 @@ def wake_pending(collection: str) -> bool:
         return True
     except OSError:
         return False
+
+
+REGISTRY_WAKE_NAME = "wake-registry"
+
+
+def touch_registry_wake() -> None:
+    """Nudge the multi-vault watcher supervisor to re-read APO_VAULTS (add-only hot-add)."""
+    try:
+        DEFERRED_DIR.mkdir(parents=True, exist_ok=True)
+        (DEFERRED_DIR / REGISTRY_WAKE_NAME).touch()
+    except OSError:
+        pass
+
+
+def wake_registry_pending() -> bool:
+    """True if a registry wake was pending (file consumed)."""
+    p = DEFERRED_DIR / REGISTRY_WAKE_NAME
+    if not p.is_file():
+        return False
+    try:
+        p.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False

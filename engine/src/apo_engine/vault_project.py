@@ -97,6 +97,49 @@ def _abs_pointer(raw: str, vaults: dict[str, Any]) -> str:
     return f"{root}/{rel}"
 
 
+def _pointer_vault_id(raw: str) -> str | None:
+    """Return vault_id from ``vault_id:rel`` pointer, or None if not vault-prefixed."""
+    text = (raw or "").strip()
+    if not text or ":" not in text:
+        return None
+    if text.startswith(("http://", "https://", "/")):
+        return None
+    vault_id, _, _ = text.partition(":")
+    return vault_id.strip() or None
+
+
+def scope_desk_overlay(desk: dict[str, Any], vaults: dict[str, Any]) -> dict[str, Any]:
+    """Trim desk ``role_notes`` / ``pointers`` to vaults present in the active registry.
+
+    Active vaults come from the merge ``vaults`` dict (APO_VAULTS / ``vaults=`` filter).
+    Each binding carries a ``collection``; scoping is by vault name and assigned role.
+    """
+    out = dict(desk)
+    active_names = set(vaults)
+    active_roles = {
+        str(row.get("role"))
+        for row in vaults.values()
+        if isinstance(row, dict) and row.get("role")
+    }
+    role_notes = desk.get("role_notes")
+    if isinstance(role_notes, dict):
+        out["role_notes"] = {
+            role: note for role, note in role_notes.items() if role in active_roles
+        }
+    pointers = desk.get("pointers")
+    if isinstance(pointers, dict):
+        filtered: dict[str, Any] = {}
+        for key, raw in pointers.items():
+            vid = _pointer_vault_id(str(raw))
+            if vid is None:
+                # Absolute / URL / bare paths — keep (not cross-vault desk bleed).
+                filtered[key] = raw
+            elif vid in active_names:
+                filtered[key] = raw
+        out["pointers"] = filtered
+    return out
+
+
 def _md_link(label: str, path: str) -> str:
     if path.startswith("/"):
         return f"[{label}]({path})"
@@ -434,11 +477,12 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     if isinstance(domain, list) and domain:
         domain_s = ", ".join(f"`{d}`" for d in domain)
     else:
-        # Default: all non-session / non-audit roles
+        # Default: writable domain vaults only — skip audit + grc (GRC SoT is git/PR).
+        _skip_roles = {"audit", "grc", None}
         domain_s = ", ".join(
             f"`{n}`"
             for n, r in sorted(vaults.items())
-            if isinstance(r, dict) and r.get("role") not in {"audit", None}
+            if isinstance(r, dict) and r.get("role") not in _skip_roles
             and n != sv
         ) or "`meta` / `norris` / `work` / `contracts`"
     dual_enabled = bool(dual.get("enabled"))

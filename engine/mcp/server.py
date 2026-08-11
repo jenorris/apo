@@ -225,6 +225,13 @@ mcp.add_middleware(AgentValidationMiddleware())
 
 def _reload_config_sync() -> dict:
     _load_vaults()
+    # Nudge multi-vault watcher to hot-add any new vaults from APO_VAULTS.
+    try:
+        from apo_engine import deferred as index_deferred
+
+        index_deferred.touch_registry_wake()
+    except Exception:
+        pass
     return {
         "ok": True,
         "default_vault": DEFAULT_VAULT,
@@ -238,6 +245,7 @@ def _reload_config_sync() -> dict:
             for name, v in VAULTS.items()
         },
         "runtime_file": str(_runtime_config_path()),
+        "registry_wake": True,
     }
 
 

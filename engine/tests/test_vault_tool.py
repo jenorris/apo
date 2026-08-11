@@ -279,6 +279,44 @@ class VaultOpTest(unittest.TestCase):
         self.assertIn("`alpha`", projected["body"])
         self.assertNotIn("`beta`", projected["body"])
 
+    def test_project_scopes_role_notes_and_pointers_to_active_vaults(self):
+        desk = self.tmp / "desk-scope.yaml"
+        desk.write_text(
+            "desk_version: '0.1'\n"
+            "citations: absolute_markdown\n"
+            "vault_roles:\n"
+            "  alpha: pkb\n"
+            "  beta: employer\n"
+            "role_notes:\n"
+            "  pkb: 'Personal knowledge base only'\n"
+            "  employer: 'GradGuard Work only'\n"
+            "  household: 'Should never appear'\n"
+            "pointers:\n"
+            "  memory_policy: 'alpha:system/config/policy'\n"
+            "  work_env: 'beta:system/config/work-environment'\n"
+            "habits:\n"
+            "  end_of_turn_gate: true\n",
+            encoding="utf-8",
+        )
+        with unittest.mock.patch.dict(
+            os.environ,
+            {"APO_DESK_CONFIG": str(desk)},
+        ):
+            merged = ops.vault_op("merge", vaults=["alpha"])
+            self.assertTrue(merged["ok"])
+            desk_out = merged["desk"]
+            self.assertEqual(set(desk_out.get("role_notes") or {}), {"pkb"})
+            self.assertEqual(set(desk_out.get("pointers") or {}), {"memory_policy"})
+
+            projected = ops.vault_op("project", vaults=["alpha"])
+            self.assertTrue(projected["ok"])
+            body = projected["body"]
+            self.assertIn("Personal knowledge base only", body)
+            self.assertNotIn("GradGuard Work only", body)
+            self.assertNotIn("Should never appear", body)
+            self.assertNotIn("work-environment", body)
+            self.assertIn("policy", body)
+
     def test_vaults_filter_reassigns_default_when_dropped(self):
         # beta is never the registry default (alpha is) — filtering to just
         # beta must not silently keep pointing "default" at the excluded alpha.

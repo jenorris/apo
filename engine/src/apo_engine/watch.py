@@ -1,6 +1,7 @@
 """Vault watcher — filesystem events + deferred queue consumer (sole index writer)."""
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
@@ -124,12 +125,21 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
     """Watch one or more vaults; consume deferred/purge queues; index incrementally.
 
     Multi-vault (``APO_VAULTS``): one watcher thread per vault, each bound to its
-    own root + index + deferred collection.
+    own root + index + deferred collection. The supervisor re-reads the registry
+    on ``wake-registry`` (or APO_VAULTS file mtime) and **hot-adds** new vaults
+    without a process restart. Removals and root/index path changes still require
+    a full watcher restart.
     """
     from . import vaults
 
     _default, bindings = vaults.load_bindings()
-    if len(bindings) == 1:
+    # Single-vault legacy (no APO_VAULTS file/object): one thread, no supervisor.
+    # When APO_VAULTS is set (even with one vault), run the multi-vault supervisor
+    # so hot-add via wake-registry works without a restart.
+    registry_mode = vaults.registry_source_path() is not None or bool(
+        (os.environ.get("APO_VAULTS") or "").strip().startswith("{")
+    )
+    if len(bindings) == 1 and not registry_mode:
         b = next(iter(bindings.values()))
         with vaults.bind(b):
             _watch_one(b, interval=interval, use_events=use_events, verbose=verbose)
@@ -140,7 +150,8 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
         print(f"Multi-vault watch: {names}", flush=True)
 
     stop = threading.Event()
-    threads: list[threading.Thread] = []
+    # name -> (VaultBinding, Thread)
+    active: dict[str, tuple[object, threading.Thread]] = {}
 
     def worker(b: vaults.VaultBinding) -> None:
         with vaults.bind(b):
@@ -155,19 +166,71 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
                         flush=True,
                     )
 
-    for b in bindings.values():
+    def spawn(b: vaults.VaultBinding, *, initial_rebuild: bool = False) -> None:
+        if initial_rebuild:
+            try:
+                deferred.signal_rebuild(b.collection, force=False)
+            except OSError:
+                pass
         t = threading.Thread(target=worker, args=(b,), name=f"apo-watch-{b.name}", daemon=True)
         t.start()
-        threads.append(t)
+        active[b.name] = (b, t)
+        if verbose and initial_rebuild:
+            print(f"  [registry] hot-added vault {b.name!r} → {b.root}", flush=True)
+
+    for b in bindings.values():
+        spawn(b, initial_rebuild=False)
+
+    last_reg_mtime = vaults.registry_mtime()
+
+    def sync_registry() -> None:
+        nonlocal last_reg_mtime
+        try:
+            _def, latest = vaults.load_bindings()
+        except (OSError, ValueError) as e:
+            if verbose:
+                print(f"  [registry] reload failed (continuing): {e}", flush=True)
+            return
+        last_reg_mtime = vaults.registry_mtime()
+
+        # Removals / path changes — log only (v1 add-only).
+        for name, (old_b, _t) in list(active.items()):
+            if name not in latest:
+                if verbose:
+                    print(
+                        f"  [registry] vault {name!r} removed from APO_VAULTS — "
+                        "restart watcher to drop the thread",
+                        flush=True,
+                    )
+                continue
+            new_b = latest[name]
+            if str(old_b.root) != str(new_b.root) or str(old_b.index) != str(new_b.index):
+                if verbose:
+                    print(
+                        f"  [registry] vault {name!r} root/index changed — "
+                        "restart watcher to apply",
+                        flush=True,
+                    )
+
+        for name, new_b in latest.items():
+            if name not in active:
+                spawn(new_b, initial_rebuild=True)
+
     try:
-        while any(t.is_alive() for t in threads):
-            for t in threads:
-                t.join(timeout=1.0)
+        while any(t.is_alive() for _, t in active.values()) and not stop.is_set():
+            woke = deferred.wake_registry_pending()
+            mt = vaults.registry_mtime()
+            if woke or (mt is not None and last_reg_mtime is not None and mt > last_reg_mtime):
+                sync_registry()
+            elif mt is not None and last_reg_mtime is None:
+                last_reg_mtime = mt
+            for _b, t in list(active.values()):
+                t.join(timeout=0.5)
     except KeyboardInterrupt:
         stop.set()
         if verbose:
             print("\nstopped", flush=True)
-        for t in threads:
+        for _b, t in list(active.values()):
             t.join(timeout=5)
 
 

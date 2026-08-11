@@ -3202,12 +3202,15 @@ def vault_op(
         }
         if desk.get("_error"):
             desk_meta["error"] = desk["_error"]
+        pub_desk = vault_project.scope_desk_overlay(
+            vault_desk.public_desk(desk), merged_vaults
+        )
         return {
             "ok": True,
             "action": "merge",
             "full": bodies,
             "default_vault": default_name,
-            "desk": vault_desk.public_desk(desk),
+            "desk": pub_desk,
             "desk_meta": desk_meta,
             "merge_rules": {
                 "cross_pollinate_contracts": bool(
