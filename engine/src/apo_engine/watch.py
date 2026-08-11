@@ -146,9 +146,14 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
         with vaults.bind(b):
             try:
                 _watch_one(b, interval=interval, use_events=use_events, verbose=verbose, stop=stop)
-            except Exception as e:
+            except (Exception, SystemExit) as e:
+                # SystemExit escapes `except Exception` and is dropped silently by
+                # threading.excepthook — surface it so one vault cannot fail invisibly.
                 if verbose:
-                    print(f"  vault {b.name} watch fatal: {e}", flush=True)
+                    print(
+                        f"  vault {b.name} watch fatal: {type(e).__name__}: {e}",
+                        flush=True,
+                    )
 
     for b in bindings.values():
         t = threading.Thread(target=worker, args=(b,), name=f"apo-watch-{b.name}", daemon=True)
@@ -183,6 +188,9 @@ def _watch_one(
     index_path = binding.index
     label = binding.name
 
+    # A caller-supplied event is shared across vaults; only signal shutdown on an
+    # event we own, so one vault's exit cannot stop its siblings.
+    owns_stop = stop is None
     if stop is None:
         stop = threading.Event()
 
@@ -375,7 +383,8 @@ def _watch_one(
         if verbose:
             print(f"\n[{label}] stopped", flush=True)
     finally:
-        stop.set()
+        if owns_stop:
+            stop.set()
         core.writer_close()
         if observer is not None:
             observer.stop()
