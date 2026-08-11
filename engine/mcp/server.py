@@ -710,7 +710,10 @@ async def filter_notes(
         Field(
             description=(
                 "Frontmatter predicate (canonical). Omit or {} = all in folder; "
-                "else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in}. "
+                "else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in,$elemMatch}. "
+                "Nested keys: todos.status (any list element). "
+                'List-of-dicts: {"todos": {"$elemMatch": {"status": "pending"}}} '
+                "(AND on one element). "
                 'Example: {"status": {"$in": ["active", "waiting"]}}.'
             ),
         ),

@@ -4,6 +4,22 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-08-11
+
+Plan-shaped frontmatter: query and surgically update list-of-dict fields (e.g. Cursor `todos:`).
+
+**Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads schemas. **No force reindex** — matching uses existing indexed frontmatter JSON.
+
+### Added
+
+- **`filter_notes` `$elemMatch`** — match notes where at least one dict in a list field satisfies all inner predicates (AND). Example: `{"todos": {"$elemMatch": {"status": "pending"}}}` or correlated `{"id": "x", "status": "completed"}`.
+- **Dotted / selector `where` keys** — `{"todos.status": "pending"}` expands across list elements (single-field sugar). Multi-field correlation still requires `$elemMatch`.
+- **`set_field` / `delete_field` path grammar** (Markdown + YAML) — map keys, list indices (`todos.0.status`), and id selectors (`todos[id=skypad-resolver].status`). Markdown frontmatter is parse → mutate → dump (no orphaned multi-line YAML under `todos:`). Structured `value` (list/dict) passes through on Markdown.
+
+### Changed
+
+- Markdown `set_field` no longer does scalar line-replace; FM fence may be reformatted by `yaml.safe_dump` (comments/whitespace inside the fence are not preserved).
+
 ## [0.7.0] — 2026-08-10
 
 Catalog sort for frontmatter sweeps (archive-ready coldest-N, stale `last_checked`, memory-reflect).

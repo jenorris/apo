@@ -144,16 +144,17 @@ class TestPatch(unittest.TestCase):
     def test_set_field_new(self):
         result = apply_patch(THREAD, [{"op": "set_field", "field": "timestamp", "value": "2026-07-09T19:30:00Z"}])
         self.assertTrue(result.ok)
-        self.assertIn('timestamp: "2026-07-09T19:30:00Z"', result.content)
+        # parse/dump may use single or double quotes
+        self.assertRegex(result.content, r"timestamp:\s*['\"]2026-07-09T19:30:00Z['\"]")
 
     def test_set_field_quotes_invalid_date(self):
-        # Invalid YYYY-MM-DD raises ValueError inside PyYAML; must still quote safely.
+        # Invalid YYYY-MM-DD must survive as a quoted string (not a YAML timestamp).
         result = apply_patch(
             THREAD,
             [{"op": "set_field", "field": "effective_date", "value": "2017-00-00"}],
         )
         self.assertTrue(result.ok)
-        self.assertIn('effective_date: "2017-00-00"', result.content)
+        self.assertRegex(result.content, r"effective_date:\s*['\"]2017-00-00['\"]")
 
     def test_replace_text_scoped(self):
         result = apply_patch(
@@ -199,7 +200,7 @@ class TestPatch(unittest.TestCase):
         result = apply_patch(THREAD, ops)
         self.assertTrue(result.ok)
         self.assertEqual(result.applied, 3)
-        self.assertIn('last_checked: "2026-07-09 15:30"', result.content)
+        self.assertRegex(result.content, r"last_checked:\s*['\"]?2026-07-09 15:30['\"]?")
         self.assertIn("- 2026-07-09 — done.", result.content)
 
     def test_strict_aborts(self):
@@ -259,6 +260,77 @@ class TestPatch(unittest.TestCase):
             find_section(lines, "## Histroy")
         self.assertEqual(ctx.exception.code, "anchor_not_found")
         self.assertTrue(ctx.exception.suggestions)
+
+    def test_set_field_todos_by_id(self):
+        src = """---
+title: Plan
+okf_type: Plan
+todos:
+  - id: skypad-resolver
+    content: Do thing
+    status: pending
+  - id: other
+    content: More
+    status: pending
+---
+
+# Body
+"""
+        result = apply_patch(
+            src,
+            [{"op": "set_field", "field": "todos[id=skypad-resolver].status", "value": "completed"}],
+        )
+        self.assertTrue(result.ok)
+        self.assertIn("status: completed", result.content)
+        self.assertIn("id: other", result.content)
+        fm = result.content.split("---")[1]
+        self.assertIn("skypad-resolver", fm)
+        self.assertEqual(fm.count("status: pending"), 1)
+        self.assertEqual(fm.count("status: completed"), 1)
+
+    def test_set_field_todos_by_index_and_replace_list(self):
+        src = """---
+todos:
+  - id: a
+    status: pending
+---
+
+# X
+"""
+        r1 = apply_patch(src, [{"op": "set_field", "field": "todos.0.status", "value": "done"}])
+        self.assertTrue(r1.ok)
+        self.assertIn("status: done", r1.content)
+        r2 = apply_patch(
+            src,
+            [
+                {
+                    "op": "set_field",
+                    "field": "todos",
+                    "value": [{"id": "n", "content": "new", "status": "pending"}],
+                }
+            ],
+        )
+        self.assertTrue(r2.ok)
+        self.assertIn("id: n", r2.content)
+        self.assertNotIn("id: a", r2.content)
+
+    def test_delete_field_todos_no_orphans(self):
+        src = """---
+title: Plan
+todos:
+  - id: a
+    status: pending
+status: active
+---
+
+# Body stays
+"""
+        result = apply_patch(src, [{"op": "delete_field", "field": "todos"}])
+        self.assertTrue(result.ok)
+        self.assertNotIn("todos:", result.content)
+        self.assertNotIn("id: a", result.content)
+        self.assertIn("status: active", result.content)
+        self.assertIn("# Body stays", result.content)
 
 
 class TestChunkSection(unittest.TestCase):

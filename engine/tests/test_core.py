@@ -452,6 +452,58 @@ class TestIndexLifecycle(VaultTestCase):
         with self.assertRaises(ValueError):
             core.filter_notes({}, order="sideways")
 
+    def test_filter_notes_elem_match_todos(self):
+        self.write(
+            "plans/a.md",
+            "---\nokf_type: Plan\ntodos:\n"
+            "  - id: x\n    status: pending\n"
+            "  - id: y\n    status: completed\n"
+            "---\n\n# A\n",
+        )
+        self.write(
+            "plans/b.md",
+            "---\nokf_type: Plan\ntodos:\n"
+            "  - id: z\n    status: completed\n"
+            "---\n\n# B\n",
+        )
+        self.write(
+            "plans/c.md",
+            "---\nokf_type: Note\ntags: [pending]\n---\n\n# C\n",
+        )
+        core.index_vault(verbose=False)
+
+        total, rows = core.filter_notes(
+            {"okf_type": "Plan", "todos": {"$elemMatch": {"status": "pending"}}}
+        )
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "plans/a.md")
+
+        total, rows = core.filter_notes(
+            {
+                "okf_type": "Plan",
+                "todos": {"$elemMatch": {"id": "x", "status": "pending"}},
+            }
+        )
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "plans/a.md")
+
+        # Correlated: id=y is completed, not pending — no match
+        total, rows = core.filter_notes(
+            {
+                "todos": {"$elemMatch": {"id": "y", "status": "pending"}},
+            }
+        )
+        self.assertEqual(total, 0)
+
+        # Dotted sugar — any element's status
+        total, rows = core.filter_notes({"todos.status": "pending"})
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "plans/a.md")
+
+        # $contains on list-of-dicts must not match scalar rhs
+        total, rows = core.filter_notes({"todos": {"$contains": "pending"}})
+        self.assertEqual(total, 0)
+
     def test_recent_preview_and_frontmatter_field(self):
         self.write("t.md", "---\ntitle: Hello\n---\n\n# Head\n\npreview body here\n")
         core.index_vault(verbose=False)

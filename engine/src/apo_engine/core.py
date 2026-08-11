@@ -535,6 +535,16 @@ def _match_condition(value, cond) -> bool:
                     return False
             elif not any(_loose_eq(value, y) for y in rhs):
                 return False
+        elif op == "$elemMatch":
+            # At least one list dict element satisfies all inner predicates (AND).
+            if not isinstance(value, list) or not isinstance(rhs, dict) or not rhs:
+                return False
+            if not any(
+                isinstance(el, dict)
+                and all(_match_condition(el.get(k), c) for k, c in rhs.items())
+                for el in value
+            ):
+                return False
         elif op in ("$lt", "$lte", "$gt", "$gte"):
             c = _loose_cmp(value, rhs)
             if op == "$lt" and c >= 0:
@@ -548,6 +558,21 @@ def _match_condition(value, cond) -> bool:
         else:
             return False  # unknown operator never matches
     return True
+
+
+def _match_where_clause(fm: dict, key: str, cond) -> bool:
+    """Match one ``where`` clause; dotted / ``[id=…]`` keys expand via fm_path."""
+    from apo_engine.fm_path import path_needs_python_match, resolve_values
+
+    if path_needs_python_match(key):
+        values = resolve_values(fm, key)
+        if isinstance(cond, dict) and set(cond) == {"$exists"}:
+            exists = bool(values)
+            return bool(cond["$exists"]) == exists
+        if not values:
+            return False
+        return any(_match_condition(v, cond) for v in values)
+    return _match_condition(fm.get(key), cond)
 
 
 def _ensure_files_columns(db: sqlite3.Connection) -> None:
@@ -1928,8 +1953,12 @@ def _sql_pushdown_predicates(where: dict) -> tuple[str, list[Any]] | None:
     """
     clauses: list[str] = []
     params: list[Any] = []
+    from apo_engine.fm_path import path_needs_python_match
+
     for key, cond in where.items():
-        if not _FM_KEY_SAFE.match(key):
+        # Nested / selector keys and non-$exists ops stay on the Python matcher
+        # (list membership, $elemMatch, loose coercion).
+        if not _FM_KEY_SAFE.match(key) or path_needs_python_match(key):
             return None
         jpath = f"$.{key}"
         if not isinstance(cond, dict):
@@ -1946,6 +1975,7 @@ def _sql_pushdown_predicates(where: dict) -> tuple[str, list[Any]] | None:
             params.append(jpath)
         else:
             return None
+
     if not clauses:
         return "1", []
     return " AND ".join(clauses), params
@@ -2013,8 +2043,9 @@ def filter_notes(
     (e.g. ``last_activity``) and ``order`` as ``asc`` / ``desc``. Missing FM sort
     values sort last. ``offset`` skips that many matches (0-based). No filesystem
     walk — reads the index only. ``$exists`` (and empty ``where``) push into SQL via
-    ``json_extract``; equality and richer operators use the Python matcher (correct for
-    list-valued fields and loose type coercion).
+    ``json_extract``; equality, ``$elemMatch``, dotted paths, and richer operators use
+    the Python matcher (correct for list-valued fields, list-of-dicts, and loose type
+    coercion).
 
     When ``sort=mtime`` and predicates are SQL-pushable, uses ``COUNT(*)`` plus
     ``ORDER BY mtime … LIMIT/OFFSET`` — never materializes every matching frontmatter
@@ -2080,7 +2111,7 @@ def filter_notes(
             fm = json.loads(fm_json) if fm_json else {}
         except json.JSONDecodeError:
             fm = {}
-        if all(_match_condition(fm.get(k), cond) for k, cond in where.items()):
+        if all(_match_where_clause(fm, k, cond) for k, cond in where.items()):
             matches.append((mtime, path, fm))
     matches.sort(
         key=cmp_to_key(
