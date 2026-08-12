@@ -4,6 +4,12 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-12
+
+Vault data plane as the principal product story; desk/watcher hardening for multi-vault registries.
+
+**Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads schemas and tool descriptions.
+
 ### Added
 
 - **Watcher registry hot-add** — multi-vault supervisor re-reads `APO_VAULTS` on `wake-registry` (or registry file mtime) and spawns threads for newly registered vaults without a full bounce. `apo_admin(reload_config)` touches the wake file after refreshing the MCP vault map. Removals / root-or-index path changes still require a watcher restart.
@@ -11,9 +17,11 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ### Changed
 
+- **Positioning** — README hero and stack rank lead with the vault data plane (typed `.md`/`.yaml`, contracts, `filter_notes` / surgical writes); hybrid search is retrieval substrate. OKF remains the flagship optional contract, not the product name.
 - **Session-audit domain vaults** — default derivation skips `grc` (and `audit`); GRC SoT remains git/PR. Explicit `dual_write.domain_vaults` still wins when set.
 - **Single-vault `APO_VAULTS` file** — still runs the multi-vault supervisor (so a one-vault registry can hot-add a second vault later). Legacy no-`APO_VAULTS` single-root mode unchanged.
 
+## [0.7.1] — 2026-08-11
 
 Plan-shaped frontmatter: query and surgically update list-of-dict fields (e.g. Cursor `todos:`).
 

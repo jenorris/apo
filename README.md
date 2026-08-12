@@ -1,8 +1,8 @@
 <div align="center">
   <img src="docs/assets/apo-wordmark.svg" alt="Apo" height="72" />
-  <p><strong>Local markdown memory for AI agents</strong></p>
-  <p>Hybrid search + MCP writes over <em>your</em> notes.<br />
-  Files on disk are the source of truth; the index is rebuildable.</p>
+  <p><strong>Local vault data for AI agents</strong></p>
+  <p>Typed schemas on disk, contract-governed, searchable.<br />
+  Files are the source of truth; the index is rebuildable.</p>
   <p>
     <a href="docs/quickstart.md"><strong>Quickstart</strong></a>
     ·
@@ -24,7 +24,7 @@
 <summary><strong>Table of contents</strong></summary>
 
 - [Why Apo](#why-apo)
-- [Structured notes (OKF and friends)](#structured-notes-okf-and-friends)
+- [Vault data &amp; contracts](#vault-data--contracts)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
@@ -38,19 +38,22 @@
 
 ## Why Apo
 
-Most “AI memory” stacks ask you to trust a second database. Apo indexes a folder of Markdown (and optional YAML catalog records) you already own:
+Most “AI memory” stacks ask you to trust a second database. Apo treats a folder of **Markdown and YAML** you already own as a **local data plane** for agents: typed records, contract-governed writes, structured query, and hybrid search over the same files.
 
 | Approach | Source of truth | What agents edit | Ops |
 |----------|-----------------|------------------|-----|
 | Cloud memory APIs | Vendor store | Opaque records | Account, network, retention policy |
 | Vector DB + sync job | Vectors (+ maybe files) | Often the DB, not the note | Schema, embeddings pipeline |
-| **Apo** | **Your `.md` / `.yaml` files** | **The same files you open in an editor** | One machine, one vault, optional watcher |
+| Spreadsheet / SaaS DB + RAG | Proprietary rows | The SaaS UI or a parallel upload | Schema drift, access silos |
+| **Apo** | **Your `.md` / `.yaml` files** | **The same files you open in an editor** | One machine, vault contracts, optional watcher |
 
-You keep Obsidian / git / plain-text workflows. Agents search and surgically update notes through MCP. Delete `index.db` anytime — rebuild with `just reindex`.
+You keep Obsidian / git / plain-text workflows. Agents **filter and surgically update** typed fields through MCP, and use hybrid search when meaning recall beats exact catalog queries. Delete `index.db` anytime — rebuild with `just reindex`.
 
-## Structured notes (OKF and friends)
+**Stack rank:** vault data plane → contracts → `filter_notes` / surgical writes → hybrid search → OKF interchange. Apo is not “an OKF product”; [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) is the flagship **contract** for typed Knowledge Bundles.
 
-Apo indexes **arbitrary YAML frontmatter** (Markdown) and **standalone YAML catalog notes** into sqlite. `filter_notes` queries those fields without a vault walk — so typed concept systems (OKF-style `okf_type`, `status`, `resource`, …) and lightweight project management fall out of the same files you already edit:
+## Vault data & contracts
+
+Apo indexes **arbitrary YAML frontmatter** (Markdown) and **standalone YAML catalog notes** into sqlite. That is the structured store: any schema you put in YAML is queryable without a vault walk. `filter_notes` is the catalog API; `patch_note` / `set_field` mutates rows in place.
 
 ```bash
 # examples — any key you put in frontmatter / YAML notes is fair game
@@ -60,23 +63,24 @@ filter_notes({"okf_type": "Project"}, limit=50)
 filter_notes({"todos": {"$elemMatch": {"status": "pending"}}}, folder="projects/")
 ```
 
-**Substrate split:** use **Markdown** for prose, History, session logs, wiki (`append_note`, headings). Use **`.yaml` / `.yml`** for structure-first atoms (queues, inventories, thin OKF records) — whole file is the catalog row; patch with `set_field` / `delete_field` (dotted paths, list indices, `[id=…]` selectors). Machine contracts under `system/config/*-contract.schema.yaml` stay out of the catalog by default.
+**Substrate split:** use **Markdown** for prose, History, session logs, wiki (`append_note`, headings). Use **`.yaml` / `.yml`** for structure-first atoms (queues, inventories, thin typed records) — whole file is the catalog row; patch with `set_field` / `delete_field` (dotted paths, list indices, `[id=…]` selectors). Machine contracts under `system/config/*-contract.schema.yaml` stay out of the catalog by default.
 
 No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall.
 
-**Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard. Legacy `system/config/` still resolves. Templates: [docs/contracts/](docs/contracts/). Desk: `vault(action=merge|project)` + `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
+**Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard and `apo-engine okf validate|fix|export|ingest`. Legacy `system/config/` still resolves. Templates: [docs/contracts/](docs/contracts/). Desk: `vault(action=merge|project)` + `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
 
-**Multi-vault:** set `APO_VAULTS` to a JSON registry (per-root `index` + `collection`). Tools take `vault=`; watch runs one thread per vault. See [docs/multi-vault.md](docs/multi-vault.md).
+**Multi-vault:** set `APO_VAULTS` to a JSON registry (per-root `index` + `collection`). Tools take `vault=`; watch runs one thread per vault. Foreign OKF bundles can register as **read-only** vaults. See [docs/multi-vault.md](docs/multi-vault.md).
 
 
 ## Features
 
 | | |
 |--|--|
-| **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown (+ YAML title/description fields) |
 | **Frontmatter catalogs** | `filter_notes` on any YAML property (`okf_type`, `status`, tags, …) — MD frontmatter or whole-file YAML notes |
-| **MCP surface** | 14 top-level tools + 7 admin capabilities via `apo_admin` |
 | **Surgical writes** | `append_note` / `patch_note` with heading / `chunk_hash` anchors and `expected_mtime` |
+| **Vault contracts** | Optional OKF / search / git / usage contracts — stamp and validate on write; OKF CLI for lint/export/ingest |
+| **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown (+ YAML title/description fields) |
+| **MCP surface** | 14 top-level tools + 7 admin capabilities via `apo_admin` |
 | **Index-backed graphs** | `backlinks` + `history` (mtime browse; file git log when git contract active) hit sqlite / git — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
 | **Measurable quality** | Labeled search eval (`just search-eval`, hit@k / MRR) + optional local cross-encoder reranker |
@@ -161,8 +165,8 @@ Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habit
 ## How agents use it
 
 ```text
-1. search_notes "quarterly planning"        → semantic/keyword hits + chunk_hash
-2. filter_notes {status: open, …}           → exact frontmatter catalog (OKF / PM)
+1. filter_notes {status: open, …}           → exact frontmatter catalog (typed / PM)
+2. search_notes "quarterly planning"        → semantic/keyword hits + chunk_hash
 3. append_note / patch_note                 → edit at heading or chunk_hash
 4. watcher re-embeds                        → next search/filter sees the change
 ```
@@ -243,5 +247,5 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 - **Scope:** one machine, one vault root, local engine — no cloud gateway in this repo.
 - **Embeddings:** default stack needs Ollama + `bge-m3` running locally; ONNX is opt-in, not a drop-in without reindex.
 - **Maturity:** daily-driver + shareable install path; Hermes projection and usage contracts ship for autonomous hosts.
-- **Layouts:** PARA / OKF / thread workflows are optional vault **contracts** (or a [template](docs/contracts/)), not engine requirements — frontmatter filtering works either way.
+- **Layouts:** PARA / OKF / thread workflows are optional vault **contracts** (or a [template](docs/contracts/)), not engine requirements — frontmatter filtering works either way. Apo’s principal capability is the vault data plane; OKF is the flagship contract, not a hard requirement.
 
