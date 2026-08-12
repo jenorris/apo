@@ -241,6 +241,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection (`body` + `guidance`) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |
+| [VERSIONING.md](VERSIONING.md) | Semver + jj release cut checklist |
 
 ## Boundaries
 

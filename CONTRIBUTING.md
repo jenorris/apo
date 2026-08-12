@@ -44,3 +44,9 @@ lean/full contract covered by `engine/tests/test_apo_admin.py` — keep it green
 
 Keep PRs focused. Describe the change, how you tested it, and any config or
 migration impact.
+
+## Releases
+
+See **[VERSIONING.md](VERSIONING.md)** for semver rules, the jj cut checklist
+(`CHANGELOG` → version bump → `main` → tag → `gh release`), and docs-only
+follow-ups that skip a bump.
