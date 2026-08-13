@@ -1574,6 +1574,7 @@ def history(
 def _assemble_structured_note(
     frontmatter: dict[str, Any] | None,
     sections: list[dict[str, Any]] | None,
+    body: str | None = None,
 ) -> str:
     """Build a full markdown note from a frontmatter object + typed sections.
 
@@ -1581,6 +1582,8 @@ def _assemble_structured_note(
     ``table_json`` — CSV/JSON are serialized to a GFM table so they index as
     ``table_row`` chunks like any hand-authored table. Frontmatter is emitted as a
     YAML fence; OKF stamp/validate still runs downstream on the assembled body.
+    ``body`` (when sections is None) is appended after the frontmatter fence to
+    support dual-write (``frontmatter=`` + ``content=`` / ``text=``).
     """
     import yaml
 
@@ -1605,6 +1608,8 @@ def _assemble_structured_note(
             parts.append(f"{'#' * level} {heading}\n\n{block.rstrip()}")
         else:
             parts.append(block.rstrip())
+    if body and str(body).strip():
+        parts.append(str(body).strip())
     return "\n\n".join(parts).rstrip() + "\n"
 
 
@@ -1624,17 +1629,32 @@ def write_note(
 ) -> dict[str, Any]:
     structured = sections is not None or frontmatter is not None
     if structured:
-        if any(v is not None for v in (content, text, body)):
+        if body is not None:
             return _err(
                 path=path,
                 error="bad_request",
-                message="pass content= OR sections[]/frontmatter, not both",
+                message="pass (content= OR text=) + frontmatter= OR sections[], but not body= with frontmatter",
             )
+        if sections is not None and (content is not None or text is not None):
+            return _err(
+                path=path,
+                error="bad_request",
+                message="pass content= OR sections[], not both",
+            )
+        body_text, alias_key, body_err = resolve_body_text(
+            text, content, body=None, prefer="content"
+        )
+        if body_err:
+            # Nothing provided is valid for a frontmatter-/sections-only note.
+            if text is None and content is None:
+                body_text = ""
+                alias_key = None
+            else:
+                return _err(path=path, error="bad_request", message=body_err)
         try:
-            body = _assemble_structured_note(frontmatter, sections)
+            body = _assemble_structured_note(frontmatter, sections, body=body_text)
         except (ValueError, TypeError) as e:
             return _err(path=path, error="bad_request", message=f"invalid section content: {e}")
-        alias_key = None
     else:
         body, alias_key, body_err = resolve_body_text(
             text, content, body=body, prefer="content"
