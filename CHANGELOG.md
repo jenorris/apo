@@ -15,6 +15,50 @@ Search snippet quality — reranking always scored `full_texts` (untruncated), s
 
 Design note + phase plan: jeremy vault `projects/apo-pkb/search-snippet-optimization.md`.
 
+## [0.8.0] — 2026-08-12
+
+Vault data plane as the principal product story; desk/watcher hardening for multi-vault registries.
+
+**Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads schemas and tool descriptions.
+
+### Added
+
+- **Watcher registry hot-add** — multi-vault supervisor re-reads `APO_VAULTS` on `wake-registry` (or registry file mtime) and spawns threads for newly registered vaults without a full bounce. `apo_admin(reload_config)` touches the wake file after refreshing the MCP vault map. Removals / root-or-index path changes still require a watcher restart.
+- **Desk projection scoping** — `merge` / `project` trim `role_notes` and `pointers` to vaults present in the active registry (`APO_VAULTS` / `vaults=`).
+
+### Changed
+
+- **Positioning** — README hero and stack rank lead with the vault data plane (typed `.md`/`.yaml`, contracts, `filter_notes` / surgical writes); hybrid search is retrieval substrate. OKF remains the flagship optional contract, not the product name.
+- **Session-audit domain vaults** — default derivation skips `grc` (and `audit`); GRC SoT remains git/PR. Explicit `dual_write.domain_vaults` still wins when set.
+- **Single-vault `APO_VAULTS` file** — still runs the multi-vault supervisor (so a one-vault registry can hot-add a second vault later). Legacy no-`APO_VAULTS` single-root mode unchanged.
+
+## [0.7.1] — 2026-08-11
+
+Plan-shaped frontmatter: query and surgically update list-of-dict fields (e.g. Cursor `todos:`).
+
+**Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads schemas. **No force reindex** — matching uses existing indexed frontmatter JSON.
+
+### Added
+
+- **`filter_notes` `$elemMatch`** — match notes where at least one dict in a list field satisfies all inner predicates (AND). Example: `{"todos": {"$elemMatch": {"status": "pending"}}}` or correlated `{"id": "x", "status": "completed"}`.
+- **Dotted / selector `where` keys** — `{"todos.status": "pending"}` expands across list elements (single-field sugar). Multi-field correlation still requires `$elemMatch`.
+- **`set_field` / `delete_field` path grammar** (Markdown + YAML) — map keys, list indices (`todos.0.status`), and id selectors (`todos[id=skypad-resolver].status`). Markdown frontmatter is parse → mutate → dump (no orphaned multi-line YAML under `todos:`). Structured `value` (list/dict) passes through on Markdown.
+
+### Changed
+
+- Markdown `set_field` no longer does scalar line-replace; FM fence may be reformatted by `yaml.safe_dump` (comments/whitespace inside the fence are not preserved).
+
+## [0.7.0] — 2026-08-10
+
+Catalog sort for frontmatter sweeps (archive-ready coldest-N, stale `last_checked`, memory-reflect).
+
+**Quit Cursor/Claude fully (Cmd+Q)** after upgrade so MCP reloads schemas. **No force reindex** — sort uses existing indexed frontmatter.
+
+### Added
+
+- **`filter_notes` `sort=` / `order=`** — default remains `mtime` / `desc`. Pass a safe frontmatter key (e.g. `last_activity`) with `order=asc` for oldest-first catalog pages. Missing sort values sort last for both directions.
+- **`filter_notes` `has_more`** — pagination parity with `history` / `search_notes` (`offset + len(notes) < total`).
+
 ## [0.6.4] — 2026-08-08
 
 ### Fixed

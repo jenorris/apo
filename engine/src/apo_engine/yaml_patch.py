@@ -1,13 +1,15 @@
 """Patch ops for standalone YAML catalog notes.
 
-Supports ``set_field`` / ``delete_field`` with dotted paths (nested maps).
-Heading / section / append ops raise ``unsupported_format``.
+Supports ``set_field`` / ``delete_field`` with dotted paths (nested maps,
+list indices, and ``[id=…]`` selectors). Heading / section / append ops raise
+``unsupported_format``.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from apo_engine.fm_path import FmPathError, delete_at_path, set_at_path
 from apo_engine.markdown_patch import PatchError, PatchResult
 from apo_engine.note_format import (
     coerce_yaml_value,
@@ -27,47 +29,22 @@ _YAML_UNSUPPORTED = frozenset(
 )
 
 
-def _split_path(field: str) -> list[str]:
-    parts = [p for p in str(field).split(".") if p != ""]
-    if not parts:
-        raise PatchError("invalid_op", "field path must be non-empty")
-    return parts
-
-
-def _get_parent(data: dict[str, Any], parts: list[str], *, create: bool) -> tuple[Any, str]:
-    cur: Any = data
-    for key in parts[:-1]:
-        if not isinstance(cur, dict):
-            raise PatchError(
-                "anchor_not_found",
-                f"cannot traverse field path through non-mapping at {key!r}",
-            )
-        if key not in cur:
-            if not create:
-                raise PatchError("anchor_not_found", f"frontmatter field path not found ({key})")
-            cur[key] = {}
-        nxt = cur[key]
-        if create and not isinstance(nxt, dict):
-            raise PatchError(
-                "invalid_op",
-                f"cannot nest under non-mapping field {key!r}",
-            )
-        cur = nxt
-    return cur, parts[-1]
+def _reraise_path(exc: FmPathError) -> None:
+    raise PatchError(exc.code, exc.message) from exc
 
 
 def set_field_path(data: dict[str, Any], field: str, value: Any) -> None:
-    parent, leaf = _get_parent(data, _split_path(field), create=True)
-    if not isinstance(parent, dict):
-        raise PatchError("invalid_op", f"cannot set field on non-mapping parent for {field!r}")
-    parent[leaf] = coerce_yaml_value(value)
+    try:
+        set_at_path(data, field, coerce_yaml_value(value))
+    except FmPathError as e:
+        _reraise_path(e)
 
 
 def delete_field_path(data: dict[str, Any], field: str) -> None:
-    parent, leaf = _get_parent(data, _split_path(field), create=False)
-    if not isinstance(parent, dict) or leaf not in parent:
-        raise PatchError("anchor_not_found", f"frontmatter field {field!r} not found")
-    del parent[leaf]
+    try:
+        delete_at_path(data, field)
+    except FmPathError as e:
+        _reraise_path(e)
 
 
 def apply_yaml_op(data: dict[str, Any], op: dict[str, Any]) -> str:

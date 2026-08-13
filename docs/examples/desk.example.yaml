@@ -20,6 +20,8 @@ workspace: ""
 #   session_vault: sessions
 #   session_path_template: "inbox/daily/{date}.md"
 #   session_heading: "Session log"
+#   # Optional: writable domain vaults for end-of-turn notes (skips grc/audit by default).
+#   # domain_vaults: [work, contracts, optima]
 
 vault_roles:
   meta: pkb

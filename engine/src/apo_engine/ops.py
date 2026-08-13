@@ -1237,6 +1237,8 @@ def filter_notes(
     vault: str = "",
     filters: dict | None = None,
     fields: list[str] | None = None,
+    sort: str = "mtime",
+    order: str = "desc",
 ) -> dict[str, Any]:
     where_obj, where_err = resolve_where(where, filters)
     if where_err:
@@ -1262,8 +1264,18 @@ def filter_notes(
         except ValueError as e:
             return _err(error="bad_path", message=str(e))
 
-    with vaults.bind(b):
-        total, matches = core.filter_notes(where_obj, folder_clean, limit, offset)
+    try:
+        with vaults.bind(b):
+            total, matches = core.filter_notes(
+                where_obj,
+                folder_clean,
+                limit,
+                offset,
+                sort=sort,
+                order=order,
+            )
+    except ValueError as e:
+        return _err(error="bad_request", message=str(e))
     notes = [
         {
             "path": path,
@@ -1277,6 +1289,7 @@ def filter_notes(
         "total": total,
         "offset": offset,
         "limit": limit,
+        "has_more": offset + len(notes) < total,
         "notes": notes,
         "vault": b.name,
     }
@@ -3189,12 +3202,15 @@ def vault_op(
         }
         if desk.get("_error"):
             desk_meta["error"] = desk["_error"]
+        pub_desk = vault_project.scope_desk_overlay(
+            vault_desk.public_desk(desk), merged_vaults
+        )
         return {
             "ok": True,
             "action": "merge",
             "full": bodies,
             "default_vault": default_name,
-            "desk": vault_desk.public_desk(desk),
+            "desk": pub_desk,
             "desk_meta": desk_meta,
             "merge_rules": {
                 "cross_pollinate_contracts": bool(

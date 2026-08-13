@@ -171,6 +171,8 @@ def _filter(body: dict[str, Any]) -> dict[str, Any]:
             "error": "bad_query",
             "message": "`filters` must be an object (alias for where)",
         }
+    sort = body.get("sort")
+    order = body.get("order")
     return ops.filter_notes(
         where,
         filters=filters,
@@ -179,6 +181,8 @@ def _filter(body: dict[str, Any]) -> dict[str, Any]:
         offset=int(body.get("offset") or 0),
         vault=str(body.get("vault") or ""),
         fields=body.get("fields") if isinstance(body.get("fields"), list) else None,
+        sort=str(sort) if sort is not None else "mtime",
+        order=str(order) if order is not None else "desc",
     )
 
 

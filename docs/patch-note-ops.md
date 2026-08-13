@@ -59,6 +59,14 @@ retries by heading and returns a soft `tip` to re-search.
 ```
 
 ```json
+{"op": "set_field", "field": "todos[id=skypad-resolver].status", "value": "completed"}
+```
+
+```json
+{"op": "set_field", "field": "todos", "value": [{"id": "a", "content": "…", "status": "pending"}]}
+```
+
+```json
 {"op": "delete_field", "field": "draft"}
 ```
 
@@ -90,3 +98,25 @@ double headers. EOF append (`append_eof` / no heading) does not strip.
 
 Normalization (`ops_to_dicts` / apply path) strips aliases so the engine sees one
 canonical shape per op.
+
+## Frontmatter field paths (`set_field` / `delete_field`)
+
+| Segment | Meaning | Example |
+|---------|---------|---------|
+| map key | Nested object key | `meta.owner` |
+| list index | Element when parent is a list | `todos.0.status` |
+| id selector | First list dict with matching field | `todos[id=skypad-resolver].status` |
+
+Markdown notes: frontmatter is **parsed → mutated → `yaml.safe_dump`'d** back into
+the `---` fence (body unchanged). Multi-line keys like `todos:` update as a
+subtree — no orphaned continuation lines. Fence whitespace/comments may be
+reformatted. Pass structured `value` as a native list/dict (not a stringified
+repr). String scalars stay strings (ISO timestamps are not coerced to dates).
+
+YAML catalog notes use the same path grammar (maps, indices, `[id=…]`).
+
+## `filter_notes` nested match (related)
+
+- `$elemMatch` — at least one list dict satisfies all inner predicates (AND).
+- Dotted sugar — `{"todos.status": "pending"}` matches any element's field.
+  Multi-field correlation on the **same** element requires `$elemMatch`.

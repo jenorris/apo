@@ -186,6 +186,25 @@ def _load_vaults_raw() -> dict | None:
     return data
 
 
+def registry_source_path() -> Path | None:
+    """Filesystem path for APO_VAULTS when it is a file (not inline JSON)."""
+    raw = os.environ.get("APO_VAULTS", "").strip()
+    if not raw or raw.startswith("{"):
+        return None
+    return Path(raw).expanduser()
+
+
+def registry_mtime() -> float | None:
+    """mtime of the APO_VAULTS file, or None if unset / inline / missing."""
+    p = registry_source_path()
+    if p is None:
+        return None
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return None
+
+
 def load_bindings() -> tuple[str, dict[str, VaultBinding]]:
     """Return (default_name, {name: VaultBinding}).
 

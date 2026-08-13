@@ -225,6 +225,13 @@ mcp.add_middleware(AgentValidationMiddleware())
 
 def _reload_config_sync() -> dict:
     _load_vaults()
+    # Nudge multi-vault watcher to hot-add any new vaults from APO_VAULTS.
+    try:
+        from apo_engine import deferred as index_deferred
+
+        index_deferred.touch_registry_wake()
+    except Exception:
+        pass
     return {
         "ok": True,
         "default_vault": DEFAULT_VAULT,
@@ -238,6 +245,7 @@ def _reload_config_sync() -> dict:
             for name, v in VAULTS.items()
         },
         "runtime_file": str(_runtime_config_path()),
+        "registry_wake": True,
     }
 
 
@@ -710,7 +718,10 @@ async def filter_notes(
         Field(
             description=(
                 "Frontmatter predicate (canonical). Omit or {} = all in folder; "
-                "else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in}. "
+                "else field→scalar or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in,$elemMatch}. "
+                "Nested keys: todos.status (any list element). "
+                'List-of-dicts: {"todos": {"$elemMatch": {"status": "pending"}}} '
+                "(AND on one element). "
                 'Example: {"status": {"$in": ["active", "waiting"]}}.'
             ),
         ),
@@ -728,6 +739,20 @@ async def filter_notes(
             ),
         ),
     ] = None,
+    sort: Annotated[
+        str,
+        Field(
+            description=(
+                "Catalog sort key. Default mtime. Pass a safe frontmatter key "
+                "(e.g. last_activity) for oldest/newest-by-field sweeps. "
+                "Missing values sort last. Response includes has_more."
+            ),
+        ),
+    ] = "mtime",
+    order: Annotated[
+        Literal["asc", "desc"],
+        Field(description="Sort direction (default desc — newest/largest first)."),
+    ] = "desc",
 ) -> dict:
     """Frontmatter catalog (no embeddings). Prefer where=; omit where or pass {} to list."""
     return await asyncio.to_thread(
@@ -738,6 +763,8 @@ async def filter_notes(
         vault=vault,
         offset=offset,
         fields=fields,
+        sort=sort,
+        order=order,
     )
 
 

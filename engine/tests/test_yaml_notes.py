@@ -96,6 +96,26 @@ class TestYamlFormatHelpers(unittest.TestCase):
         self.assertEqual(data["meta"]["owner"], "jeremy")
         self.assertEqual(data["meta"]["team"], "platform")
 
+    def test_list_index_and_id_selector(self):
+        data: dict = {
+            "todos": [
+                {"id": "a", "status": "pending"},
+                {"id": "b", "status": "pending"},
+            ]
+        }
+        set_field_path(data, "todos.0.status", "done")
+        self.assertEqual(data["todos"][0]["status"], "done")
+        set_field_path(data, "todos[id=b].status", "completed")
+        self.assertEqual(data["todos"][1]["status"], "completed")
+
+    def test_id_selector_ambiguous(self):
+        data: dict = {"todos": [{"id": "x"}, {"id": "x"}]}
+        from apo_engine.markdown_patch import PatchError
+
+        with self.assertRaises(PatchError) as ctx:
+            set_field_path(data, "todos[id=x].status", "done")
+        self.assertEqual(ctx.exception.code, "anchor_ambiguous")
+
 
 class TestYamlIndexFilterSearch(YamlVaultTestCase):
     def test_yaml_indexed_and_filterable(self):

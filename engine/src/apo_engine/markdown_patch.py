@@ -188,64 +188,94 @@ def _frontmatter_bounds(lines: list[str]) -> tuple[int, int] | None:
     return None
 
 
-def _quote_yaml_value(value: str) -> str:
-    if not value:
-        return '""'
-    needs_quote = value.strip() != value or any(c in value for c in ":{}[]#&*!?|>'\"@`")
-    if not needs_quote:
-        # YAML 1.1 implicitly types unquoted scalars: bare `2026-07-09` becomes a date,
-        # `yes`/`no`/`true`/`null`/bare integers become bool/None/int. Round-trip through
-        # the real parser rather than hand-maintaining its resolver patterns — cheaper to
-        # keep correct than a punctuation blocklist that will always miss cases like this.
-        try:
-            needs_quote = yaml.safe_load(value) != value
-        except (yaml.YAMLError, ValueError, OverflowError):
-            # Invalid timestamps (e.g. 2017-00-00) raise ValueError inside PyYAML's
-            # datetime constructor — not YAMLError. Quote them so writes survive.
-            needs_quote = True
-    if needs_quote:
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
+def _dump_frontmatter_fence(fm: dict[str, Any]) -> list[str]:
+    """Serialize a mapping as ``---`` / body / ``---`` fence lines (no trailing blank)."""
+    body = yaml.safe_dump(
+        fm,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+        width=1000,
+    ).rstrip("\n")
+    if not body:
+        return ["---", "---"]
+    return ["---", *body.split("\n"), "---"]
 
 
-def _set_field_lines(lines: list[str], field: str, value: str) -> list[str]:
+def _load_frontmatter_mapping(lines: list[str]) -> tuple[dict[str, Any], int, int] | None:
+    """Parse FM fence → (mapping, start_idx, end_idx of closing ---)."""
+    from apo_engine.note_format import _TolerantLoader
+
     bounds = _frontmatter_bounds(lines)
     if bounds is None:
-        val = _quote_yaml_value(value)
-        stub = ["---", f"{field}: {val}", "---", ""]
-        return stub + lines
-
+        return None
     start, end = bounds
-    key_prefix = f"{field}:"
-    quoted = _quote_yaml_value(str(value))
-    new_line = f"{field}: {quoted}"
+    text = "\n".join(lines[start + 1 : end])
+    try:
+        data = yaml.load(text, Loader=_TolerantLoader) if text.strip() else {}
+    except (yaml.YAMLError, ValueError, OverflowError) as e:
+        raise PatchError(
+            "invalid_frontmatter",
+            f"cannot parse YAML frontmatter: {e}",
+        ) from e
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise PatchError(
+            "invalid_frontmatter",
+            "YAML frontmatter must be a mapping (object)",
+        )
+    return data, start, end
 
-    for i in range(start + 1, end):
-        stripped = lines[i].split("#", 1)[0].strip()
-        if stripped.startswith(key_prefix):
-            lines[i] = new_line
-            return lines
 
-    lines.insert(end, new_line)
-    return lines
+def _set_field_lines(lines: list[str], field: str, value: Any) -> list[str]:
+    """Set a (possibly nested) frontmatter field via parse → mutate → dump.
+
+    Accepts structured ``value`` (list/dict). Multi-line keys like ``todos:`` are
+    replaced as a whole subtree — no orphaned continuation lines.
+
+    String scalars are kept as strings (not YAML-coerced) so ISO timestamps and
+    intentional string dates survive round-trip; pass native list/dict for structure.
+    """
+    from apo_engine.fm_path import FmPathError, set_at_path
+
+    # Preserve str scalars; structured values (list/dict/bool/int) pass through.
+    coerced = value if not isinstance(value, str) else value
+
+    loaded = _load_frontmatter_mapping(lines)
+    if loaded is None:
+        fm: dict[str, Any] = {}
+        try:
+            set_at_path(fm, field, coerced)
+        except FmPathError as e:
+            raise PatchError(e.code, e.message) from e
+        return _dump_frontmatter_fence(fm) + [""] + lines
+
+    fm, _start, end = loaded
+    try:
+        set_at_path(fm, field, coerced)
+    except FmPathError as e:
+        raise PatchError(e.code, e.message) from e
+    return _dump_frontmatter_fence(fm) + lines[end + 1 :]
 
 
 def _delete_field_lines(lines: list[str], field: str) -> list[str]:
-    bounds = _frontmatter_bounds(lines)
-    if bounds is None:
+    """Delete a (possibly nested) frontmatter field via parse → mutate → dump."""
+    from apo_engine.fm_path import FmPathError, delete_at_path
+
+    loaded = _load_frontmatter_mapping(lines)
+    if loaded is None:
         raise PatchError(
             "invalid_frontmatter",
             "no YAML frontmatter block found; use set_field to create --- fields, "
             "or write_note with a frontmatter stub",
         )
-    start, end = bounds
-    key_prefix = f"{field}:"
-    for i in range(start + 1, end):
-        if lines[i].split("#", 1)[0].strip().startswith(key_prefix):
-            del lines[i]
-            return lines
-    raise PatchError("anchor_not_found", f"frontmatter field {field!r} not found")
+    fm, _start, end = loaded
+    try:
+        delete_at_path(fm, field)
+    except FmPathError as e:
+        raise PatchError(e.code, e.message) from e
+    return _dump_frontmatter_fence(fm) + lines[end + 1 :]
 
 
 def _insert_text_lines(existing: list[str], insert_lines: list[str], at: int) -> tuple[list[str], int]:
@@ -431,7 +461,7 @@ def apply_op(lines: list[str], op: dict[str, Any]) -> tuple[list[str], str]:
                 "invalid_op",
                 "set_field requires field (op uses field/value — not key/old/new)",
             )
-        merged = _set_field_lines(lines, str(field), str(op.get("value", "")))
+        merged = _set_field_lines(lines, str(field), op.get("value", ""))
         return merged, f"set frontmatter field {field!r}"
     if kind == "delete_field":
         field = op.get("field")

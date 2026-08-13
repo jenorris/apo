@@ -11,6 +11,7 @@ import re
 import shutil
 import sqlite3
 import tempfile
+import time
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -386,6 +387,122 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertNotEqual({r[1] for r in page0}, {r[1] for r in page1})
         _, page_tail = core.filter_notes({"status": "open"}, limit=2, offset=4)
         self.assertEqual(len(page_tail), 1)
+
+    def test_filter_notes_sort_last_activity_asc(self):
+        self.write(
+            "old.md",
+            "---\nstatus: active\nlast_activity: '2026-07-10 16:00'\n---\n\n# Old\n\nbody\n",
+        )
+        self.write(
+            "mid.md",
+            "---\nstatus: active\nlast_activity: '2026-07-15 08:10'\n---\n\n# Mid\n\nbody\n",
+        )
+        self.write(
+            "new.md",
+            "---\nstatus: active\nlast_activity: '2026-08-10 09:46'\n---\n\n# New\n\nbody\n",
+        )
+        self.write(
+            "missing.md",
+            "---\nstatus: active\n---\n\n# Missing\n\nbody\n",
+        )
+        core.index_vault(verbose=False)
+        total, rows = core.filter_notes(
+            {"status": "active"},
+            sort="last_activity",
+            order="asc",
+        )
+        self.assertEqual(total, 4)
+        self.assertEqual([r[1] for r in rows], ["old.md", "mid.md", "new.md", "missing.md"])
+
+    def test_filter_notes_sort_last_activity_desc_nulls_last(self):
+        self.write(
+            "old.md",
+            "---\nstatus: open\nlast_activity: '2026-07-10 16:00'\n---\n\n# Old\n\nbody\n",
+        )
+        self.write(
+            "new.md",
+            "---\nstatus: open\nlast_activity: '2026-08-10 09:46'\n---\n\n# New\n\nbody\n",
+        )
+        self.write(
+            "missing.md",
+            "---\nstatus: open\n---\n\n# Missing\n\nbody\n",
+        )
+        core.index_vault(verbose=False)
+        total, rows = core.filter_notes(
+            {"status": "open"},
+            sort="last_activity",
+            order="desc",
+        )
+        self.assertEqual(total, 3)
+        self.assertEqual([r[1] for r in rows], ["new.md", "old.md", "missing.md"])
+
+    def test_filter_notes_sort_mtime_asc(self):
+        self.write("a.md", "---\nstatus: live\n---\n\n# A\n\nbody\n")
+        core.index_vault(verbose=False)
+        time.sleep(0.02)
+        self.write("b.md", "---\nstatus: live\n---\n\n# B\n\nbody\n")
+        core.index_vault(verbose=False)
+        total, rows = core.filter_notes({"status": "live"}, sort="mtime", order="asc")
+        self.assertEqual(total, 2)
+        self.assertEqual([r[1] for r in rows], ["a.md", "b.md"])
+
+    def test_filter_notes_invalid_sort_raises(self):
+        with self.assertRaises(ValueError):
+            core.filter_notes({}, sort="bad-key!")
+        with self.assertRaises(ValueError):
+            core.filter_notes({}, order="sideways")
+
+    def test_filter_notes_elem_match_todos(self):
+        self.write(
+            "plans/a.md",
+            "---\nokf_type: Plan\ntodos:\n"
+            "  - id: x\n    status: pending\n"
+            "  - id: y\n    status: completed\n"
+            "---\n\n# A\n",
+        )
+        self.write(
+            "plans/b.md",
+            "---\nokf_type: Plan\ntodos:\n"
+            "  - id: z\n    status: completed\n"
+            "---\n\n# B\n",
+        )
+        self.write(
+            "plans/c.md",
+            "---\nokf_type: Note\ntags: [pending]\n---\n\n# C\n",
+        )
+        core.index_vault(verbose=False)
+
+        total, rows = core.filter_notes(
+            {"okf_type": "Plan", "todos": {"$elemMatch": {"status": "pending"}}}
+        )
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "plans/a.md")
+
+        total, rows = core.filter_notes(
+            {
+                "okf_type": "Plan",
+                "todos": {"$elemMatch": {"id": "x", "status": "pending"}},
+            }
+        )
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "plans/a.md")
+
+        # Correlated: id=y is completed, not pending — no match
+        total, rows = core.filter_notes(
+            {
+                "todos": {"$elemMatch": {"id": "y", "status": "pending"}},
+            }
+        )
+        self.assertEqual(total, 0)
+
+        # Dotted sugar — any element's status
+        total, rows = core.filter_notes({"todos.status": "pending"})
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0][1], "plans/a.md")
+
+        # $contains on list-of-dicts must not match scalar rhs
+        total, rows = core.filter_notes({"todos": {"$contains": "pending"}})
+        self.assertEqual(total, 0)
 
     def test_recent_preview_and_frontmatter_field(self):
         self.write("t.md", "---\ntitle: Hello\n---\n\n# Head\n\npreview body here\n")
