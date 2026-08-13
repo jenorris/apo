@@ -4,6 +4,8 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-08-12
+
 Search snippet quality — reranking always scored `full_texts` (untruncated), so `search_notes`'s `snippet_chars` preview was the only thing affected here; no ranking change.
 
 ### Changed
