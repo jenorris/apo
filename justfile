@@ -61,6 +61,14 @@ vault-tools *ARGS:
 rpc *ARGS:
     {{eng}} serve {{ARGS}}
 
+# Localhost desk viewer (local-web contract; default http://127.0.0.1:7432).
+# Requires vault system/contracts/local-web-contract.schema.yaml.
+serve *ARGS:
+    {{eng}} web-serve {{ARGS}}
+
+web-serve *ARGS:
+    {{eng}} web-serve {{ARGS}}
+
 watch-fg:
     {{eng}} watch
 

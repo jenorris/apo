@@ -1,4 +1,4 @@
-"""Command-line interface: index | search | stats | watch | desk-project | serve."""
+"""Command-line interface: index | search | stats | watch | desk-project | serve | web-serve."""
 from __future__ import annotations
 
 import argparse
@@ -98,6 +98,17 @@ def _cmd_serve(args) -> int:
     return 0
 
 
+def _cmd_web_serve(args) -> int:
+    from .local_web import run_local_web
+
+    run_local_web(
+        vault=getattr(args, "vault", "") or "",
+        host=args.host or None,
+        port=args.port if args.port else None,
+    )
+    return 0
+
+
 def _cmd_desk_project(args) -> int:
     """Render desk policy body + guidance from live desk + vault contracts."""
     from . import vault_project
@@ -176,6 +187,15 @@ def main(argv: list[str] | None = None) -> int:
         help="optional bearer token (default APO_RPC_TOKEN; empty = no auth on loopback)",
     )
     pr.set_defaults(func=_cmd_serve)
+
+    pwweb = sub.add_parser(
+        "web-serve",
+        help="localhost desk viewer (local-web contract; default http://127.0.0.1:7432)",
+    )
+    pwweb.add_argument("--vault", default="", help="vault name from APO_VAULTS (must have local-web-contract)")
+    pwweb.add_argument("--host", default="", help="bind host (default contract bind / APO_LOCAL_WEB_HOST)")
+    pwweb.add_argument("--port", type=int, default=0, help="bind port (default contract port / 7432)")
+    pwweb.set_defaults(func=_cmd_web_serve)
 
     args = p.parse_args(argv)
     return args.func(args)

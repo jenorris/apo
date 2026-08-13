@@ -1,0 +1,42 @@
+# Apo local-web contract — template / example
+# Copy to <vault>/system/contracts/local-web-contract.schema.yaml and edit.
+# Legacy path system/config/local-web-contract.schema.yaml still discovered.
+# Env override: APO_LOCAL_WEB_CONTRACT
+# Runtime: apo-engine web-serve / just serve — localhost desk viewer + on-the-fly HTML.
+# Distinct from usage-contract contribution.render (export-only htmlize/export).
+
+local_web_version: "0.2"
+bind: "127.0.0.1"
+port: 7432
+# adaptive | para | llm-wiki (omit or adaptive = derive from co-active layout signals)
+mode: adaptive
+# Empty browse_roots = derive from PARA / llm-wiki dirs on disk. Explicit list wins.
+browse_roots: []
+exclude_globs:
+  - "inbox/daily/**"
+  - "system/agent-client/**"
+  - "system/audit/**"
+  - "**/audit/resolved/**"
+  - "**/.git/**"
+  - "**/node_modules/**"
+  - "archives/**"
+audit:
+  enabled: true
+  default_root: "system/audit"
+  source_label: web-viewer
+features:
+  search: true
+  filter: true
+  backlinks: true
+  mermaid: true
+  math: true
+# Live preview render (in-memory; never writes adjacent .html).
+render:
+  engine: pandoc
+  default_layout: memo # memo | policy | ops-card | newspaper
+  stylesheet: system/assets/htmlize.css
+  template: system/assets/htmlize.template.html
+  header: system/assets/htmlize-header.html
+  strip_frontmatter: true
+  # serve-routes | plain — in-scope [[wikilinks]] → /note?path=… when serve-routes
+  resolve_wikilinks: serve-routes

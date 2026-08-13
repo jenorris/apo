@@ -446,6 +446,32 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.extend(contrib_lines)
         lines.append("")
 
+    # Local-web base URLs (live preview — distinct from usage render.profile)
+    local_web_lines: list[str] = []
+    for name, row in sorted(vaults.items()):
+        if not isinstance(row, dict):
+            continue
+        root_s = str(row.get("root") or "").strip()
+        if not root_s:
+            continue
+        from apo_engine import local_web_contract as _lwc
+
+        lw = _lwc.load_local_web_contract(Path(root_s))
+        if lw is None:
+            continue
+        bind, port = _lwc.resolve_bind_port(lw)
+        local_web_lines.append(f"- `{name}`: `http://{bind}:{port}/` (`just serve --vault {name}`)")
+    if local_web_lines:
+        lines.append("## Local-web preview")
+        lines.append("")
+        lines.append(
+            "On-the-fly HTML (no adjacent `.html`). Distinct from usage-contract "
+            "`contribution.render` (export-only). Open `/note?path=…` or `/api/render?path=…`."
+        )
+        lines.append("")
+        lines.extend(local_web_lines)
+        lines.append("")
+
     if integ_lines:
         lines.append("## Expected integrations")
         lines.append("")

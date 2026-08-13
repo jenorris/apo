@@ -24,6 +24,7 @@ Do **not** confuse templates here with a setting in MCP config. Opt-in means: pu
 | [search-contract.schema.yaml](./search-contract.schema.yaml) | **Ship** | Per-vault default exclude globs for unscoped search + history browse — [search-contract.schema.yaml](./search-contract.schema.yaml) |
 | [usage-contract.schema.yaml](./usage-contract.schema.yaml) | **Ship** | Host-neutral vault usage IR for harness / `vault(project)` — **not** interpreted by the engine for search/write |
 | [telemetry-contract.schema.yaml](./telemetry-contract.schema.yaml) | **Ship** | Vault-defined tool-use telemetry privacy + agent `session_stats` access — [telemetry.md](./telemetry.md) |
+| [local-web.md](./local-web.md) | **Ship** | Localhost desk viewer + on-the-fly HTML — [local-web-contract.schema.yaml](./local-web-contract.schema.yaml) |
 
 **Existing vault:** [../onboard-prompt.md](../onboard-prompt.md) — infer first; do not force a contract.
 
@@ -37,7 +38,7 @@ Templates may ship:
 2. **Behaviors** — when/how the agent must write (prose for Cursor/Claude rules)
 3. **Machine contract** — YAML Apo loads at write time (OKF stamp/validate today)
 
-**Usage `contribution`:** optional authoring dialect (`plain-md` \| `gfm` \| `obsidian-ofm`) plus feature/surface overrides and an orthogonal `render` profile (`none` \| `htmlize`). Desk projection loads usage bodies only and emits a one-liner per vault into apo-desk; deep OFM/htmlize docs stay in `contribution.pointers`. Not a machine contract — engine does not validate body syntax.
+**Usage `contribution`:** optional authoring dialect (`plain-md` \| `gfm` \| `obsidian-ofm`) plus feature/surface overrides and an orthogonal `render` profile (`none` \| `htmlize` \| `export`). Desk projection loads usage bodies only and emits a one-liner per vault into apo-desk; deep OFM/htmlize docs stay in `contribution.pointers`. **Export-only** — not body syntax and not the live preview gate. Live on-the-fly HTML is gated by **[local-web](./local-web.md)** (`just serve` / `apo-engine web-serve`).
 
 **Usage `integrations`:** optional per-vault expected MCP host keys / CLI names (`mcp.required|expected|optional|never`, `cli` / `cli.expected`). Desk projection emits an **Expected integrations** section into apo-desk. Advisory for agents only — not a machine contract; Cursor still uses a global `mcp.json`.
 
