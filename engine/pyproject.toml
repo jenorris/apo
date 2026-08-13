@@ -33,6 +33,12 @@ mcp = [
     "fastmcp>=2.0.0",
     "httpx>=0.27",
 ]
+# Optional OTLP span forwarding (APO_OTEL_EXPORT=1 or OTEL_EXPORTER_OTLP_ENDPOINT).
+# No-op when absent — DuckDB metrics remain the default sink.
+otel = [
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-http>=1.20",
+]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

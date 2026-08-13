@@ -48,6 +48,28 @@ An optional **non-embedded local OTLP services** mode (engine talking to a local
 
 Legacy `local` / desk-metrics HTTP ingest is **retired in v0.5.0** — maps to `embedded`. Env override: `APO_METRICS_BACKEND=embedded|none`.
 
+## OTLP forwarding (optional, additive)
+
+DuckDB stays the queryable habit-KPI store; when enabled, each already-privacy-redacted event is **also** emitted as one OpenTelemetry span so Apo's real in-process timing lands in Jaeger next to Cursor-hook / just-recipe spans.
+
+| Aspect | Value |
+|--------|-------|
+| Service | `apo-mcp` |
+| Span | `apo.tool` (width = `duration_ms`) |
+| Attributes | `tool.name`, `tool.ok`, `vault_id`, `conversation_id`, `collection`, `req_bytes`, `resp_bytes`, `apo_version`, flags, `error` / `error_shape` |
+| Trace correlation | `trace_id = sha256(conversation_id)[:16]` (matches Workbench hooks); nests under the `"{cid}:session"` span so Apo joins the same Jaeger trace |
+| Endpoint | `OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://127.0.0.1:4318`), OTLP `http/protobuf` |
+
+**Enablement** (precedence): env `APO_OTEL_EXPORT=1|0` → vault contract `otel.export: true|false` → auto-on when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+
+**Dependency:** optional extra `pip install apo-engine[otel]` (`opentelemetry-sdk` + otlp-http exporter). No-op when absent or the collector is down — best-effort, never raises, never blocks the tool or the DuckDB write.
+
+```yaml
+# <vault>/system/contracts/telemetry-contract.schema.yaml
+otel:
+  export: true   # or false to opt out even when an endpoint is set
+```
+
 ## Session identity (MCP wire)
 
 Per-call attribution — safe for **multiple concurrent sessions** and **remote Apo** (gateway/RPC):
