@@ -33,6 +33,12 @@ Ship `paths: vault_relative` + `expose_paths: true` so habit rollups can identif
 
 RPC: `POST /v1/vault` with `action=stats` (+ optional `days=`). `POST /v1/telemetry` and `POST /v1/session_stats` are **deprecated** (delegate to `stats` or return `bad_action`).
 
+### Current state (2026-08-08)
+
+The Apo engine does **not** itself embed or export OTLP. Its own telemetry is the DuckDB tool-call metrics system described under [Store backends](#store-backends) (`APO_TOOL_METRICS`, `~/.apo/metrics.duckdb`, `just tool-stats`). The **"OTel hooks → Jaeger"** row above and the [Hooks](#hooks-cursor-local) section describe a separate, external pipeline — Cursor pre/postToolUse hooks on Workbench exporting to `otlp-mcp` + Jaeger — not OTLP export from the engine.
+
+An optional **non-embedded local OTLP services** mode (engine talking to a locally-run OTLP collector, as opposed to the Workbench Cursor-hook pipeline above) was started on Jeremy's work computer but has not landed in this checkout or any remote branch as of this date — there is currently no such capability in `apo_engine`. This note will be updated once that work lands.
+
 ## Store backends
 
 | `store.backend` | Path / URI |

@@ -30,6 +30,7 @@ import yaml
 
 from . import config
 from . import rerank
+from . import table_markdown
 from . import vaults
 
 # Query-embedding LRU (identical agent searches within TTL skip Ollama).
@@ -791,14 +792,20 @@ def _fts_query(query: str) -> str | None:
 def ensure_fts(db: sqlite3.Connection) -> None:
     """Backfill the FTS index from existing chunks (for indexes built pre-FTS). No embedding.
 
-    Uses INSERT…SELECT so chunk text never materializes in Python. Does not commit —
+    Uses INSERT…SELECT so chunk text never materializes in bulk in Python — the
+    cleanup (_index_text_for_embedding, same transform the live insert path uses)
+    runs per-row via a registered scalar function instead. Does not commit —
     callers (_finalize_index_writes) own the transaction boundary.
     """
     row = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
     if row and row[0] == "1":
         return
+    db.create_function("_apo_index_text", 2, _index_text_for_embedding, deterministic=True)
     db.execute("DELETE FROM chunks_fts")
-    db.execute("INSERT INTO chunks_fts(rowid, text) SELECT id, text FROM chunks")
+    db.execute(
+        "INSERT INTO chunks_fts(rowid, text) "
+        "SELECT id, _apo_index_text(text, COALESCE(chunk_kind, 'section')) FROM chunks"
+    )
     db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_ready','1')")
 
 
@@ -851,7 +858,7 @@ def _insert_pending_chunks(
             )
         )
         vec_rows.append((rid, blob))
-        fts_rows.append((rid, ctext))
+        fts_rows.append((rid, _index_text_for_embedding(ctext, (meta or {}).get("chunk_kind") or "section")))
     db.executemany(
         """INSERT INTO chunks(id, path, ord, heading, text, start_line, end_line, heading_level,
                                chunk_hash, content_hash, embedding, section_bytes,
@@ -895,7 +902,7 @@ def _embed_and_store_pending(
     batch = _EMBED_COMMIT_BATCH
     for i in range(0, total, batch):
         part = pending[i : i + batch]
-        all_vectors.extend(embed([t[3] for t in part], verbose=False))
+        all_vectors.extend(embed([_pending_index_text(t) for t in part], verbose=False))
         if verbose:
             print(f"  … embedded {min(i + batch, total)}/{total}", flush=True)
 
@@ -1598,7 +1605,7 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
                 all_vectors.append(by_hash[body_hash])
             else:
                 all_vectors.append(None)  # placeholder filled below
-                texts_to_embed.append(row[3])
+                texts_to_embed.append(_pending_index_text(row))
                 embed_slots.append(slot)
 
     if texts_to_embed:
@@ -1721,6 +1728,150 @@ def _path_excluded(path: str, prefixes: list[str], globs: list[re.Pattern[str]])
     return any(g.fullmatch(path) is not None for g in globs)
 
 
+# --------------------------------------------------------------------------- #
+# Snippet construction — signal-density-per-character compression, not
+# retrieval. Reranking (below) always scores full_texts; snippet_chars only
+# shapes what a Hit shows the caller. table_row/table_header text is already
+# flattened label:value text (see table_markdown.row_flatten_text /
+# header_flatten_text) and never worth truncating further. "section" chunk
+# text is raw markdown source, so it pays syntax overhead (table separator
+# rows, heading marks, bold/list/quote syntax) that buys the caller nothing.
+# --------------------------------------------------------------------------- #
+_SEP_ROW_RE = re.compile(r"^[ \t]*\|?[ \t:|-]*-[ \t:|-]*\|?[ \t]*$", re.MULTILINE)
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MD_ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)")
+_MD_HEADING_RE = re.compile(r"^#{1,6}[ \t]+", re.MULTILINE)
+_MD_LIST_RE = re.compile(r"^([ \t]*)[-*+][ \t]+", re.MULTILINE)
+_MD_QUOTE_RE = re.compile(r"^>[ \t]?", re.MULTILINE)
+_BLANK_RUN_RE = re.compile(r"\n{3,}")
+_WS_RE = re.compile(r"\s")
+
+_FTS_SNIPPET_MAX_TOKENS = 24  # sqlite fts5 snippet() caps at 64; keep it modest
+
+
+def _collapse_full_tables(text: str) -> str:
+    """Replace each embedded GFM table with a one-line schema marker.
+
+    A table's rows are independently indexed as table_row/table_header
+    chunks (already optimally flattened) — showing raw pipe/dash syntax in a
+    section snippet is pure redundancy at best, budget-eating noise at worst.
+    """
+    lines = text.split("\n")
+    try:
+        tables = table_markdown.find_tables(lines)
+    except Exception:
+        return text
+    if not tables:
+        return text
+    out = list(lines)
+    for t in sorted(tables, key=lambda tbl: tbl.start_line, reverse=True):
+        headers = ", ".join(h.strip() for h in t.headers if h.strip())
+        plural = "" if len(t.rows) == 1 else "s"
+        marker = f"[table: {len(t.rows)} row{plural} — {headers}]"
+        out[t.start_line : t.end_line + 1] = [marker]
+    return "\n".join(out)
+
+
+def _strip_markdown_decoration(text: str) -> str:
+    """Drop prose-only markdown syntax that costs snippet budget for no signal.
+
+    Never applied to table cell text — column context is load-bearing there
+    (bare numerics embed/read weakly; see table_markdown.row_flatten_text).
+    Tables are collapsed to markers by _collapse_full_tables before this runs.
+    """
+    text = _MD_LINK_RE.sub(r"\1", text)
+    text = _MD_BOLD_RE.sub(r"\1", text)
+    text = _MD_ITALIC_RE.sub(r"\1", text)
+    text = _MD_HEADING_RE.sub("", text)
+    text = _MD_LIST_RE.sub(r"\1", text)
+    text = _MD_QUOTE_RE.sub("", text)
+    return text
+
+
+def _truncate_word_boundary(text: str, limit: int) -> str:
+    """Cut at the last whitespace at-or-before limit — never mid-word."""
+    if limit <= 0 or len(text) <= limit:
+        return text
+    window = text[:limit]
+    last_ws = None
+    for last_ws in _WS_RE.finditer(window):
+        pass
+    if last_ws is not None:
+        return window[: last_ws.start()].rstrip()
+    return window.rstrip()
+
+
+def _fts_snippet_excerpt(db: sqlite3.Connection, match: str, rid: int) -> str | None:
+    """Query-anchored excerpt via FTS5's built-in snippet() — no reindex needed,
+    chunks_fts already stores the raw text. Only meaningful for hits that
+    actually matched the keyword side of hybrid search; vector-only hits have
+    no term position to anchor around."""
+    try:
+        row = db.execute(
+            "SELECT snippet(chunks_fts, 0, '', '', ' … ', ?) "
+            "FROM chunks_fts WHERE chunks_fts MATCH ? AND rowid = ?",
+            (_FTS_SNIPPET_MAX_TOKENS, match, rid),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row[0] if row and row[0] else None
+
+
+def _index_text_for_embedding(ctext: str, chunk_kind: str) -> str:
+    """Cleaned text fed to the embedder and chunks_fts — never chunks.text itself.
+
+    chunks.text stays byte-for-byte the raw section (read_note(chunk_hash=)
+    returns it verbatim, and expected_content_hash preconditions are derived
+    from the same live-file bytes), so this must never touch that column.
+    Only the embed/FTS inputs benefit from stripping the markdown syntax tax
+    (table separator rows, bold/list/quote/link decoration) that dilutes the
+    vector and pads FTS snippet() windows with punctuation. table_row/header
+    text is already flattened and dense — nothing to clean there.
+    """
+    if chunk_kind not in ("section", "", None):
+        return ctext
+    cleaned = _collapse_full_tables(ctext)
+    cleaned = _SEP_ROW_RE.sub("", cleaned)
+    cleaned = _strip_markdown_decoration(cleaned)
+    cleaned = _BLANK_RUN_RE.sub("\n\n", cleaned).strip()
+    return cleaned or ctext  # never hand the embedder/FTS an empty string
+
+
+def _pending_chunk_kind(row: "PendingChunk | tuple") -> str:
+    meta = row[10] if len(row) > 10 else None
+    meta = meta if isinstance(meta, dict) else None
+    return (meta or {}).get("chunk_kind") or "section"
+
+
+def _pending_index_text(row: "PendingChunk | tuple") -> str:
+    return _index_text_for_embedding(row[3], _pending_chunk_kind(row))
+
+
+def _build_snippet(
+    text: str,
+    snippet_chars: int,
+    chunk_kind: str,
+    *,
+    db: sqlite3.Connection | None = None,
+    match: str | None = None,
+    rid: int | None = None,
+    fts_rowids: set[int] | None = None,
+) -> str:
+    if snippet_chars <= 0:
+        return text
+    if chunk_kind in ("table_row", "table_header"):
+        return text
+    excerpt = None
+    if db is not None and match and fts_rowids and rid in fts_rowids:
+        excerpt = _fts_snippet_excerpt(db, match, rid)
+    source = excerpt if excerpt else _collapse_full_tables(text)
+    cleaned = _SEP_ROW_RE.sub("", source)
+    cleaned = _strip_markdown_decoration(cleaned)
+    cleaned = _BLANK_RUN_RE.sub("\n\n", cleaned).strip()
+    return _truncate_word_boundary(cleaned, snippet_chars)
+
+
 def search(
     query: str,
     k: int = 8,
@@ -1753,6 +1904,7 @@ def search(
 
     fused: dict[int, float] = {}
     frows: list[tuple] = []
+    match: str | None = None
 
     # Overlap query embed with FTS on the shared pool (no per-call executor churn).
     embed_fut = _search_pool.submit(query_embed, query)
@@ -1803,6 +1955,7 @@ def search(
         fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
     for rank, (rid,) in enumerate(frows):
         fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
+    fts_rowid_set = {r[0] for r in frows}
 
     if not fused:
         return []
@@ -1863,7 +2016,15 @@ def search(
         if _path_excluded(path, excl_prefixes, excl_globs):
             continue
         score = fused[rid] / top
-        out_text = text if snippet_chars <= 0 else text[:snippet_chars]
+        out_text = _build_snippet(
+            text,
+            snippet_chars,
+            chunk_kind or "section",
+            db=db,
+            match=match,
+            rid=rid,
+            fts_rowids=fts_rowid_set,
+        )
         hits.append(
             Hit(
                 path=path,

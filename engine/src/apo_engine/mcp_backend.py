@@ -40,7 +40,7 @@ def shape_search_hits(
         )
         content = h.text
         if chunk_kind == "table_row" and content:
-            content = content[:_ROW_SNIPPET_CHARS]
+            content = core._truncate_word_boundary(content, _ROW_SNIPPET_CHARS)
         row = {
             "content": content,
             "score": round(float(h.score), 4),

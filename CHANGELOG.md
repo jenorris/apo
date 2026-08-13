@@ -4,6 +4,17 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+Search snippet quality — reranking always scored `full_texts` (untruncated), so `search_notes`'s `snippet_chars` preview was the only thing affected here; no ranking change.
+
+### Changed
+
+- **`search_notes` snippet construction** no longer takes a raw `text[:snippet_chars]` slice. For `section`-kind hits: embedded GFM tables collapse to a one-line `[table: N rows — col, col, …]` marker (that table's rows are already independently indexed as `table_row`/`table_header` chunks — raw pipe/dash markup in a prose snippet was pure redundancy); decorative markdown (bold/italic/heading marks/list bullets/blockquote markers/link syntax) is stripped from prose; cuts land on a whitespace boundary, never mid-word. `table_row`/`table_header` hits are never truncated — already-flattened `label: value` text, short and dense by construction.
+- **Query-anchored excerpts** — `section`-kind hits that matched via the FTS5 keyword side of hybrid search now get a `snippet(chunks_fts, …)`-windowed excerpt around the actual matching terms instead of a chunk-prefix slice, so a match deep inside a large section is no longer invisible to the caller. Vector-only hits (no FTS match) fall back to the prefix pipeline above. No reindex needed — `chunks_fts` already stores the raw text `snippet()` reads.
+- **`mcp_backend`'s `table_row` content cap** (240 chars) now cuts on a word boundary via the same helper, instead of a raw slice.
+- **Storage-time text split (Phase 4)** — `chunks.text` (canonical: `read_note`, `content_hash`/`expected_content_hash` preconditions) stays byte-for-byte raw; a new `_index_text_for_embedding` derives a cleaned variant (same table-collapse/decoration-strip pipeline as the snippet work above) fed to the embedder and to `chunks_fts`, for `section`-kind chunks only. Wired into all three index-write paths: `_embed_and_store_pending` (full rebuild), `index_files` (incremental/watcher re-embed — also `reembed_one`/`reembed_batch`), and `ensure_fts`'s pre-FTS backfill (previously bypassed the split entirely via a raw `INSERT…SELECT id, text FROM chunks`; now routes the same transform through a registered SQLite scalar function so bulk backfill still avoids materializing chunk text in Python). Requires re-embedding to take effect on already-indexed vaults — `apo_admin(reindex, mode=rebuild, force=true)`.
+
+Design note + phase plan: jeremy vault `projects/apo-pkb/search-snippet-optimization.md`.
+
 ## [0.6.4] — 2026-08-08
 
 ### Fixed
