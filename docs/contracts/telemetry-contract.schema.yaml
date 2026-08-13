@@ -11,6 +11,13 @@ store:
   path: ~/.apo/metrics.duckdb
   local_uri: http://127.0.0.1:9473
 
+# Optional: also forward each event as an OTLP span (service apo-mcp, span apo.tool)
+# to OTEL_EXPORTER_OTLP_ENDPOINT (Jaeger via otlp-mcp). Additive to the DuckDB store.
+# Precedence: env APO_OTEL_EXPORT=1|0 → this flag → auto-on when the endpoint is set.
+# Requires the optional dependency: pip install apo-engine[otel]
+otel:
+  export: true
+
 # Engine records only dimensions listed under allow; strips deny keys at ingest.
 privacy:
   allow:

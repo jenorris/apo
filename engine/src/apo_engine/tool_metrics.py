@@ -414,6 +414,16 @@ def record_call(
         if cid:
             event["conversation_id"] = cid
     event.update(tc.extract_note_context(tool, arguments, policy))
+
+    # Additive OTLP forwarding (Jaeger via otlp-mcp) — DuckDB stays the queryable
+    # store. Best-effort; gated by env/contract; never affects the DuckDB write.
+    try:
+        from apo_engine.otel_forwarder import forward_event
+
+        forward_event(collection, event, vault_root=vault_root)
+    except Exception:
+        pass
+
     from apo_engine.metrics_backend import get_backend
 
     backend = get_backend(vault_root)

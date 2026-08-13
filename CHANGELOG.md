@@ -4,6 +4,10 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- **OTLP span forwarding (optional)** — `record_call` now mirrors each privacy-redacted tool-use event as one OpenTelemetry span to an OTLP collector (Jaeger via otlp-mcp), **additive** to the DuckDB metrics store (which stays the queryable source for `vault(action=stats)`). Service `apo-mcp`, span `apo.tool`; the `trace_id` is derived from `conversation_id` the same way the Workbench Cursor hooks do, so Apo spans join the same Jaeger trace and nest under that conversation's session span. Span width reflects Apo's real in-process `duration_ms`, with `tool.name` / `vault_id` / `req_bytes` / `resp_bytes` / flags / `error_shape` attributes. Enablement: auto-on when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, explicit `APO_OTEL_EXPORT=1|0`, or a vault telemetry-contract `otel.export` flag (precedence: env → contract → endpoint auto). Optional dependency — `pip install apo-engine[otel]`; no-op when the SDK is absent or the collector is down (best-effort, never raises, never blocks the tool or the DuckDB write).
+
 ## [0.8.1] — 2026-08-12
 
 Search snippet quality — reranking always scored `full_texts` (untruncated), so `search_notes`'s `snippet_chars` preview was the only thing affected here; no ranking change.
