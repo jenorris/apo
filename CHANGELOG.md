@@ -4,6 +4,12 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-08-14
+
+### Fixed
+
+- **Empty collection-id index on rename** — if `index-{collection_id}.db` exists but has zero `files` rows, prefer a populated legacy alias (`index-meta.db` / `jeremy` / …) instead of stranding the vault on an empty db.
+
 ## [0.11.0] — 2026-08-14
 
 Atlas PKB cutover — usage `vault_id` / docs / legacy index aliases track `atlas` (`~/Notes/Atlas`, `jenorris/atlas`). Compat still accepts legacy `meta`/`jeremy` index filenames.
