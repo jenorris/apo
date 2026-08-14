@@ -177,7 +177,9 @@ _MCP_INSTRUCTIONS = (
     "read_note(path= or chunk_hash= from search hits); "
     "Thread mtime → expected_mtime on follow-up writes. "
     "Operator traces: otlp-mcp + Jaeger (not Apo MCP). "
-    "Multi-vault: vault= or search_notes(vaults=[])."
+    "Multi-vault: vault= or search_notes(vaults=[]); "
+    "paths may be vault_id:rel (must be a vault configured on this MCP process; "
+    "writes limited to that registry; responses include qualified_path)."
 )
 mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
 
@@ -409,10 +411,25 @@ _REGION_HASH_DESC = (
     "the untouched frontmatter, body, or section/chunk."
 )
 
+_VAULT_REL_PATH_DESC = (
+    "Vault-relative path, or vault_id:rel (e.g. work:areas/threads/x.md). "
+    "Prefix must name a vault configured on this MCP process; unknown → bad_vault. "
+    "Disagrees with vault= → bad_request. Writes are limited to this server's registry."
+)
+
+_VAULT_FOLDER_DESC = (
+    "Folder scope, optionally vault_id:rel (same write/read gate as path). "
+    "Unprefixed uses vault= / process default."
+)
+
+_VAULT_ARG_DESC = (
+    "Vault id from this MCP process registry when path/folder has no vault_id: prefix."
+)
+
 
 @mcp.tool(annotations=_MUTATE)
 async def write_note(
-    path: str,
+    path: Annotated[str, Field(description=_VAULT_REL_PATH_DESC)],
     content: Annotated[
         str | None,
         Field(description="Note body (required for create/overwrite). XOR with sections[]/frontmatter."),
@@ -452,7 +469,7 @@ async def write_note(
         str | None,
         Field(description=_REGION_HASH_DESC),
     ] = None,
-    vault: str = "",
+    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
 ) -> dict:
     """Create or overwrite a note. Use content= (or sections[]/frontmatter). Prefer append_note / patch_note for edits."""
     return await asyncio.to_thread(
@@ -475,7 +492,7 @@ async def append_note(
         str | None,
         Field(description="Body to append (required). Do not repeat the heading."),
     ] = None,
-    path: str = "",
+    path: Annotated[str, Field(description=_VAULT_REL_PATH_DESC)] = "",
     heading: str | None = None,
     chunk_hash: str | None = None,
     position: Literal["end", "start"] = "end",
@@ -501,7 +518,7 @@ async def append_note(
         str | None,
         Field(description=_REGION_HASH_DESC),
     ] = None,
-    vault: str = "",
+    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
 ) -> dict:
     """Preferred add for session log / History / post-search text. Use text=. Anchor: chunk_hash → heading → EOF."""
     return await asyncio.to_thread(
@@ -524,7 +541,7 @@ async def append_note(
 async def patch_note(
     path: Annotated[
         str,
-        Field(description="Vault-relative path for single-path mode. Omit when using items=."),
+        Field(description=_VAULT_REL_PATH_DESC + " Omit when using items=."),
     ] = "",
     ops: Annotated[
         list[PatchOp] | None,
@@ -559,7 +576,7 @@ async def patch_note(
         str | None,
         Field(description=_REGION_HASH_DESC + " Single-path only; per-item for items[]."),
     ] = None,
-    vault: str = "",
+    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
 ) -> dict:
     """Mutate frontmatter/sections or place (ops place). Single: path+ops or place-only ops. Multi: items[]."""
     return await asyncio.to_thread(
@@ -587,14 +604,14 @@ async def patch_note(
 async def read_note(
     path: Annotated[
         str,
-        Field(description="Vault-relative path (XOR with chunk_hash)."),
+        Field(description=_VAULT_REL_PATH_DESC + " XOR with chunk_hash."),
     ] = "",
     chunk_hash: Annotated[
         str | None,
         Field(description="Section anchor from search_notes hits (XOR with path)."),
     ] = None,
     heading: str | None = None,
-    vault: str = "",
+    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
     start_line: int | None = None,
     end_line: int | None = None,
     max_chars: int | None = None,
@@ -666,12 +683,17 @@ async def read_note(
 @mcp.tool(annotations=_RO)
 async def search_notes(
     query: str,
-    folder: str = "",
+    folder: Annotated[str, Field(description=_VAULT_FOLDER_DESC)] = "",
     folders: Annotated[
         list[str] | None,
-        Field(description="Multi-folder scope (XOR with folder=). Merge by score."),
+        Field(
+            description=(
+                "Multi-folder scope (XOR with folder=). Merge by score. "
+                "Each entry may be vault_id:rel (same gate as folder=)."
+            ),
+        ),
     ] = None,
-    vault: str = "",
+    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
     vaults: Annotated[
         list[str] | None,
         Field(
@@ -733,9 +755,9 @@ async def filter_notes(
             ),
         ),
     ] = None,
-    folder: str = "",
+    folder: Annotated[str, Field(description=_VAULT_FOLDER_DESC)] = "",
     limit: int = 20,
-    vault: str = "",
+    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
     offset: int = 0,
     fields: Annotated[
         list[str] | None,
@@ -776,7 +798,12 @@ async def filter_notes(
 
 
 @mcp.tool(annotations=_RO)
-async def backlinks(path: str, limit: int = 100, offset: int = 0, vault: str = "") -> dict:
+async def backlinks(
+    path: Annotated[str, Field(description=_VAULT_REL_PATH_DESC)],
+    limit: int = 100,
+    offset: int = 0,
+    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
+) -> dict:
     """Index-backed inbound [[wiki-links]] to this path/stem/title (target need not exist on disk)."""
     return await asyncio.to_thread(apo_ops.backlinks, path, limit=limit, offset=offset, vault=vault)
 
@@ -788,18 +815,18 @@ async def history(
         int,
         Field(description="Browse only: skip this many newest notes for pagination (has_more in response)."),
     ] = 0,
-    folder: str = "",
+    folder: Annotated[str, Field(description=_VAULT_FOLDER_DESC)] = "",
     path: Annotated[
         str,
         Field(
             description=(
-                "Vault-relative note path for file-level history. "
-                "When set and the vault has an active git contract + .git, returns commits. "
+                _VAULT_REL_PATH_DESC
+                + " When set and the vault has an active git contract + .git, returns commits. "
                 "Empty → browse newest notes by mtime (optional folder=/since=/until=/preview=)."
             ),
         ),
     ] = "",
-    vault: str = "",
+    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
     since: Annotated[
         str,
         Field(description="Browse only: mtime lower bound (YYYY-MM-DD or ISO datetime, ET for date-only)."),

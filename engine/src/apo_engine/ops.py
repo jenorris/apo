@@ -47,6 +47,12 @@ from apo_engine.yaml_patch import apply_yaml_patch
 from apo_engine.chunk_anchor import materialize_ops_chunk_hashes, resolve_chunk_anchor
 from apo_engine.mcp_backend import shape_search_hits
 from apo_engine.patch_ops import ops_to_dicts
+from apo_engine.path_ref import (
+    PathRefError,
+    merge_vault_arg,
+    peel_path_ref,
+    qualified_path as _qualified_path,
+)
 from apo_engine.validation_hints import flatten_patch_failure_error
 from apo_engine.write_guard import (
     PathTouch,
@@ -74,6 +80,7 @@ def _err(**kw: Any) -> dict[str, Any]:
 
 
 def _binding(vault: str = "") -> vaults.VaultBinding:
+    """Resolve vault by name — must be in this process registry (write/read gate)."""
     default, bindings = vaults.load_bindings()
     key = (vault or "").strip() or default
     if key not in bindings:
@@ -85,6 +92,31 @@ def _load_bindings():
     """Thin indirection so callers can name a local param ``vaults`` without
     shadowing the ``apo_engine.vaults`` module import."""
     return vaults.load_bindings()
+
+
+def _resolve_binding_and_rel(path: str, vault: str = "") -> tuple[vaults.VaultBinding, str]:
+    """Peel optional ``vault_id:rel`` prefix; gate vault_id to process registry.
+
+    Mutating and path-bearing ops use this so writes cannot target vaults outside
+    the MCP/RPC process bindings.
+    """
+    default, bindings = vaults.load_bindings()
+    known = set(bindings)
+    try:
+        pref, rel = peel_path_ref(path, known=known)
+        key = merge_vault_arg(pref, vault, default=default)
+    except PathRefError as e:
+        raise OpsError(e.code, e.message) from e
+    if key not in bindings:
+        raise OpsError("bad_vault", f"unknown vault {key!r}; available: {sorted(bindings)}")
+    return bindings[key], rel
+
+
+def _stamp_qualified(out: dict[str, Any], *, vault: str, path: str) -> dict[str, Any]:
+    """Add ``qualified_path`` for agent copy-paste (non-breaking additive field)."""
+    if out.get("ok") and vault and path:
+        out["qualified_path"] = _qualified_path(vault, path)
+    return out
 
 
 def _safe_resolve(root: Path, relative_path: str) -> Path:
@@ -356,6 +388,7 @@ def _finalize_write(
         expected_mtime=expected_mtime,
         content=content,
     )
+    out = _stamp_qualified(out, vault=vault, path=path)
     return _attach_watcher_tip(out)
 
 
@@ -621,6 +654,10 @@ def _search_one_vault(
     if stamp_vault:
         for row in results:
             row["vault"] = b.name
+    for row in results:
+        src = str(row.get("source") or "")
+        if src:
+            row["qualified_path"] = _qualified_path(b.name, src)
     reranked = False
     if rr is not None:
         if rr.get("applied"):
@@ -635,6 +672,45 @@ def _search_one_vault(
     if missing:
         warnings.append(missing)
     return results, warnings, reranked, applied_default
+
+
+def _search_folder_pairs(
+    folder_list: list[str],
+    targets: list[vaults.VaultBinding],
+    vault_arg: str,
+) -> list[tuple[vaults.VaultBinding, str]]:
+    """Expand folders with optional ``vault_id:rel`` prefixes into (binding, folder) pairs."""
+    default, bindings = vaults.load_bindings()
+    known = set(bindings)
+    vault_s = (vault_arg or "").strip()
+    pairs: list[tuple[vaults.VaultBinding, str]] = []
+    for raw in folder_list:
+        try:
+            pref, rel = peel_path_ref(raw, known=known)
+            if pref:
+                key = merge_vault_arg(pref, vault_s, default=pref)
+            else:
+                # Unprefixed folder: apply to every search target
+                for b in targets:
+                    pairs.append((b, rel.replace("\\", "/").strip("/")))
+                continue
+        except PathRefError as e:
+            raise OpsError(e.code, e.message) from e
+        if key not in bindings:
+            raise OpsError("bad_vault", f"unknown vault {key!r}; available: {sorted(bindings)}")
+        # Prefixed folder must be allowed for this search (target list or vault=)
+        target_names = {b.name for b in targets}
+        if key not in target_names and vault_s and vault_s != key:
+            raise OpsError(
+                "bad_request",
+                f"folder prefix vault {key!r} is not in search targets {sorted(target_names)}",
+            )
+        if key not in target_names:
+            # Single prefixed folder without vault=/vaults= covering it — allow if in registry
+            pairs.append((bindings[key], rel.replace("\\", "/").strip("/")))
+        else:
+            pairs.append((bindings[key], rel.replace("\\", "/").strip("/")))
+    return pairs
 
 
 def search(
@@ -669,66 +745,69 @@ def search(
         )
     folder_list: list[str] = []
     if folders:
-        folder_list = [f.replace("\\", "/").strip("/") for f in folders if isinstance(f, str) and f.strip()]
+        folder_list = [f for f in folders if isinstance(f, str) and f.strip()]
     elif folder.strip():
-        folder_list = [folder.replace("\\", "/").strip("/")]
-    for b in targets:
-        for folder_clean in folder_list:
+        folder_list = [folder.strip()]
+    if not folder_list:
+        folder_list = [""]
+    try:
+        pairs = _search_folder_pairs(folder_list, targets, vault)
+    except OpsError as e:
+        return _err(error=e.code, message=e.message)
+    for b, folder_clean in pairs:
+        if folder_clean:
             try:
                 _safe_resolve(b.resolved().root, folder_clean)
             except ValueError as e:
                 return _err(error="bad_path", message=str(e))
-    if not folder_list:
-        folder_list = [""]
-    fanout_vaults = len(targets) > 1
-    fanout_folders = len(folder_list) > 1
+    fanout_vaults = len({b.name for b, _ in pairs}) > 1
+    fanout_folders = len({f for _, f in pairs}) > 1
     all_rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     any_reranked = False
     default_exclude: list[str] | None = None
     default_exclude_by_vault: dict[str, list[str]] = {}
     failed = 0
-    total_attempts = len(targets) * len(folder_list)
-    for b in targets:
-        for folder_clean in folder_list:
-            try:
-                rows, w, reranked, applied_default = _search_one_vault(
-                    query,
-                    b,
-                    k=fetch_k,
-                    folder_clean=folder_clean,
-                    snippet_chars=snippet_chars,
-                    exclude=exclude,
-                    hybrid=hybrid,
-                    stamp_vault=fanout_vaults or fanout_folders,
-                )
-                if applied_default:
-                    if fanout_vaults:
-                        default_exclude_by_vault[b.name] = applied_default
-                    else:
-                        default_exclude = applied_default
-                all_rows.extend(rows)
-                warnings.extend(w)
-                any_reranked = any_reranked or reranked
-            except SystemExit as e:
-                msg = str(e) or "index unavailable"
-                if total_attempts > 1:
-                    failed += 1
-                    prefix = f"vault {b.name}" if fanout_vaults else ""
-                    if folder_clean:
-                        prefix = f"{prefix} folder {folder_clean}".strip()
-                    warnings.append(f"{prefix}: search_failed ({msg})".strip())
-                    continue
-                return _err(error="search_failed", message=msg)
-            except Exception as e:
-                if total_attempts > 1:
-                    failed += 1
-                    prefix = f"vault {b.name}" if fanout_vaults else ""
-                    if folder_clean:
-                        prefix = f"{prefix} folder {folder_clean}".strip()
-                    warnings.append(f"{prefix}: search_failed ({e})".strip())
-                    continue
-                return _err(error="search_failed", message=str(e))
+    total_attempts = len(pairs)
+    for b, folder_clean in pairs:
+        try:
+            rows, w, reranked, applied_default = _search_one_vault(
+                query,
+                b,
+                k=fetch_k,
+                folder_clean=folder_clean,
+                snippet_chars=snippet_chars,
+                exclude=exclude,
+                hybrid=hybrid,
+                stamp_vault=fanout_vaults or fanout_folders,
+            )
+            if applied_default:
+                if fanout_vaults:
+                    default_exclude_by_vault[b.name] = applied_default
+                else:
+                    default_exclude = applied_default
+            all_rows.extend(rows)
+            warnings.extend(w)
+            any_reranked = any_reranked or reranked
+        except SystemExit as e:
+            msg = str(e) or "index unavailable"
+            if total_attempts > 1:
+                failed += 1
+                prefix = f"vault {b.name}" if fanout_vaults else ""
+                if folder_clean:
+                    prefix = f"{prefix} folder {folder_clean}".strip()
+                warnings.append(f"{prefix}: search_failed ({msg})".strip())
+                continue
+            return _err(error="search_failed", message=msg)
+        except Exception as e:
+            if total_attempts > 1:
+                failed += 1
+                prefix = f"vault {b.name}" if fanout_vaults else ""
+                if folder_clean:
+                    prefix = f"{prefix} folder {folder_clean}".strip()
+                warnings.append(f"{prefix}: search_failed ({e})".strip())
+                continue
+            return _err(error="search_failed", message=str(e))
 
     if total_attempts > 1 and failed == total_attempts:
         return _err(
@@ -1009,7 +1088,7 @@ def _read_from_chunk(
     if format in ("json", "row"):
         _attach_structured_table(out_sec, chunk, rel, file_text, format)
 
-    return out_sec
+    return _stamp_qualified(out_sec, vault=b.name, path=rel)
 
 
 def _attach_structured_table(
@@ -1120,7 +1199,7 @@ def read_note(
         return _err(path=path_s, error="bad_request", message="mode must be auto|toc|section")
 
     try:
-        b = _binding(vault)
+        b, path_s = _resolve_binding_and_rel(path_s, vault)
         root = b.resolved().root
         full = _safe_resolve(root, path_s)
     except OpsError as e:
@@ -1138,7 +1217,7 @@ def read_note(
         with vaults.bind(b):
             toc_out = _build_toc(path_s, file_bytes)
         toc_out.update({"ok": True, "path": path_s, "vault": b.name, "scope": "toc"})
-        return toc_out
+        return _stamp_qualified(toc_out, vault=b.name, path=path_s)
     out: dict[str, Any] = {
         "ok": True,
         "path": path_s,
@@ -1215,7 +1294,7 @@ def read_note(
     _record_path_touch(
         b.name, path_s, float(out["mtime"]), text, heading=heading
     )
-    return out
+    return _stamp_qualified(out, vault=b.name, path=path_s)
 
 
 def expand_section(
@@ -1252,12 +1331,16 @@ def filter_notes(
         if not isinstance(fields, list) or any(not isinstance(x, str) for x in fields):
             return _err(error="bad_request", message="fields must be a list of strings")
     try:
-        b = _binding(vault)
+        if (folder or "").strip():
+            b, folder_clean = _resolve_binding_and_rel(folder.strip(), vault)
+            folder_clean = folder_clean.replace("\\", "/").strip("/")
+        else:
+            b = _binding(vault)
+            folder_clean = ""
         root = b.resolved().root
     except OpsError as e:
         return _err(error=e.code, message=e.message)
 
-    folder_clean = folder.replace("\\", "/").strip("/")
     if folder_clean:
         try:
             _safe_resolve(root, folder_clean)
@@ -1279,6 +1362,7 @@ def filter_notes(
     notes = [
         {
             "path": path,
+            "qualified_path": _qualified_path(b.name, path),
             "modified": datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
             "frontmatter": project_frontmatter(fm, fields),
         }
@@ -1312,7 +1396,7 @@ def expand_chunk(
 
 def backlinks(path: str, *, limit: int = 100, offset: int = 0, vault: str = "") -> dict[str, Any]:
     try:
-        b = _binding(vault)
+        b, path = _resolve_binding_and_rel(path, vault)
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -1338,7 +1422,15 @@ def backlinks(path: str, *, limit: int = 100, offset: int = 0, vault: str = "") 
         rows = core.list_backlinks(targets, exclude_source, limit + offset + 1)
     has_more = len(rows) > offset + limit
     rows = rows[offset : offset + limit]
-    hits = [{"path": src, "line": line, "text": text} for src, line, text in rows]
+    hits = [
+        {
+            "path": src,
+            "qualified_path": _qualified_path(b.name, src),
+            "line": line,
+            "text": text,
+        }
+        for src, line, text in rows
+    ]
     out = {
         "ok": True,
         "target": path,
@@ -1349,7 +1441,7 @@ def backlinks(path: str, *, limit: int = 100, offset: int = 0, vault: str = "") 
     }
     if offset:
         out["offset"] = offset
-    return out
+    return _stamp_qualified(out, vault=b.name, path=path)
 
 
 _HISTORY_TZ = ZoneInfo("America/New_York")
@@ -1405,13 +1497,22 @@ def history(
     - With ``path`` + active git contract: ``source=git`` + commit list.
     - With ``path`` but no git contract / no ``.git``: ``source=mtime`` metadata only.
     """
+    folder_clean = ""
     try:
-        b = _binding(vault)
+        if (path or "").strip():
+            b, rel_path = _resolve_binding_and_rel(path.strip(), vault)
+            rel_path = rel_path.replace("\\", "/")
+        elif (folder or "").strip():
+            b, folder_clean = _resolve_binding_and_rel(folder.strip(), vault)
+            folder_clean = folder_clean.replace("\\", "/").strip("/")
+            rel_path = ""
+        else:
+            b = _binding(vault)
+            rel_path = ""
         root = b.resolved().root
     except OpsError as e:
         return _err(error=e.code, message=e.message)
 
-    rel_path = (path or "").strip().replace("\\", "/")
     if rel_path:
         try:
             full = _safe_resolve(root, rel_path)
@@ -1430,13 +1531,17 @@ def history(
                     message=str(e),
                     vault=b.name,
                 )
-            return {
-                "ok": True,
-                "path": rel_path,
-                "source": "git",
-                "commits": commits,
-                "vault": b.name,
-            }
+            return _stamp_qualified(
+                {
+                    "ok": True,
+                    "path": rel_path,
+                    "source": "git",
+                    "commits": commits,
+                    "vault": b.name,
+                },
+                vault=b.name,
+                path=rel_path,
+            )
 
         # No git contract: mtime + optional index first-line preview.
         modified = datetime.fromtimestamp(full.stat().st_mtime).isoformat(timespec="seconds")
@@ -1481,7 +1586,7 @@ def history(
             out_mtime["chunk_hash"] = chunk_hash
         if chunk_heading:
             out_mtime["heading"] = chunk_heading
-        return out_mtime
+        return _stamp_qualified(out_mtime, vault=b.name, path=rel_path)
 
     # Browse mode
     since_ts, since_err = _parse_history_bound(since, end_of_day=False)
@@ -1503,7 +1608,8 @@ def history(
         if not isinstance(exclude, list) or any(not isinstance(x, str) for x in exclude):
             return _err(error="bad_request", message="exclude must be a list of strings")
 
-    folder_clean = folder.replace("\\", "/").strip("/")
+    if not folder_clean:
+        folder_clean = folder.replace("\\", "/").strip("/")
     effective_exclude, applied_default, _source = search_contract.resolve_search_exclude(
         root,
         caller_exclude=exclude,
@@ -1511,11 +1617,11 @@ def history(
     )
 
     try:
-        base = _safe_resolve(root, folder) if folder else root
+        base = _safe_resolve(root, folder_clean) if folder_clean else root
     except ValueError as e:
         return _err(error="bad_path", message=str(e))
     if not base.exists():
-        return _err(error="not_found", message=f"folder not found: {folder}")
+        return _err(error="not_found", message=f"folder not found: {folder_clean or folder}")
     heading_clean = (heading or "").strip()
     if offset < 0:
         return _err(error="bad_request", message="offset must be >= 0")
@@ -1523,7 +1629,7 @@ def history(
         with vaults.bind(b):
             rows = core.recent_notes_preview(
                 limit + offset + 1,
-                folder,
+                folder_clean,
                 since=since_ts,
                 until=until_ts,
                 preview=mode,
@@ -1538,6 +1644,7 @@ def history(
     for row in rows:
         note: dict[str, Any] = {
             "path": row["path"],
+            "qualified_path": _qualified_path(b.name, row["path"]),
             "modified": datetime.fromtimestamp(row["mtime"]).isoformat(timespec="seconds"),
             "first_line": row.get("first_line") or "",
             "chunk_hash": row.get("chunk_hash") or "",
@@ -1665,7 +1772,7 @@ def write_note(
     content = body
 
     try:
-        b = _binding(vault)
+        b, path = _resolve_binding_and_rel(path, vault)
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -1777,7 +1884,10 @@ def append_note(
     resolved_heading: str | None = heading
 
     try:
-        b = _binding(vault)
+        if path:
+            b, path = _resolve_binding_and_rel(path, vault)
+        else:
+            b = _binding(vault)
     except OpsError as e:
         return _err(path=path or None, error=e.code, message=e.message)
 
@@ -2294,7 +2404,7 @@ def patch_note(
     vault: str = "",
 ) -> dict[str, Any]:
     try:
-        b = _binding(vault)
+        b, path = _resolve_binding_and_rel(path, vault)
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -2602,58 +2712,74 @@ def patch_notes(
     Continues on per-item failure; top-level ``ok`` is true only if every item ok.
     Parallel multi-tool writes (different paths / roles) stay as separate MCP calls —
     do not fold them into this batch.
-    """
-    try:
-        b = _binding(vault)
-    except OpsError as e:
-        return _err(error=e.code, message=e.message)
 
+    Prefixed paths (``vault_id:rel``) must all resolve to the same vault_id in v1.
+    """
     if not isinstance(items, list) or not items:
         return _err(
             error="bad_request",
             message="`items` must be a non-empty array of {path, ops, expected_mtime?}",
-            vault=b.name,
         )
     if len(items) > _PATCH_NOTES_MAX_ITEMS:
         return _err(
             error="bad_request",
             message=f"`items` exceeds max of {_PATCH_NOTES_MAX_ITEMS}",
-            vault=b.name,
         )
+
+    # Peel path prefixes and require a single vault for the whole batch.
+    peeled: list[tuple[int, dict[str, Any], str, list[Any]]] = []
+    vault_ids: set[str] = set()
+    for i, raw in enumerate(items):
+        if not isinstance(raw, dict):
+            return _err(
+                error="bad_item",
+                message=f"items[{i}] must be an object",
+            )
+        path_raw = raw.get("path")
+        path = path_raw.strip() if isinstance(path_raw, str) else ""
+        ops_list = raw.get("ops")
+        place_only = isinstance(ops_list, list) and _all_place_ops(ops_list)
+        if place_only:
+            # place ops carry src/dst; peel via place_note later using vault=
+            peeled.append((i, raw, path, ops_list if isinstance(ops_list, list) else []))
+            continue
+        if not path:
+            return _err(
+                error="bad_request",
+                message=f"items[{i}].path string required",
+            )
+        try:
+            bi, path_rel = _resolve_binding_and_rel(path, vault)
+        except OpsError as e:
+            return _err(path=path, error=e.code, message=e.message)
+        vault_ids.add(bi.name)
+        peeled.append((i, raw, path_rel, ops_list if isinstance(ops_list, list) else []))
+
+    if vault_ids and len(vault_ids) > 1:
+        return _err(
+            error="bad_request",
+            message=(
+                "v1 patch batches must target a single vault; "
+                f"got {sorted(vault_ids)}"
+            ),
+        )
+
+    try:
+        if vault_ids:
+            b = _binding(next(iter(vault_ids)))
+        else:
+            b = _binding(vault)
+    except OpsError as e:
+        return _err(error=e.code, message=e.message)
 
     seen: set[str] = set()
     results: list[dict[str, Any]] = []
     ok_n = 0
     fail_n = 0
 
-    for i, raw in enumerate(items):
-        if not isinstance(raw, dict):
-            entry = {
-                "ok": False,
-                "error": "bad_item",
-                "message": f"items[{i}] must be an object",
-                "index": i,
-                "vault": b.name,
-            }
-            results.append(entry)
-            fail_n += 1
-            continue
-        path_raw = raw.get("path")
-        path = path_raw.strip() if isinstance(path_raw, str) else ""
-        ops_list = raw.get("ops")
+    for i, raw, path, ops_list in peeled:
         place_only = isinstance(ops_list, list) and _all_place_ops(ops_list)
         if not place_only:
-            if not path:
-                entry = {
-                    "ok": False,
-                    "error": "bad_request",
-                    "message": f"items[{i}].path string required",
-                    "index": i,
-                    "vault": b.name,
-                }
-                results.append(entry)
-                fail_n += 1
-                continue
             if path in seen:
                 entry = {
                     "ok": False,
@@ -2700,8 +2826,8 @@ def patch_notes(
                 fail_n += 1
                 continue
 
-        def _opt_hash(key: str) -> str | None:
-            val = raw.get(key)
+        def _opt_hash(key: str, _raw: dict[str, Any] = raw) -> str | None:
+            val = _raw.get(key)
             if val is None:
                 return None
             if not isinstance(val, str):
@@ -2780,17 +2906,27 @@ def place_note(
     - Absolute host ``.md`` outside the vault (allow-roots) → ``copied`` / promote
       (same as former ``send_note``; leaves src; optional ``fields`` merge).
     """
-    try:
-        b = _binding(vault)
-        root = b.resolved().root.resolve()
-    except OpsError as e:
-        return _err(src=src, dst=dst, error=e.code, message=e.message)
-
     raw = (src or "").strip()
     if not raw:
         return _err(src=src, dst=dst, error="bad_path", message="src required")
 
     expanded = Path(raw).expanduser()
+    try:
+        # Prefer dst prefix (always vault-relative) for binding; peel vault-relative src too.
+        if not expanded.is_absolute():
+            b_src, raw = _resolve_binding_and_rel(raw, vault)
+            b_dst, dst = _resolve_binding_and_rel(dst, vault)
+            if b_src.name != b_dst.name:
+                raise OpsError(
+                    "bad_request",
+                    f"src vault {b_src.name!r} conflicts with dst vault {b_dst.name!r}",
+                )
+            b = b_src
+        else:
+            b, dst = _resolve_binding_and_rel(dst, vault)
+        root = b.resolved().root.resolve()
+    except OpsError as e:
+        return _err(src=src, dst=dst, error=e.code, message=e.message)
     in_vault_rel: str | None = None
 
     if expanded.is_absolute():
@@ -2870,7 +3006,14 @@ def move_note(
     vault: str = "",
 ) -> dict[str, Any]:
     try:
-        b = _binding(vault)
+        b_src, src = _resolve_binding_and_rel(src, vault)
+        b_dst, dst = _resolve_binding_and_rel(dst, vault)
+        if b_src.name != b_dst.name:
+            raise OpsError(
+                "bad_request",
+                f"src vault {b_src.name!r} conflicts with dst vault {b_dst.name!r}",
+            )
+        b = b_src
         root = b.resolved().root
         src_full = _safe_resolve(root, src)
         dst_full = _safe_resolve(root, dst)
@@ -2924,7 +3067,7 @@ def send_note(
 ) -> dict[str, Any]:
     """Copy a host .md file into the vault (optional frontmatter merge). Leaves src in place."""
     try:
-        b = _binding(vault)
+        b, dst = _resolve_binding_and_rel(dst, vault)
         root = b.resolved().root
         src_full = _resolve_send_src(src, root)
         dst_full = _safe_resolve(root, dst)
@@ -3021,7 +3164,7 @@ def send_note(
 
 def delete_note(path: str, *, vault: str = "") -> dict[str, Any]:
     try:
-        b = _binding(vault)
+        b, path = _resolve_binding_and_rel(path, vault)
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -3042,7 +3185,9 @@ def delete_note(path: str, *, vault: str = "") -> dict[str, Any]:
     }
     if not purged:
         out["warning"] = "purge not queued — watcher may retain stale chunks"
-    return _attach_watcher_tip(out)
+    return _stamp_qualified(
+        _attach_watcher_tip(out), vault=b.name, path=path
+    )
 
 
 def git_sync_op(

@@ -302,7 +302,8 @@ OPS_FIELD_DESC = (
 )
 
 PATCH_NOTES_ITEMS_DESC = (
-    "Multi-path mode for patch_note: same-vault batch. "
+    "Multi-path mode for patch_note: same-vault batch (paths may be vault_id:rel; "
+    "mixed vaults in one batch → bad_request). "
     "Each item: path + ops, or place-only ops without path (+ optional expected_mtime). "
     "Max 20 items; duplicate paths rejected. Partial failures continue; check per-item ok. "
     "XOR with path+ops — do not pass both. "

@@ -4,6 +4,14 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.11.2] — 2026-08-14
+
+### Added
+
+- **Vault-prefixed tool paths** — `path` / `folder` / `src` / `dst` / `items[].path` accept `vault_id:rel` (same grammar as desk citations). Successful responses add `qualified_path`. Writes are hard-gated to this MCP/RPC process registry (unknown prefix → `bad_vault`; prefix vs `vault=` conflict → `bad_request`). v1 patch batches must target a single vault.
+
+**Upgrade:** Cmd+Q to reload MCP after pull. See [docs/multi-vault.md](docs/multi-vault.md).
+
 ## [0.11.1] — 2026-08-14
 
 ### Fixed

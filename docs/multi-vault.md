@@ -66,4 +66,21 @@ just watch-fg   # one thread per vault; soft-remove + hot-add without full resta
 
 `search_notes` accepts `vaults=["work", "contracts"]` to fan out across those indexes, merge hits by score, and return top `limit` (each hit stamped with `vault`). Do not pass `vault=` and `vaults=` together.
 
+## Qualified paths (`vault_id:rel`)
+
+Tool path / folder args accept an optional **`vault_id:relative/path`** prefix (same grammar as desk citation pointers). Examples:
+
+| Input | Meaning |
+|-------|---------|
+| `areas/threads/x.md` | Vault from `vault=` or process default |
+| `work:areas/threads/x.md` | Vault `work`, path `areas/threads/x.md` |
+
+**Writability gate:** the prefix (and `vault=`) must name a vault in **this MCP/RPC/watch process registry** — the live bindings from `APO_COLLECTION_ROOT` / `APO_VAULT_PATHS` / `--vault` for that process — not every folder under `~/Notes` and not `desk.yaml`. Unknown prefix → `bad_vault` (no fall-through to the default vault). Prefix disagreeing with `vault=` → `bad_request`.
+
+Workbench example: registry = work, contracts, optima, compliance → `atlas:areas/…` is denied; `work:areas/threads/…` is allowed.
+
+Successful reads/writes/search hits also return **`qualified_path`** (`vault:rel`) for copy-paste, while keeping relative `path` / `source` + `vault`.
+
+v1 `patch_note` batches (`items[]`): all prefixed paths must resolve to the **same** vault_id.
+
 Each vault may ship contracts under `system/contracts/` (see [contracts/](./contracts/)).
