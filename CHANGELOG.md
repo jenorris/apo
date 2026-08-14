@@ -4,6 +4,12 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-14
+
+Path-list / collection-root vault discovery — no more `vaults.json` name map required. Tool-facing names come from each vault’s usage-contract `vault_id`.
+
+**Upgrade:** Point MCP/watch at `APO_COLLECTION_ROOT` (parent of vaults) and/or `APO_VAULT_PATHS` / `--vault`, plus `APO_DEFAULT_VAULT` when more than one vault. `APO_VAULTS` still loads as a roots-only compat shim. Quit Cursor/Claude fully (Cmd+Q) after upgrade so MCP reloads. MCP and watch must share the same discovery env.
+
 ### Added
 
 - **Path-list vault registry** — `APO_COLLECTION_ROOT` (parent directory of vaults), `APO_VAULT_PATHS` / MCP `--vault PATH`, and `APO_DEFAULT_VAULT` / `--default` replace `APO_VAULTS`/`vaults.json` as the preferred multi-vault config. Tool-facing names come from usage-contract `vault_id`. Watcher soft-removes vaults that leave the registry (index/deferred kept). See [docs/multi-vault.md](docs/multi-vault.md).
