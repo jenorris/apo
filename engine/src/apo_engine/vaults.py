@@ -217,36 +217,62 @@ def read_usage_default_vault_claim(root: Path) -> str | None:
     return claim or None
 
 
+def _index_file_count(path: Path) -> int | None:
+    """Return files-table row count, or None if unreadable / missing table."""
+    try:
+        import sqlite3
+
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+            row = db.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='files'"
+            ).fetchone()
+            if not row or not row[0]:
+                return None
+            return int(db.execute("SELECT count(*) FROM files").fetchone()[0])
+    except Exception:
+        return None
+
+
 def _default_index_for(root: Path, vault_id: str) -> Path:
-    """Prefer collection-id index; fall back to legacy name-keyed files if present."""
+    """Prefer collection-id index; fall back to legacy name-keyed files if present.
+
+    If a brand-new empty ``index-{collection_id}.db`` was created during cutover,
+    prefer a populated legacy alias (``meta`` / ``jeremy`` / …) instead of
+    stranding the vault on an empty index.
+    """
     coll = compute_collection_id(root)
     apo = Path.home() / ".apo"
     by_coll = apo / f"index-{coll}.db"
-    if by_coll.exists():
-        return by_coll
     by_name = apo / f"index-{vault_id}.db"
-    if by_name.exists():
-        return by_name
-    # Pre-path-registry desks often keyed indexes by JSON registry name, which
-    # could differ from usage vault_id (e.g. registry ``meta`` vs vault_id ``jeremy``).
-    # If exactly one legacy candidate exists for this root's known aliases, use it.
     aliases = {
         "atlas": ("atlas", "meta", "jeremy", "notes_global"),
         "jeremy": ("atlas", "meta", "jeremy", "notes_global"),
         "meta": ("atlas", "meta", "jeremy", "notes_global"),
     }.get(vault_id, (vault_id,))
-    found = [apo / f"index-{a}.db" for a in aliases if (apo / f"index-{a}.db").exists()]
-    # De-dupe paths
-    uniq: list[Path] = []
-    seen: set[str] = set()
-    for p in found:
-        key = str(p.resolve()) if p.exists() else str(p)
-        if key in seen:
-            continue
-        seen.add(key)
-        uniq.append(p)
-    if len(uniq) == 1:
-        return uniq[0]
+    candidates: list[Path] = []
+    for p in (by_coll, by_name, *(apo / f"index-{a}.db" for a in aliases)):
+        if p.exists():
+            key = str(p.resolve())
+            if key not in {str(c.resolve()) for c in candidates}:
+                candidates.append(p)
+
+    if by_coll.exists():
+        n = _index_file_count(by_coll)
+        if n is not None and n > 0:
+            return by_coll
+        # Empty / unreadable collection-id file — fall through to legacy picks.
+    if by_name.exists():
+        n = _index_file_count(by_name)
+        if n is not None and n > 0:
+            return by_name
+
+    populated = [(p, _index_file_count(p)) for p in candidates]
+    populated = [(p, n) for p, n in populated if n is not None and n > 0]
+    if populated:
+        populated.sort(key=lambda x: x[1], reverse=True)
+        return populated[0][0]
+    if len(candidates) == 1:
+        return candidates[0]
     return by_coll
 
 
