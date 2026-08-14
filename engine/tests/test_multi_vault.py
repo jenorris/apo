@@ -16,7 +16,15 @@ from apo_engine import core, vaults
 class VaultRegistryTests(unittest.TestCase):
     def setUp(self):
         self._env = {}
-        for key in ("APO_VAULTS", "APO_NOTES_ROOT", "APO_INDEX", "APO_COLLECTION"):
+        for key in (
+            "APO_VAULTS",
+            "APO_VAULT_PATHS",
+            "APO_COLLECTION_ROOT",
+            "APO_DEFAULT_VAULT",
+            "APO_NOTES_ROOT",
+            "APO_INDEX",
+            "APO_COLLECTION",
+        ):
             self._env[key] = os.environ.pop(key, None)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -24,6 +32,7 @@ class VaultRegistryTests(unittest.TestCase):
         # vaults._FALLBACK_ID_STORE into a per-test tmp dir; just clear the
         # in-process memo cache so each test re-derives from a clean slate.
         vaults._vault_id_cache.clear()
+        vaults._APO_VAULTS_WARNED = False
 
     def tearDown(self):
         vaults._vault_id_cache.clear()
@@ -57,20 +66,21 @@ class VaultRegistryTests(unittest.TestCase):
         b = self.root / "vault-b"
         a.mkdir()
         b.mkdir()
+        for root, vid in ((a, "alpha"), (b, "beta")):
+            cdir = root / "system" / "contracts"
+            cdir.mkdir(parents=True)
+            (cdir / "usage-contract.schema.yaml").write_text(
+                f"vault_id: {vid}\n", encoding="utf-8"
+            )
         cfg_path = self.root / "vaults.json"
         cfg_path.write_text(
             json.dumps(
                 {
                     "default": "alpha",
                     "vaults": {
-                        "alpha": {
-                            "root": str(a),
-                            "index": str(self.root / "alpha.db"),
-                        },
-                        "beta": {
-                            "root": str(b),
-                            "index": str(self.root / "beta.db"),
-                        },
+                        # JSON keys ignored — names come from usage vault_id
+                        "ignored-a": {"root": str(a), "index": str(self.root / "alpha.db")},
+                        "ignored-b": {"root": str(b), "index": str(self.root / "beta.db")},
                     },
                 }
             ),

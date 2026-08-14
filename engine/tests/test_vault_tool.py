@@ -144,6 +144,7 @@ class VaultOpTest(unittest.TestCase):
         cdir.mkdir(parents=True)
         (cdir / "usage-contract.schema.yaml").write_text(
             "usage_contract_version: '0.1'\n"
+            "vault_id: alpha\n"
             "purpose: test\n"
             "pointers:\n"
             "  - alpha:system/config/agent-memory-policy\n"
@@ -181,6 +182,12 @@ class VaultOpTest(unittest.TestCase):
         cfg.mkdir(parents=True)
         (cfg / "git-contract.schema.yaml").write_text(
             "git_contract_version: '0.1'\nremote: 'https://b.git'\n",
+            encoding="utf-8",
+        )
+        b_contracts = self.b / "system" / "contracts"
+        b_contracts.mkdir(parents=True, exist_ok=True)
+        (b_contracts / "usage-contract.schema.yaml").write_text(
+            "usage_contract_version: '0.1'\nvault_id: beta\npurpose: beta\n",
             encoding="utf-8",
         )
         registry = {
@@ -226,7 +233,7 @@ class VaultOpTest(unittest.TestCase):
         ids = {c["id"] for c in out["vaults"]["alpha"]["contracts"]}
         self.assertEqual(ids, {"usage-contract"})
         ids_b = {c["id"] for c in out["vaults"]["beta"]["contracts"]}
-        self.assertEqual(ids_b, {"git-contract"})
+        self.assertEqual(ids_b, {"git-contract", "usage-contract"})
 
     def test_contracts_all_and_one(self):
         all_out = ops.vault_op("contracts")

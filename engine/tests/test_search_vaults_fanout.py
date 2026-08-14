@@ -36,6 +36,12 @@ class SearchVaultsFanoutTests(unittest.TestCase):
         self.beta = self.tmp / "beta"
         self.alpha.mkdir()
         self.beta.mkdir()
+        for root, vid in ((self.alpha, "alpha"), (self.beta, "beta")):
+            cdir = root / "system" / "contracts"
+            cdir.mkdir(parents=True)
+            (cdir / "usage-contract.schema.yaml").write_text(
+                f"vault_id: {vid}\n", encoding="utf-8"
+            )
         (self.alpha / "note-a.md").write_text(
             "---\ntitle: Alpha\n---\n\n# Alpha uniquezzz token\n\nalpha body\n",
             encoding="utf-8",

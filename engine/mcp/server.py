@@ -188,6 +188,13 @@ mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
 # (FastMCP validates args before tool bodies — see apo_engine.validation_hints).
 from apo_engine.agent_validation import AgentValidationMiddleware  # noqa: E402
 
+# When launched as ``python server.py --vault …``, apply discovery argv before
+# the first registry load. Import-time hosts (tests) set env themselves.
+if __name__ == "__main__":
+    import sys as _sys
+
+    _sys.argv[:] = apo_vaults.apply_discovery_argv(_sys.argv)
+
 _load_vaults()
 
 

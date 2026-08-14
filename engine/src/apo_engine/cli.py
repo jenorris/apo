@@ -108,13 +108,21 @@ def _cmd_desk_project(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="apo-engine", description="Local semantic search over a markdown vault.")
+    p = argparse.ArgumentParser(
+        prog="apo-engine",
+        description="Local semantic search over a markdown vault.",
+    )
+    vaults.add_discovery_arguments(p)
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pi = sub.add_parser("index", help="build / update the index")
     pi.add_argument("--rebuild", action="store_true", help="drop and rebuild from scratch")
     pi.add_argument("--limit", type=int, default=None, help="index only the first N notes (smoke test)")
-    pi.add_argument("--vault", default="", help="vault name from APO_VAULTS (default vault if empty)")
+    pi.add_argument(
+        "--vault",
+        default="",
+        help="usage-contract vault_id (default vault if empty)",
+    )
     pi.set_defaults(func=_cmd_index)
 
     ps = sub.add_parser("search", help="query the index")
@@ -123,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--exclude", nargs="*", default=[], help="glob(s) of paths to drop (e.g. 'private/*')")
     ps.add_argument("--json", action="store_true")
     ps.add_argument("--no-hybrid", action="store_true", help="vector-only (skip FTS5 BM25 fusion)")
-    ps.add_argument("--vault", default="", help="vault name from APO_VAULTS")
+    ps.add_argument("--vault", default="", help="usage-contract vault_id")
     ps.set_defaults(func=_cmd_search)
 
     pe = sub.add_parser(
@@ -132,14 +140,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     pe.add_argument("--file", required=True, help="YAML eval file (lives outside the repo)")
     pe.add_argument("-k", type=int, default=0, help="cutoff (default: file `k` or 5)")
-    pe.add_argument("--vault", default="", help="vault name from APO_VAULTS")
+    pe.add_argument("--vault", default="", help="usage-contract vault_id")
     pe.add_argument("--exclude", nargs="*", default=[], help="glob(s) applied to every query")
     pe.add_argument("--json", action="store_true")
     pe.add_argument("--verbose", action="store_true", help="also list per-query passes")
     pe.set_defaults(func=_cmd_search_eval)
 
     pt = sub.add_parser("stats", help="index stats")
-    pt.add_argument("--vault", default="", help="vault name from APO_VAULTS")
+    pt.add_argument("--vault", default="", help="usage-contract vault_id")
     pt.set_defaults(func=_cmd_stats)
 
     pw = sub.add_parser("watch", help="watch vault + consume deferred queues (sole index writer)")
@@ -178,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     pr.set_defaults(func=_cmd_serve)
 
     args = p.parse_args(argv)
+    vaults.apply_discovery_namespace(args)
     return args.func(args)
 
 

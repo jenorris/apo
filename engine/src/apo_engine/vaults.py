@@ -4,32 +4,22 @@ True multi-index: each vault has its own NOTES_ROOT, INDEX_PATH, and deferred
 COLLECTION. Active binding is a contextvar so core/search/watch use the right
 sqlite without threading explicit paths through every call.
 
-Config (optional) — ``APO_VAULTS`` path to JSON or inline JSON:
+Discovery (preferred → fallback):
 
-```json
-{
-  "default": "meta",
-  "vaults": {
-    "meta": {
-      "root": "/Users/me/Notes/Meta",
-      "index": "/Users/me/.apo/index-meta.db"
-    },
-    "work": {
-      "root": "/Users/me/Notes/Work",
-      "index": "/Users/me/.apo/index-work.db"
-    }
-  }
-}
-```
+1. ``APO_COLLECTION_ROOT`` / ``--collection-root`` — parent directory of vaults;
+   each immediate child with a usage-contract ``vault_id`` is registered.
+2. ``APO_VAULT_PATHS`` / repeatable ``--vault PATH`` — explicit roots (Workbench
+   escape hatch for non-sibling trees such as ``compliance``).
+3. Compat shim: ``APO_VAULTS`` JSON — **roots only**; object keys and any
+   ``collection`` / ``index`` fields are ignored (names come from usage
+   ``vault_id``). Emits a one-shot stderr warning.
+4. Legacy single-root: ``APO_NOTES_ROOT`` / ``APO_INDEX`` / ``APO_COLLECTION``.
 
-``collection`` (the deferred-queue namespace and telemetry partition key) is
-not configurable — it's derived from the vault root by ``compute_vault_id``:
-the short hash of the vault's git root commit when the root is a git repo
-(stable across renames of the vault's ``vaults.json`` key or directory),
-else a random id cached per-root in ``~/.apo/vault-ids.json``.
-
-With no ``APO_VAULTS``, a single vault named ``default`` is built from
-``APO_NOTES_ROOT`` / ``APO_INDEX`` / ``APO_COLLECTION`` (legacy single-vault).
+Tool-facing name is always usage-contract ``vault_id``. Internal queue /
+telemetry partition id is ``compute_collection_id(root)`` (git root-commit
+hash or cached random) — never CLI-configurable. Default index path is
+``~/.apo/index-{collection_id}.db``, with a legacy ``index-{vault_id}.db``
+fallback when the collection-keyed file is absent (cutover).
 """
 
 from __future__ import annotations
@@ -38,13 +28,27 @@ import json
 import os
 import secrets
 import subprocess
+import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
+
+import yaml
 
 from apo_engine import config
+
+_APO_DISABLED = Path("system") / "contracts" / ".apo-disabled"
+_USAGE_CANDIDATES = (
+    Path("system") / "contracts" / "usage-contract.schema.yaml",
+    Path("system") / "contracts" / "usage-contract.yaml",
+    Path("system") / "config" / "usage-contract.schema.yaml",
+    Path("system") / "config" / "usage-contract.yaml",
+)
+
+# One-shot stderr warn for APO_VAULTS shim per process.
+_APO_VAULTS_WARNED = False
 
 
 @dataclass(frozen=True)
@@ -82,8 +86,6 @@ def _git_root_id(root: Path) -> str | None:
         return None
     if result.returncode != 0:
         return None
-    # Sort for a deterministic pick when a repo has multiple root commits
-    # (unrelated histories merged together).
     hashes = sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
     return hashes[0][:12] if hashes else None
 
@@ -108,21 +110,24 @@ def _fallback_id(root: Path) -> str:
     return new_id
 
 
-def compute_vault_id(root: Path) -> str:
-    """Stable per-vault collection id: git root-commit hash, else a cached random id.
+def compute_collection_id(root: Path) -> str:
+    """Stable per-root queue/telemetry id: git root-commit hash, else cached random.
 
-    Memoized per resolved root for the life of the process — this runs on
-    every ``load_bindings()`` call, so a subprocess spawn per lookup would
-    add real per-request latency.
+    Memoized per resolved root for the life of the process.
     """
     resolved = root.expanduser().resolve()
     key = str(resolved)
     cached = _vault_id_cache.get(key)
     if cached is not None:
         return cached
-    vault_id = _git_root_id(resolved) or _fallback_id(resolved)
-    _vault_id_cache[key] = vault_id
-    return vault_id
+    collection_id = _git_root_id(resolved) or _fallback_id(resolved)
+    _vault_id_cache[key] = collection_id
+    return collection_id
+
+
+def compute_vault_id(root: Path) -> str:
+    """Alias for :func:`compute_collection_id` (historical name)."""
+    return compute_collection_id(root)
 
 
 _binding: ContextVar[VaultBinding | None] = ContextVar("apo_vault_binding", default=None)
@@ -172,6 +177,107 @@ def _path(val: str | Path, default: Path | None = None) -> Path:
     return Path(str(val)).expanduser().resolve()
 
 
+def _read_usage_data(root: Path) -> dict[str, Any] | None:
+    """Parse usage-contract YAML for a vault root, or None if missing/invalid."""
+    for rel in _USAGE_CANDIDATES:
+        path = root / rel
+        if not path.is_file():
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw)
+        except (OSError, yaml.YAMLError):
+            return None
+        if isinstance(data, dict):
+            return data
+        return None
+    return None
+
+
+def read_usage_vault_id(root: Path) -> str | None:
+    """Return non-empty usage-contract ``vault_id``, or None if not a vault."""
+    if (root / _APO_DISABLED).exists():
+        return None
+    data = _read_usage_data(root)
+    if not data:
+        return None
+    vid = str(data.get("vault_id") or "").strip()
+    return vid or None
+
+
+def read_usage_default_vault_claim(root: Path) -> str | None:
+    """Return ``memory.default_vault`` from usage-contract when set."""
+    data = _read_usage_data(root)
+    if not data:
+        return None
+    memory = data.get("memory")
+    if not isinstance(memory, dict):
+        return None
+    claim = str(memory.get("default_vault") or "").strip()
+    return claim or None
+
+
+def _default_index_for(root: Path, vault_id: str) -> Path:
+    """Prefer collection-id index; fall back to legacy name-keyed files if present."""
+    coll = compute_collection_id(root)
+    apo = Path.home() / ".apo"
+    by_coll = apo / f"index-{coll}.db"
+    if by_coll.exists():
+        return by_coll
+    by_name = apo / f"index-{vault_id}.db"
+    if by_name.exists():
+        return by_name
+    # Pre-path-registry desks often keyed indexes by JSON registry name, which
+    # could differ from usage vault_id (e.g. registry ``meta`` vs vault_id ``jeremy``).
+    # If exactly one legacy candidate exists for this root's known aliases, use it.
+    aliases = {
+        "jeremy": ("meta", "jeremy", "notes_global"),
+        "meta": ("meta", "jeremy", "notes_global"),
+    }.get(vault_id, (vault_id,))
+    found = [apo / f"index-{a}.db" for a in aliases if (apo / f"index-{a}.db").exists()]
+    # De-dupe paths
+    uniq: list[Path] = []
+    seen: set[str] = set()
+    for p in found:
+        key = str(p.resolve()) if p.exists() else str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(p)
+    if len(uniq) == 1:
+        return uniq[0]
+    return by_coll
+
+
+def _binding_for_root(root: Path) -> VaultBinding | None:
+    """Build a binding from a vault root, or None if not a vault."""
+    root_path = _path(root)
+    if not root_path.is_dir():
+        return None
+    vault_id = read_usage_vault_id(root_path)
+    if not vault_id:
+        return None
+    return VaultBinding(
+        name=vault_id,
+        root=root_path,
+        index=_default_index_for(root_path, vault_id),
+        collection=compute_collection_id(root_path),
+    ).resolved()
+
+
+def _warn_apo_vaults_shim() -> None:
+    global _APO_VAULTS_WARNED
+    if _APO_VAULTS_WARNED:
+        return
+    _APO_VAULTS_WARNED = True
+    msg = (
+        "APO_VAULTS is deprecated: keys/collection/index are ignored; "
+        "names come from usage-contract vault_id. Prefer APO_COLLECTION_ROOT "
+        "(parent directory of vaults) or APO_VAULT_PATHS / --vault."
+    )
+    print(f"apo: warning: {msg}", file=sys.stderr)
+
+
 def _load_vaults_raw() -> dict | None:
     raw = os.environ.get("APO_VAULTS", "").strip()
     if not raw:
@@ -186,68 +292,241 @@ def _load_vaults_raw() -> dict | None:
     return data
 
 
-def registry_source_path() -> Path | None:
-    """Filesystem path for APO_VAULTS when it is a file (not inline JSON)."""
-    raw = os.environ.get("APO_VAULTS", "").strip()
-    if not raw or raw.startswith("{"):
+def collection_root_path() -> Path | None:
+    raw = (os.environ.get("APO_COLLECTION_ROOT") or "").strip()
+    if not raw:
         return None
     return Path(raw).expanduser()
 
 
+def explicit_vault_paths() -> list[Path]:
+    """Paths from ``APO_VAULT_PATHS`` (colon-separated) and ``APO_VAULT_PATH`` repeats."""
+    out: list[Path] = []
+    raw = (os.environ.get("APO_VAULT_PATHS") or "").strip()
+    if raw:
+        for part in raw.split(":"):
+            part = part.strip()
+            if part:
+                out.append(Path(part).expanduser())
+    # Optional multi-value env used by some hosts (newline-separated).
+    multi = (os.environ.get("APO_VAULT_PATH_LIST") or "").strip()
+    if multi:
+        for part in multi.splitlines():
+            part = part.strip()
+            if part:
+                out.append(Path(part).expanduser())
+    return out
+
+
+def discovery_active() -> bool:
+    """True when path-list / collection-root / APO_VAULTS registry mode is on."""
+    if collection_root_path() is not None:
+        return True
+    if explicit_vault_paths():
+        return True
+    raw = (os.environ.get("APO_VAULTS") or "").strip()
+    return bool(raw)
+
+
+def registry_source_path() -> Path | None:
+    """Filesystem path whose mtime should wake the watcher, if any."""
+    # Prefer APO_VAULTS file for compat; else collection root.
+    raw = os.environ.get("APO_VAULTS", "").strip()
+    if raw and not raw.startswith("{"):
+        return Path(raw).expanduser()
+    return collection_root_path()
+
+
 def registry_mtime() -> float | None:
-    """mtime of the APO_VAULTS file, or None if unset / inline / missing."""
-    p = registry_source_path()
-    if p is None:
-        return None
-    try:
-        return p.stat().st_mtime
-    except OSError:
-        return None
+    """Max mtime of registry file, collection-root, or discovered children."""
+    mtimes: list[float] = []
+    src = registry_source_path()
+    if src is not None:
+        try:
+            mtimes.append(src.stat().st_mtime)
+        except OSError:
+            pass
+    root = collection_root_path()
+    if root is not None and root.is_dir():
+        try:
+            mtimes.append(root.stat().st_mtime)
+            for child in root.iterdir():
+                if child.is_dir() and not child.name.startswith("."):
+                    try:
+                        mtimes.append(child.stat().st_mtime)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return max(mtimes) if mtimes else None
 
 
-def load_bindings() -> tuple[str, dict[str, VaultBinding]]:
-    """Return (default_name, {name: VaultBinding}).
+def _add_binding(
+    out: dict[str, VaultBinding],
+    binding: VaultBinding,
+    *,
+    source: str,
+) -> None:
+    existing = out.get(binding.name)
+    if existing is not None and str(existing.root) != str(binding.root):
+        raise ValueError(
+            f"duplicate vault_id {binding.name!r}: {existing.root} and {binding.root} "
+            f"(via {source})"
+        )
+    out[binding.name] = binding
 
-    Always at least one vault (legacy single-root when APO_VAULTS unset).
-    """
-    data = _load_vaults_raw()
-    if not data:
-        name = "default"
-        b = VaultBinding(
-            name=name,
-            root=Path(config.NOTES_ROOT),
-            index=Path(config.INDEX_PATH),
-            collection=str(config.COLLECTION),
-        ).resolved()
-        return name, {name: b}
 
+def _discover_collection_root(root: Path) -> dict[str, VaultBinding]:
+    if not root.is_dir():
+        raise ValueError(f"APO_COLLECTION_ROOT is not a directory: {root}")
+    out: dict[str, VaultBinding] = {}
+    for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        b = _binding_for_root(child)
+        if b is None:
+            continue  # Wiki / junk siblings without vault_id
+        _add_binding(out, b, source=f"APO_COLLECTION_ROOT/{child.name}")
+    return out
+
+
+def _bindings_from_paths(paths: list[Path]) -> dict[str, VaultBinding]:
+    out: dict[str, VaultBinding] = {}
+    for p in paths:
+        b = _binding_for_root(p)
+        if b is None:
+            raise ValueError(
+                f"path is not a vault (missing usage-contract vault_id or .apo-disabled): {p}"
+            )
+        _add_binding(out, b, source=str(p))
+    return out
+
+
+def _bindings_from_apo_vaults_shim(data: dict) -> tuple[dict[str, VaultBinding], str | None]:
+    """Compat: roots (+ optional index); JSON keys ignored. Returns (bindings, json_default)."""
+    _warn_apo_vaults_shim()
     vaults_raw = data.get("vaults") or {}
     if not isinstance(vaults_raw, dict) or not vaults_raw:
         raise ValueError("APO_VAULTS.vaults must be a non-empty object")
-
     out: dict[str, VaultBinding] = {}
-    for name, spec in vaults_raw.items():
+    for _key, spec in vaults_raw.items():
         if not isinstance(spec, dict):
-            raise ValueError(f"vault {name!r} spec must be an object")
+            raise ValueError("APO_VAULTS vault spec must be an object")
         root = spec.get("root") or spec.get("notes_root")
         if not root:
-            raise ValueError(f"vault {name!r} missing root")
-        idx = spec.get("index") or spec.get("index_path")
-        if not idx:
-            # Sensible default under ~/.apo/
-            idx = Path.home() / ".apo" / f"index-{name}.db"
+            raise ValueError("APO_VAULTS vault entry missing root")
         root_path = _path(root)
-        out[str(name)] = VaultBinding(
-            name=str(name),
+        vault_id = read_usage_vault_id(root_path)
+        if not vault_id:
+            raise ValueError(
+                f"path is not a vault (missing usage-contract vault_id or .apo-disabled): {root_path}"
+            )
+        idx = spec.get("index") or spec.get("index_path")
+        index_path = _path(idx) if idx else _default_index_for(root_path, vault_id)
+        b = VaultBinding(
+            name=vault_id,
             root=root_path,
-            index=_path(idx),
-            collection=compute_vault_id(root_path),
+            index=index_path,
+            collection=compute_collection_id(root_path),
         ).resolved()
+        _add_binding(out, b, source="APO_VAULTS")
+    json_default = str(data.get("default") or "").strip() or None
+    return out, json_default
 
-    default = str(data.get("default") or next(iter(out)))
-    if default not in out:
-        raise ValueError(f"APO_VAULTS.default {default!r} not in vaults")
-    return default, out
+
+def resolve_default_vault(
+    bindings: dict[str, VaultBinding],
+    *,
+    explicit: str | None = None,
+    json_default: str | None = None,
+) -> str:
+    """Resolve default vault name; fail if multi-vault and ambiguous.
+
+    Order:
+    1. ``explicit`` (``--default`` / ``APO_DEFAULT_VAULT``)
+    2. Compat ``json_default`` from APO_VAULTS when it matches a loaded vault_id
+    3. Exactly one vault
+    4. Exactly one usage ``memory.default_vault`` claim among loaded vaults
+    5. Fail
+    """
+    if not bindings:
+        raise ValueError("no vaults loaded")
+
+    if explicit:
+        if explicit not in bindings:
+            raise ValueError(
+                f"default vault {explicit!r} not in registry; available: {sorted(bindings)}"
+            )
+        return explicit
+
+    if json_default and json_default in bindings:
+        return json_default
+
+    if len(bindings) == 1:
+        return next(iter(bindings))
+
+    claims: list[str] = []
+    for b in bindings.values():
+        claim = read_usage_default_vault_claim(b.root)
+        if not claim:
+            continue
+        if claim == b.name or claim in bindings:
+            target = claim if claim in bindings else b.name
+            if target not in claims:
+                claims.append(target)
+    if len(claims) == 1:
+        return claims[0]
+
+    raise ValueError(
+        "ambiguous default vault — set APO_DEFAULT_VAULT / --default to one of: "
+        f"{sorted(bindings)}"
+    )
+
+
+def load_bindings() -> tuple[str, dict[str, VaultBinding]]:
+    """Return (default_name, {vault_id: VaultBinding})."""
+    out: dict[str, VaultBinding] = {}
+    json_default: str | None = None
+
+    coll_root = collection_root_path()
+    if coll_root is not None:
+        discovered = _discover_collection_root(_path(coll_root))
+        for b in discovered.values():
+            _add_binding(out, b, source="APO_COLLECTION_ROOT")
+
+    paths = explicit_vault_paths()
+    if paths:
+        for b in _bindings_from_paths(paths).values():
+            _add_binding(out, b, source="APO_VAULT_PATHS")
+
+    data = None
+    # Compat shim only when it is the sole discovery mechanism — do not merge a
+    # leftover ~/.apo/vaults.json into COLLECTION_ROOT / VAULT_PATHS desks.
+    if not out:
+        data = _load_vaults_raw()
+        if data is not None:
+            shim, json_default = _bindings_from_apo_vaults_shim(data)
+            for b in shim.values():
+                _add_binding(out, b, source="APO_VAULTS")
+    else:
+        json_default = None
+
+    if out:
+        explicit = (os.environ.get("APO_DEFAULT_VAULT") or "").strip() or None
+        default = resolve_default_vault(
+            out, explicit=explicit, json_default=json_default
+        )
+        return default, out
+
+    # Legacy single-root
+    name = "default"
+    b = VaultBinding(
+        name=name,
+        root=Path(config.NOTES_ROOT),
+        index=Path(config.INDEX_PATH),
+        collection=str(config.COLLECTION),
+    ).resolved()
+    return name, {name: b}
 
 
 def binding_from_legacy_env(name: str = "default") -> VaultBinding:
@@ -257,3 +536,107 @@ def binding_from_legacy_env(name: str = "default") -> VaultBinding:
         index=Path(config.INDEX_PATH),
         collection=str(config.COLLECTION),
     ).resolved()
+
+
+def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
+    """Parse/strip discovery flags from argv; set env for :func:`load_bindings`.
+
+    Flags:
+      --vault PATH (repeatable)
+      --default NAME
+      --collection-root DIR  (parent directory of vaults)
+
+    Returns remaining argv (prog name preserved). Safe to call before
+    ``load_bindings`` / MCP ``_load_vaults``.
+    """
+    import argparse
+
+    argv = list(sys.argv if argv is None else argv)
+    if not argv:
+        return argv
+    prog, rest = argv[0], argv[1:]
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument(
+        "--vault",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Explicit vault root (repeatable). Escape hatch for non-sibling roots.",
+    )
+    p.add_argument(
+        "--default",
+        default="",
+        metavar="NAME",
+        help="Default usage-contract vault_id when vault= is empty.",
+    )
+    p.add_argument(
+        "--collection-root",
+        default="",
+        metavar="DIR",
+        help="Parent directory of vaults (autoconfigure). Not a queue/telemetry id.",
+    )
+    ns, remaining = p.parse_known_args(rest)
+
+    if ns.collection_root:
+        os.environ["APO_COLLECTION_ROOT"] = str(Path(ns.collection_root).expanduser())
+    if ns.default:
+        os.environ["APO_DEFAULT_VAULT"] = str(ns.default).strip()
+    if ns.vault:
+        # Merge with any existing APO_VAULT_PATHS
+        existing = (os.environ.get("APO_VAULT_PATHS") or "").strip()
+        parts = [p for p in existing.split(":") if p.strip()] if existing else []
+        for v in ns.vault:
+            parts.append(str(Path(v).expanduser()))
+        # de-dupe preserving order
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for part in parts:
+            key = str(Path(part).expanduser().resolve()) if Path(part).exists() else part
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(part)
+        os.environ["APO_VAULT_PATHS"] = ":".join(uniq)
+
+    return [prog, *remaining]
+
+
+def add_discovery_arguments(parser: Any) -> None:
+    """Attach shared discovery flags to an argparse parser (apo-engine CLI)."""
+    parser.add_argument(
+        "--vault-path",
+        action="append",
+        default=[],
+        dest="vault_paths",
+        metavar="PATH",
+        help="Explicit vault root (repeatable). Sets APO_VAULT_PATHS. "
+        "Not the same as subcommand --vault NAME.",
+    )
+    parser.add_argument(
+        "--default-vault",
+        default="",
+        metavar="NAME",
+        help="Default usage-contract vault_id (APO_DEFAULT_VAULT).",
+    )
+    parser.add_argument(
+        "--collection-root",
+        default="",
+        metavar="DIR",
+        help="Parent directory of vaults (APO_COLLECTION_ROOT). Not a collection id.",
+    )
+
+
+def apply_discovery_namespace(ns: Any) -> None:
+    """Apply argparse namespace fields from :func:`add_discovery_arguments`."""
+    coll = getattr(ns, "collection_root", "") or ""
+    default = getattr(ns, "default_vault", "") or ""
+    paths = getattr(ns, "vault_paths", None) or []
+    if coll:
+        os.environ["APO_COLLECTION_ROOT"] = str(Path(coll).expanduser())
+    if default:
+        os.environ["APO_DEFAULT_VAULT"] = str(default).strip()
+    if paths:
+        existing = (os.environ.get("APO_VAULT_PATHS") or "").strip()
+        parts = [p for p in existing.split(":") if p.strip()] if existing else []
+        parts.extend(str(Path(v).expanduser()) for v in paths)
+        os.environ["APO_VAULT_PATHS"] = ":".join(parts)

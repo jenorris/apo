@@ -20,7 +20,14 @@ def _isolated_apo_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("APO_DEFERRED_DIR", str(runtime))
     # A dev shell exporting APO_VAULTS must not leak real vaults into tests
     # (tests that need a registry set it explicitly).
-    monkeypatch.delenv("APO_VAULTS", raising=False)
+    for key in (
+        "APO_VAULTS",
+        "APO_VAULT_PATHS",
+        "APO_VAULT_PATH_LIST",
+        "APO_COLLECTION_ROOT",
+        "APO_DEFAULT_VAULT",
+    ):
+        monkeypatch.delenv(key, raising=False)
     # Non-git vault roots in tests (plain tempdirs) hit compute_vault_id's
     # fallback path — must not write into the real ~/.apo/vault-ids.json.
     monkeypatch.setattr(vaults, "_FALLBACK_ID_STORE", runtime / "vault-ids.json")

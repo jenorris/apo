@@ -124,21 +124,19 @@ def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
 def run_watch(interval: float | None = None, *, use_events: bool | None = None, verbose: bool = True) -> None:
     """Watch one or more vaults; consume deferred/purge queues; index incrementally.
 
-    Multi-vault (``APO_VAULTS``): one watcher thread per vault, each bound to its
-    own root + index + deferred collection. The supervisor re-reads the registry
-    on ``wake-registry`` (or APO_VAULTS file mtime) and **hot-adds** new vaults
-    without a process restart. Removals and root/index path changes still require
-    a full watcher restart.
+    Multi-vault discovery (``APO_COLLECTION_ROOT`` / ``APO_VAULT_PATHS`` /
+    ``APO_VAULTS`` shim): one watcher thread per vault. The supervisor re-reads
+    the registry on ``wake-registry``, registry/collection-root mtime, and
+    **hot-adds** / **soft-removes** vaults without a full process restart.
+    Soft-remove keeps ``index-*.db`` / deferred queues on disk.
     """
     from . import vaults
 
     _default, bindings = vaults.load_bindings()
-    # Single-vault legacy (no APO_VAULTS file/object): one thread, no supervisor.
-    # When APO_VAULTS is set (even with one vault), run the multi-vault supervisor
-    # so hot-add via wake-registry works without a restart.
-    registry_mode = vaults.registry_source_path() is not None or bool(
-        (os.environ.get("APO_VAULTS") or "").strip().startswith("{")
-    )
+    # Single-vault legacy (no discovery env): one thread, no supervisor.
+    # When discovery is active (even with one vault), run the multi-vault
+    # supervisor so hot-add / soft-remove works without a restart.
+    registry_mode = vaults.discovery_active()
     if len(bindings) == 1 and not registry_mode:
         b = next(iter(bindings.values()))
         with vaults.bind(b):
@@ -149,22 +147,9 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
         names = ", ".join(sorted(bindings))
         print(f"Multi-vault watch: {names}", flush=True)
 
-    stop = threading.Event()
-    # name -> (VaultBinding, Thread)
-    active: dict[str, tuple[object, threading.Thread]] = {}
-
-    def worker(b: vaults.VaultBinding) -> None:
-        with vaults.bind(b):
-            try:
-                _watch_one(b, interval=interval, use_events=use_events, verbose=verbose, stop=stop)
-            except (Exception, SystemExit) as e:
-                # SystemExit escapes `except Exception` and is dropped silently by
-                # threading.excepthook — surface it so one vault cannot fail invisibly.
-                if verbose:
-                    print(
-                        f"  vault {b.name} watch fatal: {type(e).__name__}: {e}",
-                        flush=True,
-                    )
+    process_stop = threading.Event()
+    # name -> (VaultBinding, Thread, per-vault stop Event)
+    active: dict[str, tuple[object, threading.Thread, threading.Event]] = {}
 
     def spawn(b: vaults.VaultBinding, *, initial_rebuild: bool = False) -> None:
         if initial_rebuild:
@@ -172,11 +157,46 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
                 deferred.signal_rebuild(b.collection, force=False)
             except OSError:
                 pass
-        t = threading.Thread(target=worker, args=(b,), name=f"apo-watch-{b.name}", daemon=True)
+        vault_stop = threading.Event()
+
+        def _run(binding: vaults.VaultBinding = b, stop_ev: threading.Event = vault_stop) -> None:
+            with vaults.bind(binding):
+                try:
+                    _watch_one(
+                        binding,
+                        interval=interval,
+                        use_events=use_events,
+                        verbose=verbose,
+                        stop=stop_ev,
+                    )
+                except (Exception, SystemExit) as e:
+                    # SystemExit escapes `except Exception` and is dropped silently by
+                    # threading.excepthook — surface it so one vault cannot fail invisibly.
+                    if verbose:
+                        print(
+                            f"  vault {binding.name} watch fatal: {type(e).__name__}: {e}",
+                            flush=True,
+                        )
+
+        t = threading.Thread(target=_run, name=f"apo-watch-{b.name}", daemon=True)
         t.start()
-        active[b.name] = (b, t)
+        active[b.name] = (b, t, vault_stop)
         if verbose and initial_rebuild:
             print(f"  [registry] hot-added vault {b.name!r} → {b.root}", flush=True)
+
+    def soft_remove(name: str, *, reason: str) -> None:
+        entry = active.pop(name, None)
+        if entry is None:
+            return
+        old_b, t, vault_stop = entry
+        vault_stop.set()
+        t.join(timeout=5)
+        if verbose:
+            print(
+                f"  [registry] soft-removed vault {name!r} ({reason}) — "
+                f"index/deferred kept ({old_b.index.name})",
+                flush=True,
+            )
 
     for b in bindings.values():
         spawn(b, initial_rebuild=False)
@@ -193,44 +213,37 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
             return
         last_reg_mtime = vaults.registry_mtime()
 
-        # Removals / path changes — log only (v1 add-only).
-        for name, (old_b, _t) in list(active.items()):
+        for name, (old_b, _t, _vs) in list(active.items()):
             if name not in latest:
-                if verbose:
-                    print(
-                        f"  [registry] vault {name!r} removed from APO_VAULTS — "
-                        "restart watcher to drop the thread",
-                        flush=True,
-                    )
+                soft_remove(name, reason="left registry")
                 continue
             new_b = latest[name]
             if str(old_b.root) != str(new_b.root) or str(old_b.index) != str(new_b.index):
-                if verbose:
-                    print(
-                        f"  [registry] vault {name!r} root/index changed — "
-                        "restart watcher to apply",
-                        flush=True,
-                    )
+                # Path identity changed — soft-remove old + hot-add new.
+                soft_remove(name, reason="root/index changed")
+                spawn(new_b, initial_rebuild=True)
 
         for name, new_b in latest.items():
             if name not in active:
                 spawn(new_b, initial_rebuild=True)
 
     try:
-        while any(t.is_alive() for _, t in active.values()) and not stop.is_set():
+        while any(t.is_alive() for _, t, _ in active.values()) and not process_stop.is_set():
             woke = deferred.wake_registry_pending()
             mt = vaults.registry_mtime()
             if woke or (mt is not None and last_reg_mtime is not None and mt > last_reg_mtime):
                 sync_registry()
             elif mt is not None and last_reg_mtime is None:
                 last_reg_mtime = mt
-            for _b, t in list(active.values()):
+            for _b, t, _vs in list(active.values()):
                 t.join(timeout=0.5)
     except KeyboardInterrupt:
-        stop.set()
+        process_stop.set()
+        for _b, _t, vault_stop in list(active.values()):
+            vault_stop.set()
         if verbose:
             print("\nstopped", flush=True)
-        for _b, t in list(active.values()):
+        for _b, t, _vs in list(active.values()):
             t.join(timeout=5)
 
 

@@ -4,6 +4,16 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- **Path-list vault registry** — `APO_COLLECTION_ROOT` (parent directory of vaults), `APO_VAULT_PATHS` / MCP `--vault PATH`, and `APO_DEFAULT_VAULT` / `--default` replace `APO_VAULTS`/`vaults.json` as the preferred multi-vault config. Tool-facing names come from usage-contract `vault_id`. Watcher soft-removes vaults that leave the registry (index/deferred kept). See [docs/multi-vault.md](docs/multi-vault.md).
+
+### Changed
+
+- **`APO_VAULTS` compat shim** — JSON object keys and `collection` are ignored; roots (+ optional `index`) still load. Shim is skipped when `APO_COLLECTION_ROOT` or `APO_VAULT_PATHS` is set. Deprecation warning on stderr.
+- **Default index path** — `~/.apo/index-{collection_id}.db`, with legacy `index-{vault_id}.db` (and `meta`↔`jeremy` alias) fallback when present.
+- **Default vault resolution** — explicit → sole vault → unique `memory.default_vault` claim → fail if ambiguous (no sorted-first).
+
 ## [0.9.0] — 2026-08-13
 
 Optional OTLP forwarding so Apo MCP tool calls land in the same local Jaeger stack as Cursor / just spans — additive to DuckDB habit KPIs.

@@ -13,12 +13,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
 [[ -f "$ENV_FILE" ]] || ENV_FILE="${SCRIPT_DIR}/config.env"
 
-# Preserve caller overrides (e.g. APO_VAULTS=… just watch-start) across .env source.
+# Preserve caller overrides across .env source.
 _SAVED_APO_VAULTS="${APO_VAULTS-}"
+_SAVED_APO_VAULT_PATHS="${APO_VAULT_PATHS-}"
+_SAVED_APO_COLLECTION_ROOT="${APO_COLLECTION_ROOT-}"
+_SAVED_APO_DEFAULT_VAULT="${APO_DEFAULT_VAULT-}"
 _SAVED_APO_NOTES_ROOT="${APO_NOTES_ROOT-}"
 _SAVED_APO_INDEX="${APO_INDEX-}"
 _SAVED_APO_COLLECTION="${APO_COLLECTION-}"
 _HAD_APO_VAULTS=0; [[ -n "${APO_VAULTS+x}" ]] && _HAD_APO_VAULTS=1
+_HAD_APO_VAULT_PATHS=0; [[ -n "${APO_VAULT_PATHS+x}" ]] && _HAD_APO_VAULT_PATHS=1
+_HAD_APO_COLLECTION_ROOT=0; [[ -n "${APO_COLLECTION_ROOT+x}" ]] && _HAD_APO_COLLECTION_ROOT=1
+_HAD_APO_DEFAULT_VAULT=0; [[ -n "${APO_DEFAULT_VAULT+x}" ]] && _HAD_APO_DEFAULT_VAULT=1
 _HAD_APO_NOTES_ROOT=0; [[ -n "${APO_NOTES_ROOT+x}" ]] && _HAD_APO_NOTES_ROOT=1
 _HAD_APO_INDEX=0; [[ -n "${APO_INDEX+x}" ]] && _HAD_APO_INDEX=1
 _HAD_APO_COLLECTION=0; [[ -n "${APO_COLLECTION+x}" ]] && _HAD_APO_COLLECTION=1
@@ -29,11 +35,16 @@ set -a
 set +a
 
 (( _HAD_APO_VAULTS )) && export APO_VAULTS="$_SAVED_APO_VAULTS"
+(( _HAD_APO_VAULT_PATHS )) && export APO_VAULT_PATHS="$_SAVED_APO_VAULT_PATHS"
+(( _HAD_APO_COLLECTION_ROOT )) && export APO_COLLECTION_ROOT="$_SAVED_APO_COLLECTION_ROOT"
+(( _HAD_APO_DEFAULT_VAULT )) && export APO_DEFAULT_VAULT="$_SAVED_APO_DEFAULT_VAULT"
 (( _HAD_APO_NOTES_ROOT )) && export APO_NOTES_ROOT="$_SAVED_APO_NOTES_ROOT"
 (( _HAD_APO_INDEX )) && export APO_INDEX="$_SAVED_APO_INDEX"
 (( _HAD_APO_COLLECTION )) && export APO_COLLECTION="$_SAVED_APO_COLLECTION"
-unset _SAVED_APO_VAULTS _SAVED_APO_NOTES_ROOT _SAVED_APO_INDEX _SAVED_APO_COLLECTION
-unset _HAD_APO_VAULTS _HAD_APO_NOTES_ROOT _HAD_APO_INDEX _HAD_APO_COLLECTION
+unset _SAVED_APO_VAULTS _SAVED_APO_VAULT_PATHS _SAVED_APO_COLLECTION_ROOT _SAVED_APO_DEFAULT_VAULT
+unset _SAVED_APO_NOTES_ROOT _SAVED_APO_INDEX _SAVED_APO_COLLECTION
+unset _HAD_APO_VAULTS _HAD_APO_VAULT_PATHS _HAD_APO_COLLECTION_ROOT _HAD_APO_DEFAULT_VAULT
+unset _HAD_APO_NOTES_ROOT _HAD_APO_INDEX _HAD_APO_COLLECTION
 
 APO_ENGINE_BIN="${APO_ENGINE_BIN:-${SCRIPT_DIR}/engine/.venv/bin/apo-engine}"
 WATCH_PID_DIR="${WATCH_PID_DIR:-${HOME}/.apo}"
@@ -58,12 +69,16 @@ cmd_start() {
     return
   fi
 
-  # APO_VAULTS (multi-vault registry) supersedes APO_NOTES_ROOT — see .env.
-  # Only fall back to checking APO_NOTES_ROOT as a directory when no registry
-  # is configured; otherwise a legitimate multi-vault-only setup (no
-  # APO_NOTES_ROOT at all) always failed this guard with "Vault does not
-  # exist: unset" even though APO_VAULTS pointed at a perfectly good registry.
-  if [[ -n "${APO_VAULTS:-}" ]]; then
+  # Discovery: COLLECTION_ROOT / VAULT_PATHS / compat APO_VAULTS supersede
+  # single-root APO_NOTES_ROOT. MCP and watch must share the same discovery env.
+  if [[ -n "${APO_COLLECTION_ROOT:-}" ]]; then
+    if [[ ! -d "${APO_COLLECTION_ROOT}" ]]; then
+      warn "APO_COLLECTION_ROOT is not a directory: ${APO_COLLECTION_ROOT}"
+      return 1
+    fi
+  elif [[ -n "${APO_VAULT_PATHS:-}" ]]; then
+    :
+  elif [[ -n "${APO_VAULTS:-}" ]]; then
     if [[ ! -f "${APO_VAULTS}" ]]; then
       warn "Vault registry does not exist: ${APO_VAULTS}"
       return 1
@@ -73,7 +88,7 @@ cmd_start() {
     return 1
   fi
 
-  local label="${APO_VAULTS:-${APO_NOTES_ROOT}}"
+  local label="${APO_COLLECTION_ROOT:-${APO_VAULT_PATHS:-${APO_VAULTS:-${APO_NOTES_ROOT}}}}"
   info "Starting watcher for ${label} (interval ${WATCH_INTERVAL}s)..."
 
   # Double-fork into a new session so Cursor/agent shell teardown cannot
@@ -133,7 +148,10 @@ cmd_status() {
     success "Watcher RUNNING (PID $(cat "$PID_FILE"))"
     info "  log: $LOG_FILE"
     info "  vault: ${APO_NOTES_ROOT:-unset}"
-    [[ -n "${APO_VAULTS:-}" ]] && info "  APO_VAULTS: ${APO_VAULTS}"
+    [[ -n "${APO_COLLECTION_ROOT:-}" ]] && info "  APO_COLLECTION_ROOT: ${APO_COLLECTION_ROOT}"
+    [[ -n "${APO_VAULT_PATHS:-}" ]] && info "  APO_VAULT_PATHS: ${APO_VAULT_PATHS}"
+    [[ -n "${APO_DEFAULT_VAULT:-}" ]] && info "  APO_DEFAULT_VAULT: ${APO_DEFAULT_VAULT}"
+    [[ -n "${APO_VAULTS:-}" ]] && info "  APO_VAULTS (compat): ${APO_VAULTS}"
   else
     warn "Watcher STOPPED"
   fi
