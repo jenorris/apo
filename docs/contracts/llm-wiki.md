@@ -70,9 +70,11 @@ Same *trigger* as PARA (decisions, corrections, durable facts) — different *ta
 | Ingest finished | `wiki/` pages + `log/` + `wiki/index.md` |
 | Query produced durable knowledge | promote into `wiki/` (not only chat) |
 | Human filed audit feedback | apply → move to `resolved/` + log |
-| Lint found issues | fix or open an audit item — don’t only report orally |
+| Lint found issues | fix via `flaws[]` / `suggested_op`, or open an `audit/` item — don’t only report orally |
 
 Skip writes for explorative Q&A that should stay ephemeral (unless the human asks to keep it).
+
+Engine **`flaws[]`** (broken links, dialect, OKF soft) are library-scribe findings — distinct from human `audit/` corrections. Prefer MCP `flaws` + one-shot patch; file `audit/` when judgment needs a human trail. See [library-scribe.md](../library-scribe.md).
 
 ### 5. Raw immutability
 

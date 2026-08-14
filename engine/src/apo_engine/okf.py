@@ -161,7 +161,8 @@ class OkfResult:
             out["warnings"] = self.warnings
         if self.okf_type:
             out["okf_type"] = self.okf_type
-        if self.violations:
+        # Hard-reject payload only — soft misses become flaws[] (see note_lint).
+        if self.violations and self.enforcement == "hard" and not self.ok:
             out["violations"] = self.violations
         return out
 
@@ -499,7 +500,9 @@ def process_concept(
         content=new_content,
         stamped=stamped,
         warnings=warnings,
-        violations=violations if enf == "hard" else [],
+        # Keep soft violations for flaws[] dual-emit; as_response_fields only
+        # surfaces ``violations`` on hard reject.
+        violations=violations,
         okf_type=okf_type,
         enforcement=enf,
         ok=True,

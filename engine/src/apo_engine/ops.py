@@ -14,11 +14,13 @@ from zoneinfo import ZoneInfo
 
 from apo_engine import (
     __version__,
+    archival_contract,
     config,
     core,
     deferred as index_deferred,
     git_contract,
     git_sync,
+    note_lint,
     search_contract,
     okf as apo_okf,
     vault_contracts,
@@ -373,6 +375,65 @@ def _attach_mtime_tip(
     return out
 
 
+def _attach_flaws(out: dict[str, Any], flaws: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge corpus findings onto a successful response. Does not touch tip/warning."""
+    if not out.get("ok") or not flaws:
+        return out
+    existing = out.get("flaws")
+    if isinstance(existing, list) and existing:
+        out["flaws"] = list(existing) + list(flaws)
+    else:
+        out["flaws"] = list(flaws)
+    return out
+
+
+def _prepare_write_content(
+    content: str,
+    *,
+    path: str,
+    vault: str,
+    okf_result: Any | None = None,
+    format_only: bool = False,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Auto-fix trailing WS before disk write; collect OKF + format flaws.
+
+    ``format_only`` skips OKF flaw mapping (append_note path).
+    """
+    flaws: list[dict[str, Any]] = []
+    if okf_result is not None and not format_only:
+        flaws.extend(
+            note_lint.flaws_from_okf(okf_result, path=path, vault=vault)
+        )
+    text, fmt_flaws = note_lint.apply_auto_fixes(
+        content, path=path, vault=vault, enabled=True
+    )
+    flaws.extend(fmt_flaws)
+    return text, flaws
+
+
+def _attach_archival_write_flaws(
+    out: dict[str, Any],
+    *,
+    vault: str,
+    path: str,
+    content: str | None = None,
+) -> dict[str, Any]:
+    """Post-write archival suggest check (eligible + blocked_todos only)."""
+    if not out.get("ok") or not path:
+        return out
+    try:
+        b = _binding(vault or str(out.get("vault") or ""))
+        root = b.resolved().root
+    except OpsError:
+        return out
+    flaws, tip = archival_contract.evaluate_write_path(
+        root, path, content=content
+    )
+    if tip:
+        out = _attach_tip(out, tip)
+    return _attach_flaws(out, flaws)
+
+
 def _finalize_write(
     out: dict[str, Any],
     *,
@@ -387,6 +448,9 @@ def _finalize_write(
         path=path,
         expected_mtime=expected_mtime,
         content=content,
+    )
+    out = _attach_archival_write_flaws(
+        out, vault=vault, path=path, content=content
     )
     out = _stamp_qualified(out, vault=vault, path=path)
     return _attach_watcher_tip(out)
@@ -1156,6 +1220,7 @@ def read_note(
     mode: str = "auto",
     sibling: str | None = None,
     siblings: bool = False,
+    lint: bool = False,
 ) -> dict[str, Any]:
     path_s = (path or "").strip()
     ch = (chunk_hash or "").strip()
@@ -1294,6 +1359,18 @@ def read_note(
     _record_path_touch(
         b.name, path_s, float(out["mtime"]), text, heading=heading
     )
+    if lint:
+        _, lint_flaws = note_lint.lint_note(
+            text,
+            path=path_s,
+            vault_root=root,
+            vault=b.name,
+            include_links=True,
+            include_usage=True,
+            include_format=True,
+            auto_fix=False,
+        )
+        out = _attach_flaws(out, lint_flaws)
     return _stamp_qualified(out, vault=b.name, path=path_s)
 
 
@@ -1811,7 +1888,9 @@ def write_note(
             **{k: val for k, val in okf_meta.items() if k != "enforcement"},
             enforcement=okf.enforcement,
         )
-    to_write = okf.content
+    to_write, write_flaws = _prepare_write_content(
+        okf.content, path=path, vault=b.name, okf_result=okf
+    )
 
     full.parent.mkdir(parents=True, exist_ok=True)
     full.write_text(to_write, encoding="utf-8")
@@ -1826,6 +1905,7 @@ def write_note(
         "vault": b.name,
     }
     out.update(okf_meta)
+    out = _attach_flaws(out, write_flaws)
     attach_region_hashes(out, to_write)
     if new_top:
         out["warning"] = (
@@ -1991,6 +2071,9 @@ def append_note(
     new_content = "\n".join(merged)
     if content.endswith("\n") and not new_content.endswith("\n"):
         new_content += "\n"
+    new_content, write_flaws = _prepare_write_content(
+        new_content, path=path, vault=b.name, format_only=True
+    )
     full.write_text(new_content, encoding="utf-8")
     _enqueue_index(b, full)
 
@@ -2004,6 +2087,7 @@ def append_note(
         "mtime": _mtime(full),
         "vault": b.name,
     }
+    out = _attach_flaws(out, write_flaws)
     attach_region_hashes(
         out,
         new_content,
@@ -2522,6 +2606,9 @@ def patch_note(
             enforcement=okf.enforcement,
         )
     to_write = okf.content
+    to_write, write_flaws = _prepare_write_content(
+        to_write, path=path, vault=b.name, okf_result=okf
+    )
 
     full.write_text(to_write, encoding="utf-8")
     _enqueue_index(b, full)
@@ -2539,6 +2626,7 @@ def patch_note(
         "vault": b.name,
     }
     out.update(okf_meta)
+    out = _attach_flaws(out, write_flaws)
     attach_region_hashes(out, to_write)
     if verbose:
         out["lines_added"] = result.lines_added
@@ -3136,6 +3224,9 @@ def send_note(
             enforcement=okf.enforcement,
         )
     to_write = okf.content
+    to_write, write_flaws = _prepare_write_content(
+        to_write, path=dst, vault=b.name, okf_result=okf
+    )
 
     dst_full.parent.mkdir(parents=True, exist_ok=True)
     dst_full.write_text(to_write, encoding="utf-8")
@@ -3152,13 +3243,14 @@ def send_note(
         "vault": b.name,
     }
     out.update(okf_meta)
+    out = _attach_flaws(out, write_flaws)
     if new_top:
         out["warning"] = (
             f"created new top-level directory {parts[0]!r} — "
             f"existing top-level dirs: {_top_level_dirs(root)}"
         )
     return _finalize_write(
-        out, vault=b.name, path=dst, expected_mtime=expected_mtime
+        out, vault=b.name, path=dst, expected_mtime=expected_mtime, content=to_write
     )
 
 
@@ -3245,16 +3337,30 @@ def vault_op(
     vaults: list[str] | None = None,
     full: bool = False,
     days: int | None = 7,
+    folder: str = "",
+    limit: int | None = 50,
+    offset: int = 0,
+    fix: bool = False,
 ) -> dict[str, Any]:
-    """Vault management: list | contracts | describe | merge | project | stats.
+    """Vault management: list | contracts | describe | merge | project | stats | lint.
 
     Read-only except ``stats`` (habit KPI rollups). ``project`` returns desk ``body`` + ``guidance``.
+    ``lint`` emits corpus ``flaws[]`` (archival + note_lint detectors) for one vault.
+    ``fix=true`` on lint applies mechanical auto remediations (trailing WS) only.
     """
     act = (action or "list").strip().lower()
-    if act not in ("list", "contracts", "describe", "merge", "project", "stats"):
+    if act not in (
+        "list",
+        "contracts",
+        "describe",
+        "merge",
+        "project",
+        "stats",
+        "lint",
+    ):
         return _err(
             error="bad_action",
-            message="action must be list|contracts|describe|merge|project|stats",
+            message="action must be list|contracts|describe|merge|project|stats|lint",
         )
 
     if act == "stats":
@@ -3273,6 +3379,82 @@ def vault_op(
             days=days,
         )
         out["vault"] = b.name
+        return out
+
+    if act == "lint":
+        if vaults:
+            return _err(
+                error="bad_request",
+                message="lint accepts vault= (single vault), not vaults=",
+            )
+        key = (vault or "").strip()
+        try:
+            b = _binding(key) if key else _binding("")
+        except OpsError as e:
+            return _err(error=e.code, message=e.message)
+        if limit is not None and limit < 0:
+            return _err(error="bad_request", message="limit must be >= 0 or null")
+        if offset < 0:
+            return _err(error="bad_request", message="offset must be >= 0")
+        root = b.resolved().root
+        folder_s = (folder or "").strip()
+        lim = 50 if limit is None else int(limit)
+        off = int(offset)
+        # Collect full detector sets then paginate once (stable merge).
+        data = archival_contract.load_archival_contract(root)
+        arch = archival_contract.lint_vault(
+            root,
+            data,
+            folder=folder_s,
+            limit=100_000,
+            offset=0,
+            vault_name=b.name,
+        )
+        notes = note_lint.lint_folder(
+            root,
+            folder=folder_s,
+            limit=100_000,
+            offset=0,
+            vault_name=b.name,
+            include_links=True,
+            fix=bool(fix),
+        )
+        merged_flaws: list[dict[str, Any]] = []
+        for part in (arch, notes):
+            for f in part.get("flaws") or []:
+                if isinstance(f, dict):
+                    merged_flaws.append(f)
+        counts: dict[str, int] = {}
+        for f in merged_flaws:
+            code = str(f.get("code") or "?")
+            counts[code] = counts.get(code, 0) + 1
+        sliced = merged_flaws[off : off + lim]
+        out: dict[str, Any] = {
+            "ok": True,
+            "action": "lint",
+            "flaws": sliced,
+            "counts_by_code": counts,
+            "total_flaws": len(merged_flaws),
+            "has_more": (off + len(sliced)) < len(merged_flaws),
+            "offset": off,
+            "limit": lim,
+            "vault": b.name,
+            "folder": folder_s,
+            "fix": bool(fix),
+        }
+        warnings: list[str] = []
+        tips: list[str] = []
+        for part in (arch, notes):
+            w = part.get("warning")
+            if w:
+                warnings.append(str(w))
+            t = part.get("tip")
+            if t:
+                tips.append(str(t))
+        if warnings:
+            out["warning"] = "; ".join(warnings)
+        if tips:
+            out["tip"] = "; ".join(dict.fromkeys(tips))
         return out
 
     try:

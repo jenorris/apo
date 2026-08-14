@@ -168,8 +168,8 @@ _MCP_INSTRUCTIONS = (
     "apo_admin(action=list|describe|invoke): engine ops (memory_status, reindex, "
     "delete_note, reload_config, git_sync). Destructive invoke requires "
     "confirm=true (delete_note always; reindex force=true; git_sync run/pull/rebase). "
-    "vault(action=list|contracts|describe|merge|project|stats): registry + contracts + "
-    "optional habit KPIs (stats). "
+    "vault(action=list|contracts|describe|merge|project|stats|lint): registry + contracts + "
+    "optional habit KPIs (stats) + archival lint (flaws[]). "
     "Routing: write_note=create/overwrite (content=); "
     "append_note=session log / post-search add (text=); "
     "patch_note=frontmatter/section mutate or place op (move/copy); "
@@ -659,6 +659,15 @@ async def read_note(
         bool,
         Field(description="chunk_hash mode: include full same-depth siblings[] list (default off)."),
     ] = False,
+    lint: Annotated[
+        bool,
+        Field(
+            description=(
+                "Path mode: when true, attach corpus flaws[] for this note "
+                "(links/usage/format). Default off."
+            ),
+        ),
+    ] = False,
 ) -> dict:
     """Read by path or search hit chunk_hash. Search → read_note(chunk_hash=)."""
     return await asyncio.to_thread(
@@ -677,6 +686,7 @@ async def read_note(
         format=format,
         sibling=sibling,
         siblings=siblings,
+        lint=lint,
     )
 
 
@@ -895,14 +905,18 @@ async def history(
 async def vault(
     action: Annotated[
         str,
-        Field(description="list | contracts | describe | merge | project | stats"),
+        Field(
+            description=(
+                "list | contracts | describe | merge | project | stats | lint"
+            ),
+        ),
     ] = "list",
     vault: Annotated[
         str,
         Field(
             description=(
                 "Vault name from APO_VAULTS. Empty: list/merge/project=all; "
-                "contracts=all; describe/stats=default vault."
+                "contracts=all; describe/stats/lint=default vault."
             ),
         ),
     ] = "",
@@ -911,7 +925,7 @@ async def vault(
         Field(
             description=(
                 "Scope every action to a named subset of the registry. "
-                "Do not combine with vault=."
+                "Do not combine with vault=. Not valid for lint."
             ),
         ),
     ] = None,
@@ -928,8 +942,33 @@ async def vault(
         int | None,
         Field(description="stats only: rollup window in days (default 7)."),
     ] = 7,
+    folder: Annotated[
+        str,
+        Field(
+            description=(
+                "lint only: folder scope (default empty = archival include_folders)."
+            ),
+        ),
+    ] = "",
+    limit: Annotated[
+        int | None,
+        Field(description="lint only: max flaws returned (default 50)."),
+    ] = 50,
+    offset: Annotated[
+        int,
+        Field(description="lint only: skip this many flaws (default 0)."),
+    ] = 0,
+    fix: Annotated[
+        bool,
+        Field(
+            description=(
+                "lint only: apply mechanical auto remediations (trailing whitespace). "
+                "Default false — findings only."
+            ),
+        ),
+    ] = False,
 ) -> dict:
-    """Vault registry, contracts, desk projection, and optional habit KPIs (stats)."""
+    """Vault registry, contracts, desk projection, habit KPIs, and corpus lint."""
     return await asyncio.to_thread(
         apo_ops.vault_op,
         action,
@@ -937,6 +976,10 @@ async def vault(
         vaults=vaults,
         full=full,
         days=days,
+        folder=folder,
+        limit=limit,
+        offset=offset,
+        fix=fix,
     )
 
 

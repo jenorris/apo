@@ -157,6 +157,13 @@ class ToolMetricsMiddleware(Middleware):
 
         duration_ms = (time.perf_counter() - t0) * 1000.0
         ok, error, resp_bytes = tool_metrics.summarize_result(result)
+        result_flags = dict(flags)
+        try:
+            from apo_engine import note_lint as _note_lint
+
+            result_flags.update(_note_lint.extract_flaws_metrics(result))
+        except Exception:
+            pass
         tool_metrics.record_call(
             collection=collection,
             tool=tool,
@@ -165,7 +172,7 @@ class ToolMetricsMiddleware(Middleware):
             duration_ms=duration_ms,
             req_bytes=req_bytes,
             resp_bytes=resp_bytes,
-            flags=flags,
+            flags=result_flags,
             vault_id=vault_id,
             vault_root=vault_root,
             arguments=args,

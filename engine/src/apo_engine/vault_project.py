@@ -44,7 +44,7 @@ _WRITE_HABIT_LINES: dict[str, str] = {
         "batch facets with `folder=` or widen `limit=` instead."
     ),
     "vault_api_routing": (
-        "- **`vault` tool:** `vault(action=list|contracts|describe|merge|project)` — never "
+        "- **`vault` tool:** `vault(action=list|contracts|describe|merge|project|stats|lint)` — never "
         "`vault(name=…)` (`unexpected_keyword_argument:name`)."
     ),
     "end_of_turn_domain_writes": (
@@ -55,6 +55,17 @@ _WRITE_HABIT_LINES: dict[str, str] = {
     "session_audit_telemetry_only": (
         "- Session audit is **automatic OTel** (Cursor hooks → Jaeger via otlp-mcp) — do **not** "
         "`append_note` to `vault=sessions` unless desk `dual_write.enabled` is explicitly true."
+    ),
+    "address_flaws_on_write": (
+        "- After successful writes / `vault(action=lint)`, inspect **`flaws[]`** (corpus quality — "
+        "not `tip`/`warning`). For `remediation: llm`, apply `suggested_op` once per finding per "
+        "turn (`value: null` means supply content). For `human`, surface to operator. "
+        "Stop if the same `code`+`path`+`evidence` reappears. Soft OKF may dual-emit prose "
+        "`warnings` during the compat window — prefer branching on `flaws[].code`."
+    ),
+    "lint_before_conclude": (
+        "- Before concluding a large vault hygiene pass, run `vault(action=lint, folder=…)` "
+        "and drain `remediation: llm` findings within budget — do not unbounded lint→fix loops."
     ),
 }
 

@@ -43,6 +43,25 @@ Successful responses may include a non-fatal **`tip`** field:
 - Follow-up write after a recent `read_note` / write to the same path without `expected_mtime` → tip with the literal `expected_mtime=<n>` value when known
 - Stale `chunk_hash` with path+heading fallback → tip to re-search for a fresh hash
 
+## Corpus `flaws[]` (library scribe)
+
+Successful write / `vault(action=lint)` / opt-in `read_note(lint=true)` responses may include **`flaws[]`** (corpus quality — **not** habits):
+
+| Field | Meaning |
+|-------|---------|
+| `tip` | Agent habits only |
+| `warning` | Ops / degraded mode only |
+| `flaws` | Deterministic corpus defects |
+
+- Branch on `flaws[].code` + `remediation` (`auto` \| `llm` \| `human`), not `message`
+- `remediation: llm` → apply `suggested_op` once per finding per turn (`value: null` = supply content). Stop if the same `code`+`path`+`evidence` reappears
+- `remediation: human` → surface; do not invent taxonomy
+- Soft OKF may **dual-emit** prose `warnings` and structured `flaws` during the compat window — prefer `flaws`
+- `format.trailing_ws` is auto-fixed on write (`status: fixed`); lint sweep `fix=true` for mechanical fixes only
+- `vault(action=lint, folder=, limit=, offset=)` for backlog — do not unbounded lint→fix loops
+
+See [library-scribe.md](library-scribe.md).
+
 Search hits include **`file_bytes`** and **`section_bytes`** — check before expand; never bare `read_note(heading=)` after search (duplicate headings). Anchor via **`chunk_hash`** only.
 
 Do not treat `tip` as failure; `warning` remains for watcher / path issues. Search hits include float **`mtime`** beside ISO `modified` for threading into writes.

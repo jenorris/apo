@@ -32,6 +32,8 @@ _FLAG_KEYS = (
     "used_alias",
     "ops_count",
     "error_shape",
+    "flaws_emitted",
+    "flaws_auto_fixed",
 )
 _EXTRA_COLS = (
     ("vault_id", "VARCHAR"),
@@ -41,6 +43,8 @@ _EXTRA_COLS = (
     ("heading", "VARCHAR"),
     ("chunk_hash", "VARCHAR"),
     ("apo_version", "VARCHAR"),
+    ("flaws_emitted", "INTEGER"),
+    ("flaws_auto_fixed", "INTEGER"),
 )
 
 
@@ -244,8 +248,9 @@ def _insert_events(
             INSERT INTO tool_calls (
                 ts, collection, tool, ok, error, duration_ms, req_bytes, resp_bytes,
                 folder_set, fields_set, expected_mtime_set, used_alias, ops_count, error_shape,
-                vault_id, conversation_id, note_path, path_hash, heading, chunk_hash, apo_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                vault_id, conversation_id, note_path, path_hash, heading, chunk_hash, apo_version,
+                flaws_emitted, flaws_auto_fixed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 event.get("ts"),
@@ -271,6 +276,12 @@ def _insert_events(
                 event.get("heading") or None,
                 event.get("chunk_hash") or None,
                 event.get("apo_version") or None,
+                int(flags["flaws_emitted"])
+                if flags.get("flaws_emitted") is not None
+                else None,
+                int(flags["flaws_auto_fixed"])
+                if flags.get("flaws_auto_fixed") is not None
+                else None,
             ],
         )
 
@@ -465,7 +476,8 @@ def _embedded_read_events(
                     SELECT ts, tool, ok, error, duration_ms, req_bytes, resp_bytes,
                            folder_set, fields_set, expected_mtime_set, used_alias,
                            ops_count, error_shape, vault_id, conversation_id,
-                           note_path, path_hash, heading, chunk_hash, apo_version
+                           note_path, path_hash, heading, chunk_hash, apo_version,
+                           flaws_emitted, flaws_auto_fixed
                     FROM tool_calls
                     WHERE collection = ?
                 """

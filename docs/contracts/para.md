@@ -111,7 +111,7 @@ Optional but high-leverage: a daily note under `inbox/daily/YYYY-MM-DD.md` with 
 - Rename / archive → `place_note` (never read→write→delete)
 - After a batch of index-deferred writes → `reindex_deferred`
 
-Always check tool `ok`.
+Always check tool `ok`. After successful mutate, inspect **`flaws[]`** when present: address `remediation: llm` via `suggested_op` (one pass per finding per turn) before the end-of-turn gate; surface `human`; never overload `tip`/`warning` as corpus quality. See [library-scribe.md](../library-scribe.md).
 
 ### 4. Inbox hygiene
 

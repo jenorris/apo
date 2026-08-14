@@ -39,6 +39,7 @@ frontmatter_floor:
   # - timestamp
 
 # Enum-ish habit ids (documented in docs/agent-throughput.md; projected into apo-desk § Apo throughput).
+# Channel split: tip=habits · warning=ops · flaws=corpus. Prefer address_flaws_on_write.
 write_habits:
   - prefer_append_patch
   - folder_on_search
@@ -48,6 +49,8 @@ write_habits:
   - chunk_hash_surgical
   - dedupe_search
   - vault_api_routing
+  - address_flaws_on_write
+  # - lint_before_conclude
 
 # Authoring dialect + optional render profile (harness / desk projection).
 # Dialect = what agents may put in .md bodies. Render = export/publish only

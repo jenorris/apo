@@ -4,6 +4,16 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-08-15
+
+### Added
+
+- **Library scribe `flaws[]`** — soft OKF dual-emits structured `flaws` + prose `warnings`; write-path `format.trailing_ws` auto-fix (`status: fixed`); `vault(action=lint)` merges archival + note_lint detectors (links, usage floors, dialect, layout); opt-in `read_note(lint=true)`; `vault(stats)` KPIs `flaws.emitted` / `flaws.auto_fixed`. See [docs/library-scribe.md](docs/library-scribe.md).
+- **Archival contract (suggest mode)** — vault `archival-contract` eligibility → structured `flaws[]` on writes and `vault(action=lint)` (folder/limit/offset). Agent applies `set_field` on src then `place`; `mode: auto` reserved (treated as off). See [docs/contracts/archival.md](docs/contracts/archival.md).
+- Usage-contract write habits `address_flaws_on_write` / `lint_before_conclude` projected into apo-desk.
+
+**Upgrade:** Quit Cursor/Claude fully (Cmd+Q) so MCP reloads tool schemas and `flaws[]` response fields.
+
 ## [0.11.3] — 2026-08-14
 
 ### Fixed

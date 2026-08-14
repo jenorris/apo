@@ -145,6 +145,10 @@ def compute_efficiency(
             "patch_note_calls": patch_calls,
             "expected_mtime_set": mtime_set,
         },
+        "flaws": {
+            "emitted": sum(int(ev.get("flaws_emitted") or 0) for ev in events),
+            "auto_fixed": sum(int(ev.get("flaws_auto_fixed") or 0) for ev in events),
+        },
         "tips": tips,
     }
 

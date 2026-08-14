@@ -60,15 +60,15 @@ Apo then:
 
 1. **Resolve path class** — reserved (`index.md` / `log.md`), exempt (e.g. daily session logs), concept (default), corpus (hard globs).
 2. **Stamp** missing `okf_type`, `description`, `timestamp`, `resource`/`title` — never overwrite non-empty `okf_type` / `resource` on soft stamp.
-3. **Validate** required fields; **soft** = warn + write; **hard** = `ok: false` with `error: okf_validation`.
-4. **`append_note` v1** — no full concept stamp (History / session log append-only).
+3. **Validate** required fields; **soft** = write + dual-emit prose `warnings` and structured `flaws[]` (`okf.missing_field`); **hard** = `ok: false` with `error: okf_validation`.
+4. **`append_note` v1** — no full concept stamp (History / session log append-only); format detectors (trailing WS) still apply.
 
 Env:
 
 - `APO_OKF_CONTRACT` — path to YAML (alias: `APO_OKF_PROFILE`)
 - `APO_OKF_ENFORCEMENT=soft|hard|off`
 
-Offline twin in Meta: `just okf lint` / `just okf fix`.
+Offline twin in Meta: `just okf lint` / `just okf fix`. Corpus lint on MCP: `vault(action=lint)` — see [library-scribe.md](../library-scribe.md).
 
 ## Agent behaviors
 
@@ -76,6 +76,7 @@ Offline twin in Meta: `just okf lint` / `just okf fix`.
 2. Prefer `filter_notes({"okf_type": "…"}, folder=…)` for typed corpora before opening dashboard/tracker notes.
 3. Non-root `index.md`: **no** concept frontmatter (OKF reserved listing).
 4. MCP tool names stay `*_note` — “concept” is the vocabulary; “note” is the file/tool colloquialism.
+5. After writes: inspect `flaws[]` — `remediation: llm` → one `suggested_op` pass; do not treat `tip` as corpus quality.
 
 ## Mixing
 
