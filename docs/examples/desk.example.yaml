@@ -24,7 +24,7 @@ workspace: ""
 #   # domain_vaults: [work, contracts, optima]
 
 vault_roles:
-  meta: pkb
+  atlas: pkb
   norris: household
   work: employer
   sessions: audit
@@ -41,7 +41,7 @@ role_notes: {}
 
 # Deep policy docs — use vault_id:relative/path (expanded to absolute .md links on project).
 # pointers:
-#   memory_policy: "meta:system/config/agent-memory-policy"
-#   write_api: "meta:system/config/apo-write-api"
-#   source_routing: "meta:system/config/source-routing"
+#   memory_policy: "atlas:system/config/agent-memory-policy"
+#   write_api: "atlas:system/config/apo-write-api"
+#   source_routing: "atlas:system/config/source-routing"
 pointers: {}

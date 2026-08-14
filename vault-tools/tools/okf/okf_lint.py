@@ -4,8 +4,8 @@ okf_lint.py — Lint / fix / regenerate indexes for an OKF vault.
 
 Requires vault system/contracts/okf-contract*.yaml.
 
-  VAULT_ROOT=~/Notes/Meta python3 okf_lint.py [--strict] [path…]
-  python3 okf_lint.py --vault ~/Notes/Meta --fix [path…]
+  VAULT_ROOT=~/Notes/Atlas python3 okf_lint.py [--strict] [path…]
+  python3 okf_lint.py --vault ~/Notes/Atlas --fix [path…]
 """
 
 from __future__ import annotations

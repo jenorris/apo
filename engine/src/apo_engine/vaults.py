@@ -231,8 +231,9 @@ def _default_index_for(root: Path, vault_id: str) -> Path:
     # could differ from usage vault_id (e.g. registry ``meta`` vs vault_id ``jeremy``).
     # If exactly one legacy candidate exists for this root's known aliases, use it.
     aliases = {
-        "jeremy": ("meta", "jeremy", "notes_global"),
-        "meta": ("meta", "jeremy", "notes_global"),
+        "atlas": ("atlas", "meta", "jeremy", "notes_global"),
+        "jeremy": ("atlas", "meta", "jeremy", "notes_global"),
+        "meta": ("atlas", "meta", "jeremy", "notes_global"),
     }.get(vault_id, (vault_id,))
     found = [apo / f"index-{a}.db" for a in aliases if (apo / f"index-{a}.db").exists()]
     # De-dupe paths

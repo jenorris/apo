@@ -36,7 +36,7 @@ Default path: `~/.apo/index-{collection_id}.db`. If that file is missing but a l
 
 ```bash
 export APO_COLLECTION_ROOT="$HOME/Notes"
-export APO_DEFAULT_VAULT=jeremy   # or rely on a unique memory.default_vault claim
+export APO_DEFAULT_VAULT=atlas   # or rely on a unique memory.default_vault claim
 ```
 
 **Workbench (subset — never collection-root on all of Notes):**

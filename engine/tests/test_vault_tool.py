@@ -60,7 +60,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             "default_vault": "meta",
             "vaults": {
                 "meta": {
-                    "root": "/Users/jnorris/Notes/Meta",
+                    "root": "/Users/jnorris/Notes/Atlas",
                     "default": True,
                     "contracts": {
                         "usage-contract": {

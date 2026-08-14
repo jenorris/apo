@@ -4,7 +4,7 @@
 
 Use when the vault is (or should become) an [Open Knowledge Format (OKF) v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) Knowledge Bundle: typed concepts, progressive disclosure via `index.md`, and Apo `filter_notes` on `okf_type`.
 
-**Live contract (Meta reference):** `~/Notes/Meta/system/contracts/okf-contract.schema.yaml`
+**Live contract (Atlas PKB reference):** `~/Notes/Atlas/system/contracts/okf-contract.schema.yaml`
 **OKF conformance prose:** `system/config/okf-profile.md` (OKF “conformance profile” jargon — not an Apo preset)
 **Write-path normative:** `system/config/apo-okf-write-contract.md`
 

@@ -28,17 +28,17 @@ CLI path arguments must resolve **under** `VAULT_ROOT` (`..` / absolute escapes 
 
 ```bash
 # Direct
-python3 vault-tools/tools/okf/okf_lint.py --vault ~/Notes/Meta
-VAULT_ROOT=~/Notes/Meta python3 vault-tools/tools/okf/okf_lint.py --strict
+python3 vault-tools/tools/okf/okf_lint.py --vault ~/Notes/Atlas
+VAULT_ROOT=~/Notes/Atlas python3 vault-tools/tools/okf/okf_lint.py --strict
 
 # vault-tools justfile
-just -f vault-tools/justfile okf-lint --vault ~/Notes/Meta
+just -f vault-tools/justfile okf-lint --vault ~/Notes/Atlas
 
 # Vault thin binder (preferred for humans/agents)
-just --justfile ~/Notes/Meta/justfile okf lint
+just --justfile ~/Notes/Atlas/justfile okf lint
 # Override toolkit path (worktrees):
 APO_VAULT_TOOLS=~/Code/apo-worktrees/vault-tools/vault-tools \
-  just --justfile ~/Notes/Meta/justfile okf lint
+  just --justfile ~/Notes/Atlas/justfile okf lint
 ```
 
 Default `APO_VAULT_TOOLS` (when unset): `~/Code/apo/vault-tools`.

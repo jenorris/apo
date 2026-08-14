@@ -4,6 +4,17 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-08-14
+
+Atlas PKB cutover — usage `vault_id` / docs / legacy index aliases track `atlas` (`~/Notes/Atlas`, `jenorris/atlas`). Compat still accepts legacy `meta`/`jeremy` index filenames.
+
+**Upgrade:** Set `APO_DEFAULT_VAULT=atlas` (personal) after renaming the Meta folder; Workbench stays on explicit `APO_VAULT_PATHS`. Quit Cursor/Claude fully (Cmd+Q) so MCP reloads.
+
+### Changed
+
+- **Legacy index aliases** — `atlas` / `jeremy` / `meta` / `notes_global` resolve to the same pre-rename sqlite file when present.
+- **Docs & examples** — multi-vault recipes and OKF/vault-tools paths use `~/Notes/Atlas` and `APO_DEFAULT_VAULT=atlas`.
+
 ## [0.10.0] — 2026-08-14
 
 Path-list / collection-root vault discovery — no more `vaults.json` name map required. Tool-facing names come from each vault’s usage-contract `vault_id`.
