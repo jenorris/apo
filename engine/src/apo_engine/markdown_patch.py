@@ -328,6 +328,13 @@ def apply_append(
         section = find_section(lines, heading)
 
     if section is None:
+        # Bare prepend (position=start, no heading) → document body start after FM.
+        # Bare append / append_eof keep EOF. Headed prepend uses section.body_start below.
+        if position == "start":
+            bounds = _frontmatter_bounds(lines)
+            at = (bounds[1] + 1) if bounds else 0
+            merged, n = _insert_text_lines(lines, insert_lines, at)
+            return merged, f"appended {n} line(s) at document start"
         at = len(lines)
         if lines and lines[-1] != "":
             insert_lines = (["\n"] if lines[-1].strip() else []) + insert_lines

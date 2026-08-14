@@ -94,7 +94,16 @@ retries by heading and returns a soft `tip` to re-search.
 `chunk_hash` on `append_note`). A leading markdown heading that repeats the
 anchor title is stripped on `append` / `prepend` / `replace_section` so
 clients that copy `read_note(..., heading=…)` into `text` do not write
-double headers. EOF append (`append_eof` / no heading) does not strip.
+double headers.
+
+**Bare (no heading / target / chunk_hash):**
+
+| Op | Where text lands |
+|----|------------------|
+| `prepend` | Document body start — immediately after YAML frontmatter (or line 0 if none) |
+| `append` / `append_eof` | EOF |
+
+Headed `prepend` still inserts at the start of that section’s body.
 
 Normalization (`ops_to_dicts` / apply path) strips aliases so the engine sees one
 canonical shape per op.

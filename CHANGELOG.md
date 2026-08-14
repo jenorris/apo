@@ -4,6 +4,14 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.11.3] — 2026-08-14
+
+### Fixed
+
+- **Bare `prepend` document start** — `patch_note` `op: prepend` without `heading` / `target` / `chunk_hash` inserts immediately after YAML frontmatter (or at line 0 if none), not at EOF. Headed prepend and bare `append` / `append_eof` unchanged. See [docs/patch-note-ops.md](docs/patch-note-ops.md).
+
+**Upgrade:** Quit Cursor/Claude fully (Cmd+Q) so MCP reloads the engine.
+
 ## [0.11.2] — 2026-08-14
 
 ### Added

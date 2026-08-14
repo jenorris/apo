@@ -133,6 +133,54 @@ title: '2026-07-09'
         self.assertTrue(result.ok)
         self.assertIn("line2", result.content)
 
+    def test_bare_prepend_after_frontmatter(self):
+        src = """---
+title: Test
+---
+
+## 2026-08-13
+
+Body here.
+"""
+        result = apply_patch(
+            src,
+            [{"op": "prepend", "position": "start", "text": "## 2026-08-14 — process\n\nDecision: x\n\n"}],
+        )
+        self.assertTrue(result.ok)
+        self.assertIn("document start", result.results[0]["detail"])
+        self.assertLess(
+            result.content.index("## 2026-08-14 — process"),
+            result.content.index("## 2026-08-13"),
+        )
+        self.assertTrue(result.content.startswith("---\ntitle: Test\n---\n"))
+
+    def test_bare_prepend_without_frontmatter(self):
+        result = apply_patch(
+            "## First\n\nbody\n",
+            [{"op": "prepend", "text": "## NEW\n\nx\n"}],
+        )
+        self.assertTrue(result.ok)
+        self.assertIn("document start", result.results[0]["detail"])
+        self.assertTrue(result.content.startswith("## NEW\n"))
+        self.assertLess(result.content.index("## NEW"), result.content.index("## First"))
+
+    def test_bare_append_still_eof(self):
+        src = """---
+title: Test
+---
+
+## Section
+
+body
+"""
+        result = apply_patch(src, [{"op": "append", "text": "## Footer\n\nz\n"}])
+        self.assertTrue(result.ok)
+        self.assertIn("at EOF", result.results[0]["detail"])
+        self.assertGreater(
+            result.content.index("## Footer"),
+            result.content.index("## Section"),
+        )
+
 
 class TestPatch(unittest.TestCase):
     def test_set_field_existing(self):
