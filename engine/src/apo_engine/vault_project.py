@@ -44,7 +44,7 @@ _WRITE_HABIT_LINES: dict[str, str] = {
         "batch facets with `folder=` or widen `limit=` instead."
     ),
     "vault_api_routing": (
-        "- **`vault` tool:** `vault(action=list|contracts|describe|merge|project)` — never "
+        "- **`vault` tool:** `vault(action=list|contracts|describe|merge|project|stats|lint)` — never "
         "`vault(name=…)` (`unexpected_keyword_argument:name`)."
     ),
     "end_of_turn_domain_writes": (

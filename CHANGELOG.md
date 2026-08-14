@@ -4,6 +4,10 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- **Archival contract (suggest mode)** — vault `archival-contract` eligibility → structured `flaws[]` on writes and `vault(action=lint)` (folder/limit/offset). Agent applies `set_field` on src then `place`; `mode: auto` reserved (treated as off). See [docs/contracts/archival.md](docs/contracts/archival.md).
+
 ## [0.11.2] — 2026-08-14
 
 ### Added

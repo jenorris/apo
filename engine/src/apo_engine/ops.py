@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from apo_engine import (
     __version__,
+    archival_contract,
     config,
     core,
     deferred as index_deferred,
@@ -373,6 +374,41 @@ def _attach_mtime_tip(
     return out
 
 
+def _attach_flaws(out: dict[str, Any], flaws: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge corpus findings onto a successful response. Does not touch tip/warning."""
+    if not out.get("ok") or not flaws:
+        return out
+    existing = out.get("flaws")
+    if isinstance(existing, list) and existing:
+        out["flaws"] = list(existing) + list(flaws)
+    else:
+        out["flaws"] = list(flaws)
+    return out
+
+
+def _attach_archival_write_flaws(
+    out: dict[str, Any],
+    *,
+    vault: str,
+    path: str,
+    content: str | None = None,
+) -> dict[str, Any]:
+    """Post-write archival suggest check (eligible + blocked_todos only)."""
+    if not out.get("ok") or not path:
+        return out
+    try:
+        b = _binding(vault or str(out.get("vault") or ""))
+        root = b.resolved().root
+    except OpsError:
+        return out
+    flaws, tip = archival_contract.evaluate_write_path(
+        root, path, content=content
+    )
+    if tip:
+        out = _attach_tip(out, tip)
+    return _attach_flaws(out, flaws)
+
+
 def _finalize_write(
     out: dict[str, Any],
     *,
@@ -387,6 +423,9 @@ def _finalize_write(
         path=path,
         expected_mtime=expected_mtime,
         content=content,
+    )
+    out = _attach_archival_write_flaws(
+        out, vault=vault, path=path, content=content
     )
     out = _stamp_qualified(out, vault=vault, path=path)
     return _attach_watcher_tip(out)
@@ -3245,16 +3284,28 @@ def vault_op(
     vaults: list[str] | None = None,
     full: bool = False,
     days: int | None = 7,
+    folder: str = "",
+    limit: int | None = 50,
+    offset: int = 0,
 ) -> dict[str, Any]:
-    """Vault management: list | contracts | describe | merge | project | stats.
+    """Vault management: list | contracts | describe | merge | project | stats | lint.
 
     Read-only except ``stats`` (habit KPI rollups). ``project`` returns desk ``body`` + ``guidance``.
+    ``lint`` emits archival (and future) corpus ``flaws[]`` for one vault.
     """
     act = (action or "list").strip().lower()
-    if act not in ("list", "contracts", "describe", "merge", "project", "stats"):
+    if act not in (
+        "list",
+        "contracts",
+        "describe",
+        "merge",
+        "project",
+        "stats",
+        "lint",
+    ):
         return _err(
             error="bad_action",
-            message="action must be list|contracts|describe|merge|project|stats",
+            message="action must be list|contracts|describe|merge|project|stats|lint",
         )
 
     if act == "stats":
@@ -3274,6 +3325,33 @@ def vault_op(
         )
         out["vault"] = b.name
         return out
+
+    if act == "lint":
+        if vaults:
+            return _err(
+                error="bad_request",
+                message="lint accepts vault= (single vault), not vaults=",
+            )
+        key = (vault or "").strip()
+        try:
+            b = _binding(key) if key else _binding("")
+        except OpsError as e:
+            return _err(error=e.code, message=e.message)
+        if limit is not None and limit < 0:
+            return _err(error="bad_request", message="limit must be >= 0 or null")
+        if offset < 0:
+            return _err(error="bad_request", message="offset must be >= 0")
+        root = b.resolved().root
+        data = archival_contract.load_archival_contract(root)
+        lim = 50 if limit is None else int(limit)
+        return archival_contract.lint_vault(
+            root,
+            data,
+            folder=(folder or "").strip(),
+            limit=lim,
+            offset=int(offset),
+            vault_name=b.name,
+        )
 
     try:
         default_name, bindings = _load_bindings()

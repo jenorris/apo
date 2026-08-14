@@ -24,6 +24,7 @@ Do **not** confuse templates here with a setting in MCP config. Opt-in means: pu
 | [search-contract.schema.yaml](./search-contract.schema.yaml) | **Ship** | Per-vault default exclude globs for unscoped search + history browse — [search-contract.schema.yaml](./search-contract.schema.yaml) |
 | [usage-contract.schema.yaml](./usage-contract.schema.yaml) | **Ship** | Host-neutral vault usage IR for harness / `vault(project)` — **not** interpreted by the engine for search/write |
 | [telemetry-contract.schema.yaml](./telemetry-contract.schema.yaml) | **Ship** | Vault-defined tool-use telemetry privacy + agent `session_stats` access — [telemetry.md](./telemetry.md) |
+| [archival-contract.schema.yaml](./archival-contract.schema.yaml) | **Ship (suggest)** | Cold-note eligibility → `flaws[]` + `vault(action=lint)`; agent `place` — [archival.md](./archival.md) |
 
 **Existing vault:** [../onboard-prompt.md](../onboard-prompt.md) — infer first; do not force a contract.
 
@@ -50,6 +51,7 @@ Engine-universal habits (check `ok`, prefer `append_note`/`patch_note`, `folder=
 | **Zettelkasten / evergreen** | Atomic notes + dense `[[wikilinks]]`; great search targets | Easy to fake badly; needs link hygiene behaviors |
 | **Johnny.Decimal** | Strong unique IDs / sorting for humans | Weak agent defaults unless ID allocator is scripted |
 | **Journal-first** | Daily notes as hub | Narrow; often a *layer under* PARA |
+| **Archival auto mode** | Watcher `place` when `mode: auto` | Suggest shipped; earn trust before auto |
 | **GTD + PARA** | Next-actions / waiting / someday | Task systems diverge wildly |
 | **Repo-adjacent docs** | `docs/` + root `AGENTS.md` for a code project | Different “vault”; may be `contracts/repo-docs.md` later |
 | **Flat wiki** | Single `wiki/` of evergreen pages (no PARA) | Overlaps llm-wiki without raw/compile discipline |

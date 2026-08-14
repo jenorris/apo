@@ -458,6 +458,9 @@ def _vault(body: dict[str, Any]) -> dict[str, Any]:
         vaults=vaults_raw,
         full=full,
         days=int(body["days"]) if body.get("days") is not None else 7,
+        folder=str(body.get("folder") or ""),
+        limit=int(body["limit"]) if body.get("limit") is not None else 50,
+        offset=int(body["offset"]) if body.get("offset") is not None else 0,
     )
 
 

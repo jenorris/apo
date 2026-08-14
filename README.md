@@ -47,7 +47,7 @@ Most “AI memory” stacks ask you to trust a second database. Apo treats a fol
 | Spreadsheet / SaaS DB + RAG | Proprietary rows | The SaaS UI or a parallel upload | Schema drift, access silos |
 | **Apo** | **Your `.md` / `.yaml` files** | **The same files you open in an editor** | One machine, vault contracts, optional watcher |
 
-You keep Obsidian / git / plain-text workflows. Agents **filter and surgically update** typed fields through MCP, and use hybrid search when meaning recall beats exact catalog queries. Delete `index.db` anytime — rebuild with `just reindex`.
+You keep Obsidian / git / plain-text workflows. Agents **filter and surgically update** typed fields through MCP, and use hybrid search when meaning recall beats exact catalog queries. Delete `index.db` anytime — rebuild with `just reindex`. Embeddings (Ollama `bge-m3` by default) are how Apo **updates the card catalog** after the shelves change — pride of craft, not the product identity.
 
 **Stack rank:** vault data plane → contracts → `filter_notes` / surgical writes → hybrid search → OKF interchange. Apo is not “an OKF product”; [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) is the flagship **contract** for typed Knowledge Bundles.
 
@@ -235,6 +235,8 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/toc-navigation.md](docs/toc-navigation.md) | `read_note(mode=toc)`, sibling hops, hash staleness, pagination |
 | [docs/patch-note-ops.md](docs/patch-note-ops.md) | `patch_note` wire contract (typed ops, aliases, error codes) |
 | [docs/search-quality.md](docs/search-quality.md) | Eval harness, measured hit@k / MRR, reranker guidance |
+| [docs/library-scribe.md](docs/library-scribe.md) | Library-scribe metaphor; archival suggest `flaws[]` + `vault(action=lint)` |
+| [docs/contracts/archival.md](docs/contracts/archival.md) | Archival contract (suggest shipped; auto deferred) |
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
 | [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_VAULTS`) |
 | [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC for local gateways (out-of-repo clients) |

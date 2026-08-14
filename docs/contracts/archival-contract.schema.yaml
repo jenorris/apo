@@ -1,0 +1,87 @@
+# Apo archival contract — template / example
+# Copy to <vault>/system/contracts/archival-contract.schema.yaml and edit.
+# Status: SHIPPED (suggest) — engine loads this; mode=auto is ignored (treated as off).
+#
+# Intent: vault-encoded policy for suggesting cold notes move into an archive
+# outside default ("hot") hybrid search. Pairs with search-contract
+# default_exclude (typically archives/*) and PARA layout.
+#
+# Runtime (suggest): vault(action=lint) + post-write flaws[] on touched paths.
+# Agent remediation: set_field on src (status / archived_at) → then place src→dst.
+# No watcher auto-place in this cut (mode=auto reserved / treated as off).
+
+archival_contract_version: "0.1"
+
+# off | suggest | auto
+#   off     — contract present for docs only; no findings
+#   suggest — MCP emit flaws[] (archive.eligible / blocked_*); no move
+#   auto    — FUTURE: watcher cycles; currently treated as off (+ tip)
+mode: suggest
+
+# Where archived notes land (vault-relative).
+#   mirror — projects/foo/bar.md → archives/projects/foo/bar.md  (v1 only)
+#   flat   — not implemented in v1 (no eligible flaws; lint may warn)
+destination:
+  root: archives
+  strategy: mirror   # mirror only in v1
+
+# Who may be suggested. All lists are AND across groups; OR within a list.
+eligibility:
+  # Only consider notes under these prefixes (empty = whole vault minus exempt).
+  include_folders:
+    - areas/threads
+    - projects
+    - inbox
+  # Never suggest archive for these.
+  exempt_folders:
+    - system
+    - resources/wiki
+    - archives
+  exempt_globs:
+    - "**/index.md"
+    - "**/AGENTS.md"
+  # Frontmatter gates (catalog fields). Missing status = not eligible.
+  status_in:
+    - done
+    - archived
+    - resolved
+    - closed
+  # Cold clock: prefer last_activity (Apo filter sort key); fall back to mtime.
+  idle:
+    field: last_activity   # last_activity | mtime
+    older_than_days: 90
+  # Optional typed allowlist (omit = any okf_type / untyped).
+  # okf_type_in:
+  #   - Thread
+  #   - Project
+
+# What the agent should do when applying a suggestion (deterministic).
+actions:
+  place: true
+  set_fields:
+    status: archived
+    archived_at: "$now"          # agent stamps ISO timestamp via set_field on src
+  # append_history: false
+  # strip_from_hot_index: true   # rely on search-contract exclude after place
+
+# Hot vs cold retrieval (documentation for harness; search-contract is SoT).
+# After place under archives/, unscoped search_notes should miss the note
+# because search-contract default_exclude includes archives/*.
+# Cold recall: search_notes(folder="archives") or filter_notes(..., folder="archives").
+hot_search:
+  relies_on: search-contract.default_exclude
+  expected_exclude_globs:
+    - archives/*
+
+# Watcher cadence — reserved for mode=auto (not implemented).
+schedule:
+  interval_minutes: 60
+  max_per_pass: 25
+  on_ambiguity: suggest   # suggest | skip
+
+# Safety rails.
+safety:
+  require_git_clean: false
+  require_expected_mtime: true
+  deny_if_open_todos: true       # frontmatter todos with status pending → blocked_todos
+  # deny_if_status_in: [active, in-progress, blocked]

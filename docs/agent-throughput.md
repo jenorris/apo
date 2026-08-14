@@ -43,6 +43,13 @@ Successful responses may include a non-fatal **`tip`** field:
 - Follow-up write after a recent `read_note` / write to the same path without `expected_mtime` → tip with the literal `expected_mtime=<n>` value when known
 - Stale `chunk_hash` with path+heading fallback → tip to re-search for a fresh hash
 
+Successful write / `vault(action=lint)` responses may include **`flaws[]`** (corpus quality — not habits):
+
+- Inspect `flaws` after writes and after lint sweeps
+- Concrete `suggested_op` (e.g. `archive.eligible` place) → apply without inventing taxonomy
+- Archive remediation order: `set_field` on **src** (status / `archived_at`) → then `place` via `suggested_op`
+- `vault(action=lint, folder=, limit=, offset=)` for backlog; do not infinite-loop lint→fix
+
 Search hits include **`file_bytes`** and **`section_bytes`** — check before expand; never bare `read_note(heading=)` after search (duplicate headings). Anchor via **`chunk_hash`** only.
 
 Do not treat `tip` as failure; `warning` remains for watcher / path issues. Search hits include float **`mtime`** beside ISO `modified` for threading into writes.
