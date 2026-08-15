@@ -175,6 +175,9 @@ _MCP_INSTRUCTIONS = (
     "patch_note=frontmatter/section mutate or place op (move/copy); "
     "search_notes(limit=, folder= or folders=[]); filter_notes(where=); "
     "read_note(path= or chunk_hash= from search hits); "
+    "ref= on filter_notes/read_note = read-only git tree catalog (exported bookmark tip); "
+    "omit ref= only when intentionally querying the indexed working tree; "
+    "never pass ref= to writes. "
     "Thread mtime → expected_mtime on follow-up writes. "
     "Operator traces: otlp-mcp + Jaeger (not Apo MCP). "
     "Multi-vault: vault= or search_notes(vaults=[]); "
@@ -668,6 +671,16 @@ async def read_note(
             ),
         ),
     ] = False,
+    ref: Annotated[
+        str,
+        Field(
+            description=(
+                "Path mode only: read a git blob at this ref (branch/bookmark/OID) "
+                "from the vault root repo. Read-only; not compatible with chunk_hash=. "
+                "For jj WIP preview, pass the exported feature bookmark."
+            ),
+        ),
+    ] = "",
 ) -> dict:
     """Read by path or search hit chunk_hash. Search → read_note(chunk_hash=)."""
     return await asyncio.to_thread(
@@ -687,6 +700,7 @@ async def read_note(
         sibling=sibling,
         siblings=siblings,
         lint=lint,
+        ref=ref,
     )
 
 
@@ -792,6 +806,17 @@ async def filter_notes(
         Literal["asc", "desc"],
         Field(description="Sort direction (default desc — newest/largest first)."),
     ] = "desc",
+    ref: Annotated[
+        str,
+        Field(
+            description=(
+                "Optional git ref (branch/bookmark/OID) at the vault root. "
+                "Projects a frontmatter-only catalog from that tree (no embeddings). "
+                "For jj feature WIP, pass the exported bookmark; omit to query the "
+                "indexed working tree."
+            ),
+        ),
+    ] = "",
 ) -> dict:
     """Frontmatter catalog (no embeddings). Prefer where=; omit where or pass {} to list."""
     return await asyncio.to_thread(
@@ -804,6 +829,7 @@ async def filter_notes(
         fields=fields,
         sort=sort,
         order=order,
+        ref=ref,
     )
 
 

@@ -151,6 +151,9 @@ def _read(body: dict[str, Any]) -> dict[str, Any]:
         raw=raw,
         fields=fields if isinstance(fields, list) else None,
         lint=bool(body.get("lint")),
+        ref=str(body.get("ref") or ""),
+        mode=str(body.get("mode") or "auto"),
+        force=bool(body.get("force")),
     )
 
 
@@ -184,6 +187,7 @@ def _filter(body: dict[str, Any]) -> dict[str, Any]:
         fields=body.get("fields") if isinstance(body.get("fields"), list) else None,
         sort=str(sort) if sort is not None else "mtime",
         order=str(order) if order is not None else "desc",
+        ref=str(body.get("ref") or ""),
     )
 
 

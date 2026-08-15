@@ -4,6 +4,18 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-08-17
+
+### Added
+
+- **`ref=` catalog (read-only)** — `filter_notes(…, ref=)` and `read_note(path, ref=)` project frontmatter/YAML from a reachable git tip at the vault root (no per-branch embeddings). Cache: `ref_trees` / `ref_files` keyed by `tree_oid` (LRU 8). Writes reject `ref=`. See [docs/contracts/git.md](docs/contracts/git.md).
+
+### Fixed
+
+- **`ref=` catalog streaming caps** — `git cat-file --batch`, `ls-tree -z`, and `git log -z` are streamed (no unbounded `capture_output`); per-blob / listing / total size limits apply before retaining bodies; stdin write is threaded to avoid pipe deadlock; watchdog kills hung git; non-zero `cat-file` exit rejects partial catalogs. `read_blob` checks `cat-file -s` before `-p`.
+
+**Upgrade:** Quit Cursor/Claude fully (Cmd+Q) so MCP reloads `ref=` on `filter_notes` / `read_note`.
+
 ## [0.12.2] — 2026-08-17
 
 ### Fixed

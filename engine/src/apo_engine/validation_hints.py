@@ -111,6 +111,19 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "top_k": "filter_notes uses limit= (and offset=), not top_k.",
         "filters": "filter_notes uses where= (not filters=).",
         "order_by": "filter_notes uses sort= (mtime or FM key) and order=asc|desc, not order_by.",
+        "branch": (
+            "filter_notes uses ref= for a git branch/bookmark tip catalog "
+            "(frontmatter only; read-only)."
+        ),
+        "tree": (
+            "filter_notes v1 has no tree= — pass ref= for an exported git bookmark/branch."
+        ),
+    },
+    "read_note": {
+        "branch": (
+            "read_note uses ref= (path mode) for a git blob at a bookmark/branch tip; "
+            "not compatible with chunk_hash=."
+        ),
     },
 }
 
