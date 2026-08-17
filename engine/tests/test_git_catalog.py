@@ -165,9 +165,22 @@ class GitCatalogOpsTest(unittest.TestCase):
         bad = ops.filter_notes({}, ref="does-not-exist-xyz")
         self.assertFalse(bad["ok"])
         self.assertEqual(bad.get("error"), "not_found")
+        self.assertIn("list_refs", bad.get("message", ""))
+        self.assertIn("feature/demo", bad.get("message", ""))
         xor = ops.read_note("policies/alpha.md", chunk_hash="deadbeef", ref="feature/demo")
         self.assertFalse(xor["ok"])
         self.assertEqual(xor.get("error"), "bad_request")
+
+    def test_list_refs_heads_and_kind(self):
+        out = ops.list_refs_op(kind="heads")
+        self.assertTrue(out["ok"], out)
+        names = {r["name"] for r in out["refs"]}
+        self.assertIn("main", names)
+        self.assertIn("feature/demo", names)
+        self.assertTrue(all("commit" in r for r in out["refs"]))
+        bad = ops.list_refs_op(kind="nope")
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad.get("error"), "bad_request")
 
     def test_write_rejects_ref(self):
         out = ops.write_note("policies/x.md", content="# x\n", ref="feature/demo")

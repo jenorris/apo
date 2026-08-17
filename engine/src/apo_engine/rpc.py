@@ -443,6 +443,17 @@ def _git_sync(body: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+@_route("POST", "/v1/list_refs")
+def _list_refs(body: dict[str, Any]) -> dict[str, Any]:
+    kind = body.get("kind", "heads")
+    if kind is not None and not isinstance(kind, str):
+        return {"ok": False, "error": "bad_request", "message": "`kind` must be a string"}
+    return ops.list_refs_op(
+        vault=str(body.get("vault") or ""),
+        kind=str(kind or "heads"),
+    )
+
+
 @_route("GET", "/v1/vault")
 @_route("POST", "/v1/vault")
 def _vault(body: dict[str, Any]) -> dict[str, Any]:

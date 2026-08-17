@@ -69,6 +69,8 @@ read_note("policies/….md", ref="feature/COMP-…", vault="compliance")
 
 Omit `ref=` only when intentionally querying the indexed primary working tree. After merge + pull + reindex, `ref=` is optional.
 
+**Discover tips:** `apo_admin(action=invoke, name=list_refs, vault=…)` (or RPC `POST /v1/list_refs`) lists `refs/heads/*` at the registry root. Unknown `ref=` errors name a few reachable heads and point at `list_refs` instead of a bare `not_found`.
+
 ## Runtime
 
 | Feature | Gate |

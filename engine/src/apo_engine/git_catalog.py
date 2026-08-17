@@ -134,7 +134,7 @@ def resolve_tree(vault_root: Path, ref: str) -> ResolvedRef:
         commit = _run_git(root, "rev-parse", "--verify", f"{r}^{{commit}}")
     if commit.returncode != 0:
         err = (commit.stderr or commit.stdout or "unknown ref").strip()
-        raise GitCatalogError("not_found", f"git ref not found: {r!r} ({err[:200]})")
+        raise GitCatalogError("not_found", _ref_not_found_message(root, r, err))
     commit_oid = (commit.stdout or "").strip()
     if not all(c in "0123456789abcdef" for c in commit_oid.lower()) or len(commit_oid) < 7:
         raise GitCatalogError("git_error", f"unexpected commit oid: {commit_oid!r}")
@@ -151,6 +151,78 @@ def resolve_tree(vault_root: Path, ref: str) -> ResolvedRef:
     except ValueError:
         tip_mtime = 0.0
     return ResolvedRef(ref=r, commit_oid=commit_oid, tree_oid=tree_oid, tip_mtime=tip_mtime)
+
+
+_MAX_LISTED_REFS = 200
+_HINT_REF_NAMES = 8
+
+
+def _ref_not_found_message(root: Path, ref: str, git_err: str) -> str:
+    """Unknown ``ref=`` — point at reachable heads (jj export habit)."""
+    try:
+        names = [row["name"] for row in list_refs(root, kind="heads")[:_HINT_REF_NAMES]]
+    except GitCatalogError:
+        names = []
+    hint = (
+        f"git ref not found: {ref!r} at vault root — not exported here "
+        f"(jj: bookmark then colocated export). "
+        f"List more via apo_admin(action=invoke, name=list_refs)."
+    )
+    if names:
+        hint += f" Reachable heads: {', '.join(names)}."
+    extra = (git_err or "").strip()
+    if extra:
+        hint += f" ({extra[:160]})"
+    return hint
+
+
+def list_refs(vault_root: Path, *, kind: str = "heads") -> list[dict[str, Any]]:
+    """Reachable refs at ``vault_root`` via ``git for-each-ref``.
+
+    ``kind``: ``heads`` (``refs/heads/*``, including jj bookmarks), ``tags``,
+    or ``all``.
+    """
+    k = (kind or "heads").strip().lower()
+    if k not in ("heads", "tags", "all"):
+        raise GitCatalogError("bad_request", "kind must be heads|tags|all")
+    root = vault_root.expanduser().resolve()
+    patterns: list[str] = []
+    if k in ("heads", "all"):
+        patterns.append("refs/heads/")
+    if k in ("tags", "all"):
+        patterns.append("refs/tags/")
+    proc = _run_git(
+        root,
+        "for-each-ref",
+        "--format=%(refname:short)\t%(objectname)\t%(committerdate:unix)",
+        "--sort=-committerdate",
+        *patterns,
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "for-each-ref failed").strip()
+        raise GitCatalogError("git_error", f"git for-each-ref failed: {err[:300]}")
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in (proc.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        name, oid = parts[0].strip(), parts[1].strip()
+        if not name or name in seen:
+            continue
+        if not all(c in "0123456789abcdef" for c in oid.lower()) or len(oid) < 7:
+            continue
+        try:
+            tip_mtime = float(parts[2]) if len(parts) > 2 and parts[2] else 0.0
+        except ValueError:
+            tip_mtime = 0.0
+        seen.add(name)
+        out.append({"name": name, "ref": name, "commit": oid, "tip_mtime": tip_mtime})
+        if len(out) >= _MAX_LISTED_REFS:
+            break
+    return out
 
 
 def _ignore_patterns(vault_root: Path) -> list[str]:
