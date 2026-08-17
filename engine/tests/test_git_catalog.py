@@ -293,6 +293,29 @@ class GitCatalogOpsTest(unittest.TestCase):
                 git_catalog.read_blob(self.vault, commit, "policies/toobig.md")
         self.assertIn("too large", ctx.exception.message)
 
+    def test_search_notes_at_ref_fts_only(self):
+        feat = ops.search("exclusive", ref="feature/demo", folder="policies")
+        self.assertTrue(feat["ok"], feat)
+        self.assertEqual(feat.get("source"), "git_ref")
+        sources = {r["source"] for r in feat["results"]}
+        self.assertIn("policies/only-on-feature.md", sources)
+        self.assertTrue(all("chunk_hash" not in r for r in feat["results"]))
+        follow = ops.read_note("policies/only-on-feature.md", ref="feature/demo")
+        self.assertTrue(follow["ok"], follow)
+        self.assertIn("branch exclusive", follow.get("content", ""))
+
+        main = ops.search("exclusive", ref="main", folder="policies")
+        self.assertTrue(main["ok"], main)
+        self.assertNotIn(
+            "policies/only-on-feature.md",
+            {r["source"] for r in main["results"]},
+        )
+
+    def test_search_notes_ref_rejects_vaults_fanout(self):
+        out = ops.search("alpha", ref="feature/demo", vaults=["a", "b"])
+        self.assertFalse(out["ok"])
+        self.assertEqual(out.get("error"), "bad_request")
+
     def test_git_dir_env_does_not_redirect(self):
         other = self.tmp / "other"
         other.mkdir()

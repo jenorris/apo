@@ -175,7 +175,7 @@ _MCP_INSTRUCTIONS = (
     "patch_note=frontmatter/section mutate or place op (move/copy); "
     "search_notes(limit=, folder= or folders=[]); filter_notes(where=); "
     "read_note(path= or chunk_hash= from search hits); "
-    "ref= on filter_notes/read_note = read-only git tree catalog (exported bookmark tip); "
+    "ref= on filter_notes/read_note/search_notes = read-only git tip (catalog / blob / FTS); "
     "omit ref= only when intentionally querying the indexed working tree; "
     "never pass ref= to writes. "
     "Thread mtime → expected_mtime on follow-up writes. "
@@ -755,8 +755,20 @@ async def search_notes(
             ),
         ),
     ] = None,
+    ref: Annotated[
+        str,
+        Field(
+            description=(
+                "Read-only git tip at the vault registry root. FTS-only over note "
+                "bodies (no embeddings / chunk_hash). Follow up with read_note(path, ref=)."
+            ),
+        ),
+    ] = "",
 ) -> dict:
-    """Hybrid search. Hits include chunk_hash — read more via read_note(chunk_hash=)."""
+    """Hybrid search. Hits include chunk_hash — read more via read_note(chunk_hash=).
+
+    With ref=, FTS-only over a git tip (no embeddings); follow up with read_note(path, ref=).
+    """
     return await asyncio.to_thread(
         apo_ops.search,
         query,
@@ -768,6 +780,7 @@ async def search_notes(
         limit=limit,
         offset=offset,
         exclude=exclude,
+        ref=ref,
     )
 
 

@@ -103,6 +103,7 @@ def _search(body: dict[str, Any]) -> dict[str, Any]:
         snippet_chars=int(body.get("snippet_chars", 240)),
         exclude=[str(x) for x in exclude] if exclude else None,
         hybrid=not bool(body.get("no_hybrid")),
+        ref=str(body.get("ref") or ""),
     )
 
 

@@ -48,7 +48,7 @@ Fill `remote` / `host` for *this* vault. Keep `never_commit` aligned with the va
 5. When binaries are stored: use Git LFS if `lfs.enabled`; keep `.sha256` digest sidecars in **plain** git (not LFS pointers only).
 6. After a bare-metal restore: clone → point `APO_VAULTS` / `APO_NOTES_ROOT` at the checkout → `just index --vault <id>` (or equivalent). Do not copy old `index.db` from backups unless debugging.
 7. **History:** prefer MCP/RPC `history`. Browse mode (no `path`) = index mtime with optional `since`/`until`, `preview=first\|last`, `heading=`, `exclude=`, `fields=` (returns `chunk_hash`). With `path=` and this contract active (YAML + `.git`), Apo returns **file-level** `git log` commits.
-8. **`ref=` catalog (read-only):** `filter_notes(…, ref=)` and `read_note(path, ref=)` project notes from a reachable git tip at the **vault registry root** (`git -C <vault.root>`). Frontmatter/YAML catalog only — no embeddings / `search_notes(ref=)`. Writes never take `ref=`.
+8. **`ref=` catalog (read-only):** `filter_notes(…, ref=)`, `read_note(path, ref=)`, and `search_notes(…, ref=)` project notes from a reachable git tip at the **vault registry root** (`git -C <vault.root>`). Catalog is frontmatter/YAML; search is FTS-only (no embeddings / no `chunk_hash`). Writes never take `ref=`.
 
 ## `ref=` semantics
 
@@ -58,12 +58,14 @@ Fill `remote` / `host` for *this* vault. Keep `never_commit` aligned with the va
 | **Not source** | Dirty working tree / uncommitted jj workspace files |
 | **`filter_notes`** | Builds/caches `ref_files` by `tree_oid` (LRU 8); `sort=mtime` = git last-touch, not FS mtime |
 | **`read_note`** | Blob via `git cat-file`; `mode=toc` from ATX headings (no `chunk_hash`); no WT `mtime` / region hashes (uses `git_tip_mtime` for display only); does not poison WT write CAS |
+| **`search_notes`** | FTS5 over note bodies at the tip (`ref_fts`, same LRU as catalog); no embeddings / hybrid / `chunk_hash`. Follow up with `read_note(path, ref=)` |
 | **Default when omitted** | Indexed **working tree** at the registry root (primary checkout) |
 
 **jj + colocated vaults (e.g. compliance):** commit → bookmark (`feature/COMP-…`) → colocated export makes `refs/heads/feature/COMP-…` visible on the primary `.git` (no fetch). Then:
 
 ```text
 filter_notes(where=…, folder=…, ref="feature/COMP-…", vault="compliance")
+search_notes("retention", folder=…, ref="feature/COMP-…", vault="compliance")
 read_note("policies/….md", ref="feature/COMP-…", vault="compliance")
 ```
 
@@ -110,7 +112,7 @@ Add vault-specific secrets and local UI state as needed. Match `never_commit` in
 - Laravel gateway `GitRemote` drivers, webhooks, or ECS git-sync sidecars
 - Pull-before-commit on the write path (pull is idle/scheduled only)
 - Choosing a host for you — fill `remote` when the vault has one
-- `search_notes(ref=)` / per-branch embedding indexes / dirty `tree=` worktree catalog
+- Per-branch embedding indexes / dirty `tree=` worktree catalog
 - Auto-inject `ref=` from agent cwd
 
 ## Mixing
