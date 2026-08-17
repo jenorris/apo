@@ -30,3 +30,6 @@ node_modules/
 *.db
 *.db-*
 engine/src/apo_engine.egg-info/
+
+# graphify generated knowledge graph
+**/graphify-out/
