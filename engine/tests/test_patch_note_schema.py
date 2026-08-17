@@ -28,14 +28,23 @@ def _list_tools_lean(*, collection: str):
         src = str(_SRC)
         if src not in sys.path:
             sys.path.insert(0, src)
-        # Drop cached apo_engine modules so patch_ops from this tree loads.
+        # Drop cached apo_engine modules so patch_ops from this tree loads, but
+        # snapshot the originals and restore them afterward — permanently
+        # replacing the module objects here (as this did before) breaks every
+        # later test that bound an import to the pre-existing classes (e.g.
+        # test_yaml_notes asserts on PatchError raised by yaml_patch, and the
+        # re-imported markdown_patch.PatchError is a different class object).
+        saved = {}
         for name in list(sys.modules):
             if name == "apo_engine" or name.startswith("apo_engine."):
+                saved[name] = sys.modules[name]
                 del sys.modules[name]
         spec = importlib.util.spec_from_file_location(f"apo_mcp_{collection}", _SERVER)
         mod = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(mod)
+        # Restore the originals so this test's isolated re-import does not leak.
+        sys.modules.update(saved)
         tools = asyncio.run(mod.mcp.list_tools())
         return mod, tools
 
