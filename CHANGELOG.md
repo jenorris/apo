@@ -4,6 +4,14 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-08-17
+
+### Changed
+
+- **Comment-preserving YAML writes** — every YAML write site (catalog `.yaml` notes, Markdown frontmatter fences, YAML patch ops) round-trips through the new `yaml_rt` module (ruamel.yaml) instead of `safe_dump`. Comments, blank lines, quoting, flow style and block indentation survive a `set_field` / `delete_field` on another key (yq-v4 semantics). Deleting a key also drops the comments it owns (its inline comment and the block following it). Invalid YAML 1.1 timestamps (`2017-00-00`) still load as strings, PyYAML remains the fallback for documents ruamel refuses, and freshly built mappings emit exactly as before.
+
+**Upgrade:** `pip install -e engine` (new `ruamel.yaml` dependency), then restart `apo-rpc` / `apo-watch`.
+
 ## [0.12.0] — 2026-08-15
 
 ### Added

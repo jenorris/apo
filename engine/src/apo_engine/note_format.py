@@ -75,7 +75,17 @@ def ensure_indexed_path(rel_path: str) -> str:
 
 
 def parse_yaml_document(text: str) -> dict[str, Any] | None:
-    """Parse a standalone YAML document. Mapping → dict; else None."""
+    """Parse a standalone YAML document. Mapping → dict; else None.
+
+    Round-trip (comment-preserving) parse first — the result is a ``CommentedMap``,
+    a ``dict`` subclass, so catalog/filter consumers see no difference. Documents
+    ruamel refuses fall back to the tolerant PyYAML loader, as before.
+    """
+    from apo_engine import yaml_rt
+
+    rt = yaml_rt.load(text)
+    if rt is not None:
+        return rt
     try:
         data = yaml.load(text, Loader=_TolerantLoader)
     except (yaml.YAMLError, ValueError, OverflowError):
@@ -84,17 +94,14 @@ def parse_yaml_document(text: str) -> dict[str, Any] | None:
 
 
 def dump_yaml_document(data: dict[str, Any]) -> str:
-    """Serialize a mapping as a vault YAML note (trailing newline)."""
-    body = yaml.safe_dump(
-        data,
-        default_flow_style=False,
-        allow_unicode=True,
-        sort_keys=False,
-        width=1000,
-    )
-    if not body.endswith("\n"):
-        body += "\n"
-    return body
+    """Serialize a mapping as a vault YAML note (trailing newline).
+
+    Comments and formatting carried by a round-tripped mapping survive; a plain
+    dict emits as it always has.
+    """
+    from apo_engine import yaml_rt
+
+    return yaml_rt.dump(data)
 
 
 def yaml_search_chunk_text(fm: dict[str, Any] | None, rel: str) -> str:

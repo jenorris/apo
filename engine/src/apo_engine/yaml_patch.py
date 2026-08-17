@@ -90,7 +90,10 @@ def apply_yaml_patch(
         )
 
     original = content
-    working = dict(data)
+    # Mutate the parsed document in place: ``data`` is a fresh per-call parse and
+    # a shallow ``dict()`` copy would drop the round-trip comment/format state.
+    # Rollback uses ``original`` (the untouched source text), not this object.
+    working = data
     results: list[dict[str, Any]] = []
     applied = 0
     all_suggestions: list[dict[str, Any]] = []

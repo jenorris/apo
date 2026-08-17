@@ -189,21 +189,27 @@ def _frontmatter_bounds(lines: list[str]) -> tuple[int, int] | None:
 
 
 def _dump_frontmatter_fence(fm: dict[str, Any]) -> list[str]:
-    """Serialize a mapping as ``---`` / body / ``---`` fence lines (no trailing blank)."""
-    body = yaml.safe_dump(
-        fm,
-        default_flow_style=False,
-        allow_unicode=True,
-        sort_keys=False,
-        width=1000,
-    ).rstrip("\n")
+    """Serialize a mapping as ``---`` / body / ``---`` fence lines (no trailing blank).
+
+    Round-trip emit: comments and formatting on a mapping loaded by
+    :func:`_load_frontmatter_mapping` survive the fence rewrite.
+    """
+    from apo_engine import yaml_rt
+
+    body = yaml_rt.dump(fm).rstrip("\n")
     if not body:
         return ["---", "---"]
     return ["---", *body.split("\n"), "---"]
 
 
 def _load_frontmatter_mapping(lines: list[str]) -> tuple[dict[str, Any], int, int] | None:
-    """Parse FM fence → (mapping, start_idx, end_idx of closing ---)."""
+    """Parse FM fence → (mapping, start_idx, end_idx of closing ---).
+
+    Round-trip parse first so a later ``_dump_frontmatter_fence`` can re-emit the
+    block with its comments; unparseable-by-ruamel blocks fall back to the
+    tolerant PyYAML loader (and still raise ``invalid_frontmatter`` if broken).
+    """
+    from apo_engine import yaml_rt
     from apo_engine.note_format import _TolerantLoader
 
     bounds = _frontmatter_bounds(lines)
@@ -211,6 +217,9 @@ def _load_frontmatter_mapping(lines: list[str]) -> tuple[dict[str, Any], int, in
         return None
     start, end = bounds
     text = "\n".join(lines[start + 1 : end])
+    rt = yaml_rt.load(text)
+    if rt is not None:
+        return rt, start, end
     try:
         data = yaml.load(text, Loader=_TolerantLoader) if text.strip() else {}
     except (yaml.YAMLError, ValueError, OverflowError) as e:

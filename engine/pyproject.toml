@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apo-engine"
-version = "0.12.0"
+version = "0.12.1"
 description = "Apo — local hybrid search over a Markdown vault (sqlite-vec, no Docker)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,9 @@ dependencies = [
     "duckdb>=1.0",
     "sqlite-vec>=0.1.6",
     "pyyaml>=6.0",
+    # Round-trip YAML (comment/format preserving) for every note write site.
+    # PyYAML stays as the tolerant fallback loader.
+    "ruamel.yaml>=0.18",
     "watchdog>=4.0.0",
 ]
 
