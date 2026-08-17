@@ -4,6 +4,8 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.13.2] — 2026-08-17
+
 ### Added
 
 - **`apo_admin list_refs`** — list reachable git heads/tags at the vault registry root for `ref=` discovery (`kind=heads|tags|all`). RPC: `POST /v1/list_refs`. Unknown `ref=` now names reachable heads and points at `list_refs` (jj colocated export habit). See [docs/contracts/git.md](docs/contracts/git.md). Fixes [#29](https://github.com/jenorris/apo/issues/29).
