@@ -4,6 +4,14 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.12.2] — 2026-08-17
+
+### Fixed
+
+- **Idle watcher burned CPU permanently** — `apo-engine watch` sat at ~35% of a core with every vault quiet. Each vault watcher thread wakes about once per second, and two per-cycle calls did full work every time: `vault_project.maybe_reproject()` reloaded the vault registry (a usage-contract YAML parse per vault) and stat'd every contract file *before* its debounce gate, and the git-sync tick re-parsed the git contract and forked `git rev-parse --is-inside-work-tree` on every call. Cost scaled with vault count — ~24 ms + ~10 ms per vault per second, so a 10-vault desk had no idle state at all. Now: the drift scan is gated before it runs (`APO_DESK_POLL_GAP_S`, default 15 s; `force=True` still scans immediately), `load_git_contract()` caches on `(path, mtime_ns, size)`, and `is_git_work_tree()` TTL-caches its subprocess probe (`APO_GIT_WORKTREE_TTL_S`, default 300 s). Measured on a 10-vault desk: **34.7% → 0.9%** of one core idle. Indexing latency, git-sync behaviour and contract-change detection are unchanged (detection may lag by the poll gap; projection is advisory/return-only).
+
+**Upgrade:** `systemctl --user restart apo-watch` (or restart your watcher) — no schema or config changes.
+
 ## [0.12.1] — 2026-08-17
 
 ### Changed

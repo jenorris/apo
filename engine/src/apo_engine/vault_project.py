@@ -5,6 +5,7 @@ Deterministic — no LLM. Returns shared ``body`` + optional ``guidance`` for pl
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -72,9 +73,17 @@ _WRITE_HABIT_LINES: dict[str, str] = {
 # Watch / multi-caller debounce for auto-reproject.
 _reproject_lock = threading.Lock()
 _last_reproject_mono = 0.0
+_last_poll_mono = 0.0
 _last_desk_mtime: float | None = None
 _last_contracts_sig: str | None = None
 _MIN_REPROJECT_GAP_S = 2.0
+# Minimum gap between *drift scans*. `_contracts_signature()` reloads the vault
+# registry (a usage-contract YAML parse per vault) and stats every contract file,
+# which costs tens of ms on a real desk. Every vault watcher thread polls this
+# once per wake, so an ungated scan burns N_vaults x cost every second — the
+# watcher sat at ~35% CPU permanently idle. Detection may lag by this gap;
+# projection is advisory/return-only, so that is free.
+_MIN_POLL_GAP_S = float(os.environ.get("APO_DESK_POLL_GAP_S") or 15.0)
 
 
 def project_guidance() -> str:
@@ -726,10 +735,16 @@ def maybe_reproject(
     Debounced across vault watcher threads. Returns a change marker when desk or
     contracts drift; does not write host skill/rule files.
     """
-    global _last_reproject_mono, _last_desk_mtime, _last_contracts_sig
+    global _last_reproject_mono, _last_poll_mono, _last_desk_mtime, _last_contracts_sig
 
     with _reproject_lock:
         now = time.monotonic()
+        # Drift scan is expensive; skip it entirely when polled again too soon.
+        # Every vault watcher thread calls this once per wake, so this gate is
+        # what keeps an idle desk off the CPU. `force` always scans.
+        if not force and _last_poll_mono and (now - _last_poll_mono) < _MIN_POLL_GAP_S:
+            return None
+        _last_poll_mono = now
         desk_mt = _desk_mtime()
         sig = _contracts_signature()
         changed = force

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,14 @@ GIT_CONTRACT_CANDIDATES = (
 )
 GIT_CONTRACT_REL = GIT_CONTRACT_CANDIDATES[0]  # preferred path for docs/tests
 _GIT_LOG_TIMEOUT_S = 15.0
+# Caches for the watcher's hot path (git-sync tick runs per vault per second).
+_contract_cache_lock = threading.Lock()
+_contract_cache: dict[tuple[str, int, int], dict[str, Any]] = {}
+_work_tree_cache_lock = threading.Lock()
+_work_tree_cache: dict[str, tuple[float, bool]] = {}
+# A vault root gaining/losing its git work tree is rare; re-probe occasionally
+# rather than forking `git rev-parse` on every tick.
+_WORK_TREE_TTL_S = float(os.environ.get("APO_GIT_WORKTREE_TTL_S") or 300.0)
 # NUL-separated fields; RS separates commits
 _LOG_FORMAT = "%H%x00%an%x00%aI%x00%s%x1e"
 
@@ -40,15 +50,37 @@ def resolve_git_contract_path(vault_root: Path, explicit: str | None = None) -> 
 
 
 def load_git_contract(vault_root: Path, explicit: str | None = None) -> dict[str, Any] | None:
-    """Parse git-contract YAML if present. Returns None when missing/unreadable."""
+    """Parse git-contract YAML if present. Returns None when missing/unreadable.
+
+    Cached on (path, mtime_ns, size): the watcher's git-sync tick reads this
+    several times per vault per second, and re-parsing YAML each time was a
+    measurable share of idle CPU. A contract edit changes mtime/size, so the
+    cache self-invalidates.
+    """
     path = resolve_git_contract_path(vault_root, explicit)
     if path is None:
         return None
     try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    with _contract_cache_lock:
+        hit = _contract_cache.get(key)
+    if hit is not None:
+        # Copy: callers treat the result as their own dict.
+        return dict(hit)
+    try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    with _contract_cache_lock:
+        if len(_contract_cache) > 64:
+            _contract_cache.clear()
+        _contract_cache[key] = data
+    return dict(data)
 
 
 def is_git_work_tree(vault_root: Path) -> bool:
@@ -56,7 +88,16 @@ def is_git_work_tree(vault_root: Path) -> bool:
 
     Meta lives under ``~/Notes`` (``jenorris/foam``) without its own ``.git``;
     Norris/Work are dedicated checkouts with ``.git`` on the vault root.
+
+    Result is TTL-cached: this forks a ``git`` subprocess, and the watcher's
+    git-sync tick asked once per vault per second.
     """
+    cache_key = str(vault_root)
+    now = time.monotonic()
+    with _work_tree_cache_lock:
+        hit = _work_tree_cache.get(cache_key)
+        if hit is not None and (now - hit[0]) < _WORK_TREE_TTL_S:
+            return hit[1]
     try:
         proc = subprocess.run(
             ["git", "-C", str(vault_root), "rev-parse", "--is-inside-work-tree"],
@@ -66,8 +107,16 @@ def is_git_work_tree(vault_root: Path) -> bool:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0 and proc.stdout.strip() == "true"
+        # Cache the negative too — a missing/hanging git must not be re-forked
+        # every tick. TTL expiry retries.
+        result = False
+    else:
+        result = proc.returncode == 0 and proc.stdout.strip() == "true"
+    with _work_tree_cache_lock:
+        if len(_work_tree_cache) > 64:
+            _work_tree_cache.clear()
+        _work_tree_cache[cache_key] = (now, result)
+    return result
 
 
 def git_contract_active(vault_root: Path) -> bool:
