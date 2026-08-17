@@ -4,6 +4,12 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-08-17
+
+### Fixed
+
+- **`read_note` validation hints** — a duplicate `"read_note"` key in `_TOOL_PARAM_HINTS` overwrote the `snippet_chars` → `max_chars` hint (and the rest of the original map). CI failed on both hint tests.
+
 ## [0.13.0] — 2026-08-17
 
 ### Added

@@ -79,6 +79,16 @@ class FormatToolValidationErrorTest(unittest.TestCase):
         self.assertIn("max_chars", msg)
         self.assertIn("search_notes", msg)
 
+    def test_read_note_keeps_snippet_and_ref_hints(self):
+        """A second dict key for read_note would silently drop snippet_chars."""
+        from apo_engine.validation_hints import _TOOL_PARAM_HINTS
+
+        hints = _TOOL_PARAM_HINTS["read_note"]
+        self.assertIn("snippet_chars", hints)
+        self.assertIn("max_chars", hints["snippet_chars"])
+        self.assertIn("branch", hints)
+        self.assertIn("ref=", hints["branch"])
+
     def test_read_note_path_heading(self):
         class Fake(Exception):
             def errors(self, include_url: bool = True):

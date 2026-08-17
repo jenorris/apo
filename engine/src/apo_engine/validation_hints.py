@@ -35,6 +35,10 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
             "read_note has no scope — pass chunk_hash= from search_notes "
             "(optional force= for full section above preview threshold)."
         ),
+        "branch": (
+            "read_note uses ref= (path mode) for a git blob at a bookmark/branch tip; "
+            "not compatible with chunk_hash=."
+        ),
     },
     "write_note": {
         "body": "write_note uses content= only on MCP. For append under a heading use append_note(path, text, heading=…).",
@@ -117,12 +121,6 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         ),
         "tree": (
             "filter_notes v1 has no tree= — pass ref= for an exported git bookmark/branch."
-        ),
-    },
-    "read_note": {
-        "branch": (
-            "read_note uses ref= (path mode) for a git blob at a bookmark/branch tip; "
-            "not compatible with chunk_hash=."
         ),
     },
 }
