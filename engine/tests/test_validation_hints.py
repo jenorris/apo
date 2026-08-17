@@ -89,6 +89,49 @@ class FormatToolValidationErrorTest(unittest.TestCase):
         self.assertIn("branch", hints)
         self.assertIn("ref=", hints["branch"])
 
+    def test_required_hint_params_present(self):
+        from apo_engine.validation_hints import _TOOL_PARAM_HINTS
+
+        required = {
+            "read_note": ("snippet_chars", "branch"),
+            "filter_notes": ("branch", "tree"),
+        }
+        for tool, params in required.items():
+            self.assertIn(tool, _TOOL_PARAM_HINTS)
+            for param in params:
+                self.assertIn(param, _TOOL_PARAM_HINTS[tool], f"{tool}.{param}")
+
+    def test_hint_source_has_no_duplicate_keys(self):
+        """AST-walk the source so a dict-literal overwrite cannot hide."""
+        import ast
+        from pathlib import Path
+
+        src = Path(__file__).resolve().parents[1] / "src" / "apo_engine" / "validation_hints.py"
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+
+        def dict_keys(node: ast.AST) -> list[str]:
+            if not isinstance(node, ast.Dict):
+                return []
+            out: list[str] = []
+            for k in node.keys:
+                if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                    out.append(k.value)
+            return out
+
+        def assert_unique(keys: list[str], label: str) -> None:
+            seen: set[str] = set()
+            for k in keys:
+                self.assertNotIn(k, seen, f"duplicate {label} key {k!r}")
+                seen.add(k)
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_unique":
+                kw_names = [kw.arg for kw in node.keywords if kw.arg]
+                assert_unique(kw_names, "_unique kwargs")
+                for kw in node.keywords:
+                    if kw.arg and isinstance(kw.value, ast.Dict):
+                        assert_unique(dict_keys(kw.value), f"{kw.arg} params")
+
     def test_read_note_path_heading(self):
         class Fake(Exception):
             def errors(self, include_url: bool = True):
