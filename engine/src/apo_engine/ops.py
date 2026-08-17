@@ -815,6 +815,101 @@ def _search_folder_pairs(
     return pairs
 
 
+def _search_at_ref(
+    query: str,
+    b: vaults.VaultBinding,
+    *,
+    ref: str,
+    folder: str,
+    folders: list[str] | None,
+    snippet_chars: int,
+    exclude: list[str] | None,
+    top_k: int | None,
+    limit: int | None,
+    offset: int,
+) -> dict[str, Any]:
+    """FTS-only search over a git tip (no embeddings / chunk_hash)."""
+    k, err = resolve_top_k(top_k, limit)
+    if err:
+        return _err(error="bad_request", message=err)
+    if offset < 0:
+        return _err(error="bad_request", message="offset must be >= 0")
+    if folder.strip() and folders:
+        return _err(error="bad_request", message="pass folder= or folders=[], not both")
+    folder_clean = ""
+    if folders:
+        cleaned = [f for f in folders if isinstance(f, str) and f.strip()]
+        if len(cleaned) > 1:
+            return _err(
+                error="bad_request",
+                message="search_notes ref= accepts a single folder= (not folders=[] fan-out)",
+            )
+        folder_clean = cleaned[0].strip() if cleaned else ""
+    elif folder.strip():
+        folder_clean = folder.strip()
+    root = b.resolved().root
+    if folder_clean:
+        try:
+            _safe_resolve(root, folder_clean)
+        except ValueError as e:
+            return _err(error="bad_path", message=str(e))
+    effective_exclude, applied_default, _source = search_contract.resolve_search_exclude(
+        root,
+        caller_exclude=exclude,
+        folder_clean=folder_clean,
+    )
+    try:
+        with vaults.bind(b):
+            resolved = git_catalog.ensure_catalog(root, ref)
+            page, total = core.search_at_ref(
+                query,
+                resolved.tree_oid,
+                folder=folder_clean,
+                exclude=effective_exclude,
+                k=k,
+                offset=offset,
+                snippet_chars=snippet_chars,
+            )
+    except git_catalog.GitCatalogError as e:
+        return _err(error=e.code, message=e.message)
+    except Exception as e:
+        return _err(error="git_error", message=str(e)[:400])
+    results: list[dict[str, Any]] = []
+    for hit in page:
+        path = str(hit.get("path") or "")
+        mtime = float(hit.get("mtime") or 0.0)
+        row = {
+            "source": path,
+            "content": hit.get("content") or "",
+            "score": round(float(hit.get("score") or 0.0), 4),
+            "mtime": mtime,
+            "modified": datetime.fromtimestamp(mtime).isoformat(timespec="seconds")
+            if mtime
+            else None,
+            "qualified_path": _qualified_path(b.name, path),
+        }
+        results.append(row)
+    out: dict[str, Any] = {
+        "ok": True,
+        "results": results,
+        "vault": b.name,
+        "source": "git_ref",
+        "ref": resolved.ref,
+        "tree_oid": resolved.tree_oid,
+        "has_more": offset + len(results) < total,
+    }
+    if offset:
+        out["offset"] = offset
+    if applied_default:
+        out["default_exclude"] = applied_default
+    if results:
+        out = _attach_tip(
+            out,
+            "ref= FTS is note-level — follow up with read_note(path=…, ref=…); no chunk_hash",
+        )
+    return _attach_folder_tip(out, folder_clean, root=root)
+
+
 def search(
     query: str,
     *,
@@ -828,11 +923,31 @@ def search(
     hybrid: bool = True,
     limit: int | None = None,
     offset: int = 0,
+    ref: str = "",
 ) -> dict[str, Any]:
+    ref_s = (ref or "").strip()
+    if ref_s and vaults:
+        return _err(
+            error="bad_request",
+            message="search_notes ref= is single-vault — do not combine with vaults=[]",
+        )
     try:
         targets = _resolve_search_bindings(vault, vaults)
     except OpsError as e:
         return _err(error=e.code, message=e.message)
+    if ref_s:
+        return _search_at_ref(
+            query,
+            targets[0],
+            ref=ref_s,
+            folder=folder,
+            folders=folders,
+            snippet_chars=snippet_chars,
+            exclude=exclude,
+            top_k=top_k,
+            limit=limit,
+            offset=offset,
+        )
     k, err = resolve_top_k(top_k, limit)
     if err:
         return _err(error="bad_request", message=err)

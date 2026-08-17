@@ -22,7 +22,7 @@ from apo_engine.note_format import is_note_path
 _GIT_TIMEOUT_S = 60.0
 _REF_CACHE_MAX = 8
 # Bump when catalog parse / ignore semantics change (forces rebuild for same tree_oid).
-_CATALOG_FORMAT_VERSION = "2"
+_CATALOG_FORMAT_VERSION = "3"
 _BUILD_COUNTER: dict[str, int] = {}  # tree_oid → build count (tests)
 _MAX_CATALOG_NOTES = 5000
 _MAX_BLOB_BYTES = 2 * 1024 * 1024
@@ -766,6 +766,12 @@ def ensure_ref_tables(db: Any) -> None:
             PRIMARY KEY (tree_oid, path)
         );
         CREATE INDEX IF NOT EXISTS ref_files_tree ON ref_files(tree_oid);
+        CREATE VIRTUAL TABLE IF NOT EXISTS ref_fts USING fts5(
+            tree_oid UNINDEXED,
+            path UNINDEXED,
+            mtime UNINDEXED,
+            text
+        );
         """
     )
     cols = {row[1] for row in db.execute("PRAGMA table_info(ref_trees)").fetchall()}
@@ -783,6 +789,7 @@ def _evict_old_trees(db: Any, *, keep: int = _REF_CACHE_MAX) -> None:
         return
     for (oid,) in rows[keep:]:
         db.execute("DELETE FROM ref_files WHERE tree_oid=?", (oid,))
+        db.execute("DELETE FROM ref_fts WHERE tree_oid=?", (oid,))
         db.execute("DELETE FROM ref_trees WHERE tree_oid=?", (oid,))
 
 
@@ -831,6 +838,7 @@ def build_catalog(
 
     try:
         db.execute("DELETE FROM ref_files WHERE tree_oid=?", (resolved.tree_oid,))
+        db.execute("DELETE FROM ref_fts WHERE tree_oid=?", (resolved.tree_oid,))
         db.execute("DELETE FROM ref_trees WHERE tree_oid=?", (resolved.tree_oid,))
         rows = 0
         for rel in paths:
@@ -840,9 +848,16 @@ def build_catalog(
             fm_json = parse_catalog_row(rel, text)
             if fm_json is None:
                 continue
+            mt = mtimes.get(rel, resolved.tip_mtime)
             db.execute(
                 "INSERT INTO ref_files(tree_oid, path, mtime, frontmatter) VALUES (?,?,?,?)",
-                (resolved.tree_oid, rel, mtimes.get(rel, resolved.tip_mtime), fm_json),
+                (resolved.tree_oid, rel, mt, fm_json),
+            )
+            body, _ = core._body_start_line(text)
+            fts_text = core._index_text_for_embedding(body or text, "section")
+            db.execute(
+                "INSERT INTO ref_fts(tree_oid, path, mtime, text) VALUES (?,?,?,?)",
+                (resolved.tree_oid, rel, mt, fts_text),
             )
             rows += 1
         db.execute(

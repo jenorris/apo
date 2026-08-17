@@ -112,6 +112,10 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = _unique(
             "pass folder= or folders=[], not both. Single folder: folder=… instead."
         ),
         "top_k": "search_notes uses limit= (not top_k).",
+        "branch": (
+            "search_notes uses ref= for FTS-only body recall at a git tip "
+            "(no embeddings). Follow up with read_note(path=…, ref=…)."
+        ),
     },
     filter_notes={
         "query": (

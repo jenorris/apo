@@ -601,6 +601,12 @@ def _ensure_ref_catalog_tables(db: sqlite3.Connection) -> None:
             PRIMARY KEY (tree_oid, path)
         );
         CREATE INDEX IF NOT EXISTS ref_files_tree ON ref_files(tree_oid);
+        CREATE VIRTUAL TABLE IF NOT EXISTS ref_fts USING fts5(
+            tree_oid UNINDEXED,
+            path UNINDEXED,
+            mtime UNINDEXED,
+            text
+        );
         """
     )
 
@@ -2365,6 +2371,61 @@ def filter_notes_at_ref(
         order=order,
         tree_oid=tree_oid,
     )
+
+
+def search_at_ref(
+    query: str,
+    tree_oid: str,
+    *,
+    folder: str = "",
+    exclude: list[str] | None = None,
+    k: int = 8,
+    offset: int = 0,
+    snippet_chars: int = 240,
+) -> tuple[list[dict[str, Any]], int]:
+    """FTS-only note-level search over ``ref_fts`` for ``tree_oid``.
+
+    Returns ``(hits, total)``. Hits have path/content/score/mtime — no chunk_hash.
+    """
+    match = _fts_query(query)
+    if not match:
+        return [], 0
+    db = reader_connect()
+    _ensure_ref_catalog_tables(db)
+    prefixes, globs = _compile_excludes(exclude)
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    where = ["tree_oid = ?", "ref_fts MATCH ?"]
+    params: list[Any] = [tree_oid, match]
+    if folder_prefix:
+        where.append("path LIKE ? ESCAPE '\\'")
+        params.append(_escape_like(folder_prefix) + "/%")
+    where_sql = " AND ".join(where)
+    tokens = max(1, min(int(snippet_chars) // 6, 64)) if snippet_chars else 64
+    rows = db.execute(
+        f"SELECT path, mtime, snippet(ref_fts, 3, '', '', ' … ', ?), rank "
+        f"FROM ref_fts WHERE {where_sql} ORDER BY rank",
+        [tokens, *params],
+    ).fetchall()
+    hits: list[dict[str, Any]] = []
+    for path, mtime, snip, rank in rows:
+        rel = str(path or "")
+        if _path_excluded(rel, prefixes, globs):
+            continue
+        score = 1.0 / (1.0 + abs(float(rank or 0.0)))
+        text = str(snip or "")
+        if snippet_chars and len(text) > snippet_chars:
+            text = text[:snippet_chars].rstrip() + "…"
+        hits.append(
+            {
+                "path": rel,
+                "content": text,
+                "score": score,
+                "mtime": float(mtime or 0.0),
+            }
+        )
+    total = len(hits)
+    page = hits[offset : offset + k]
+    return page, total
 
 
 def _escape_like(s: str) -> str:
