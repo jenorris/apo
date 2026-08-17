@@ -116,6 +116,23 @@ class TestLocalRpc(unittest.TestCase):
         self.assertGreaterEqual(len(search["results"]), 1)
         self.assertIn("alpha", search["results"][0]["content"].lower())
 
+    def test_read_note_with_unquoted_date_frontmatter(self):
+        """Regression: a YAML date in frontmatter must not kill the connection.
+
+        `timestamp: 2026-08-12` loads as a `datetime.date`; before the
+        `_json_default` coercion, json.dumps raised out of `_dispatch` and the
+        handler thread died with no bytes written (client saw a reset socket).
+        """
+        (self.vault / "dated.md").write_text(
+            "---\ntitle: Dated\ntimestamp: 2026-08-12\nupdated: 2026-08-12 07:30:00\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+        status, read = self._post("/v1/read", {"path": "dated.md"})
+        self.assertEqual(status, 200)
+        self.assertTrue(read["ok"])
+        self.assertEqual(read["frontmatter"]["timestamp"], "2026-08-12")
+        self.assertEqual(read["frontmatter"]["updated"], "2026-08-12T07:30:00")
+
     def test_read_and_filter(self):
         status, read = self._post("/v1/read", {"path": "note.md"})
         self.assertEqual(status, 200)

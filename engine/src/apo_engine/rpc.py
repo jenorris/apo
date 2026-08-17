@@ -10,6 +10,7 @@ import json
 import os
 import socket
 import sys
+from datetime import date, datetime, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -466,8 +467,23 @@ def _vault(body: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _json_default(o: Any) -> Any:
+    """Coerce values PyYAML produces but json cannot encode.
+
+    Unquoted `timestamp: 2026-08-12` in note frontmatter loads as a `date`, which
+    raised TypeError out of `_dispatch` and killed the handler thread before any
+    response was written — the client saw a reset connection, not an error body.
+    """
+    if isinstance(o, (datetime, date, time)):
+        return o.isoformat()
+    return str(o)
+
+
 def _json_bytes(payload: dict[str, Any], status: int) -> tuple[bytes, int]:
-    return json.dumps(payload, ensure_ascii=False).encode("utf-8"), status
+    return (
+        json.dumps(payload, ensure_ascii=False, default=_json_default).encode("utf-8"),
+        status,
+    )
 
 
 class RpcHandler(BaseHTTPRequestHandler):

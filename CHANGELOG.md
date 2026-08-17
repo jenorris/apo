@@ -4,6 +4,14 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.12.3] — 2026-08-17
+
+### Fixed
+
+- **RPC dropped the connection on unquoted YAML dates** — an unquoted `timestamp: 2026-08-12` in note frontmatter loads as a `datetime.date`, which `json.dumps` cannot encode. The `TypeError` raised out of `_dispatch` and killed the handler thread *before any response was written*, so the client saw a reset socket rather than an error body. `_json_bytes` now serializes with a `default=` coercion (`datetime` / `date` / `time` → ISO 8601, other unencodable values → `str`), matching the `default=str` convention `core.py` already uses when storing frontmatter in the index. Reachable when reading a note the watcher has not indexed yet — indexed notes return frontmatter from the index, which was already string-coerced, so the failure only showed on the fresh-file path (e.g. Obsidian writes a note with an unquoted date and an agent reads it inside the debounce + embed window).
+
+**Upgrade:** `systemctl --user restart apo-rpc` — no schema or config changes.
+
 ## [0.12.2] — 2026-08-17
 
 ### Fixed
