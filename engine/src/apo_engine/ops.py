@@ -3585,6 +3585,28 @@ def git_sync_op(
     return out
 
 
+def list_refs_op(*, vault: str = "", kind: str = "heads") -> dict[str, Any]:
+    """Reachable git refs at the vault registry root (for ``ref=`` discovery)."""
+    try:
+        b = _binding(vault)
+        root = b.resolved().root
+    except OpsError as e:
+        return _err(error=e.code, message=e.message)
+    k = (kind or "heads").strip().lower()
+    try:
+        refs = git_catalog.list_refs(root, kind=k)
+    except git_catalog.GitCatalogError as e:
+        return _err(error=e.code, message=e.message, vault=b.name, root=str(root))
+    return {
+        "ok": True,
+        "vault": b.name,
+        "root": str(root),
+        "kind": k,
+        "refs": refs,
+        "count": len(refs),
+    }
+
+
 def _vault_row(b: vaults.VaultBinding, *, default_name: str) -> dict[str, Any]:
     root = b.resolved().root
     return {

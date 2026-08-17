@@ -166,7 +166,7 @@ _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown + YAML catalog notes; sqlite-vec hybrid search; "
     "files are source of truth. "
     "apo_admin(action=list|describe|invoke): engine ops (memory_status, reindex, "
-    "delete_note, reload_config, git_sync). Destructive invoke requires "
+    "delete_note, reload_config, git_sync, list_refs). Destructive invoke requires "
     "confirm=true (delete_note always; reindex force=true; git_sync run/pull/rebase). "
     "vault(action=list|contracts|describe|merge|project|stats|lint): registry + contracts + "
     "optional habit KPIs (stats) + archival lint (flaws[]). "
@@ -356,6 +356,12 @@ def _git_sync_admin(params: dict[str, Any], *, vault: str = "") -> dict:
     return apo_ops.git_sync_op(action, message=message, vault=v)
 
 
+def _list_refs_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    v = vault or str(params.get("vault") or "")
+    kind = str(params.get("kind") or "heads")
+    return apo_ops.list_refs_op(vault=v, kind=kind)
+
+
 def _delete_note_admin(params: dict[str, Any], *, vault: str = "") -> dict:
     path = params.get("path")
     if not isinstance(path, str) or not path.strip():
@@ -400,6 +406,7 @@ _ADMIN_HANDLERS: dict[str, apo_admin_ops.AdminHandler] = {
     "reindex_deferred": _reindex_deferred_legacy_admin,
     "delete_note": _delete_note_admin,
     "git_sync": _git_sync_admin,
+    "list_refs": _list_refs_admin,
 }
 
 

@@ -80,7 +80,7 @@ No separate issue tracker required for “show me open X in folder Y.” Prefer 
 | **Surgical writes** | `append_note` / `patch_note` with heading / `chunk_hash` anchors and `expected_mtime` |
 | **Vault contracts** | Optional OKF / search / git / usage contracts — stamp and validate on write; OKF CLI for lint/export/ingest |
 | **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown (+ YAML title/description fields) |
-| **MCP surface** | 14 top-level tools + 7 admin capabilities via `apo_admin` |
+| **MCP surface** | 10 top-level tools + 6 admin capabilities via `apo_admin` |
 | **Index-backed graphs** | `backlinks` + `history` (mtime browse; file git log when git contract active) hit sqlite / git — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
 | **Measurable quality** | Labeled search eval (`just search-eval`, hit@k / MRR) + optional local cross-encoder reranker |
@@ -185,7 +185,7 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 | Surface | Count | Notes |
 |---------|------:|-------|
 | Top-level | **10** | Core search/write + `vault` + `apo_admin` |
-| Via `apo_admin` | **5** | `memory_status`, `reindex`, `reload_config`, `delete_note`, `git_sync` |
+| Via `apo_admin` | **6** | `memory_status`, `reindex`, `reload_config`, `delete_note`, `git_sync`, `list_refs` |
 
 Counts are contract-tested (`engine/tests/test_apo_admin.py`) — if this table drifts from the code, CI fails.
 
