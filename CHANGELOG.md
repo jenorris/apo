@@ -4,7 +4,7 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
-## [0.14.0] — 2026-08-18
+## [0.14.1] — 2026-08-18
 
 ### Fixed
 
@@ -20,6 +20,14 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 - Projected body now names when `~/.apo/desk.yaml` is absent — `vault_roles`/`dual_write`/`workspace` were silently inert defaults with no signal in the rendered markdown (only in the JSON API's `desk_meta.source`).
 
 **Upgrade:** no schema or config changes required — all additions are read from fields vaults may already have populated. Re-run `vault(action=project)` / `just desk-project` to see the fuller output.
+
+## [0.14.0] — 2026-08-18
+
+### Added
+
+- **Optima Stage B merge** — `optima_contract` + `optima_merge` (`VaultMergeController`) tick from `apo-engine watch` after git-sync; gated by optima-contract `refresh.watch` and `OPTIMA_SYNC`. CLI: `apo-engine optima-merge`. Degrades to valid `current.yaml` when domain sources are missing. No `gws`/GCal in engine core. Idle ticks skip rewrite when only `synced_at`/`timestamp` would change; relative source paths are contained under vault roots.
+
+**Upgrade:** Restart `apo-watch` (or `apo-engine watch`) so Optima vaults with `refresh.watch.enabled` pick up the merge tick. Desk `just optima merge` prefers the engine when installed.
 
 ## [0.13.3] — 2026-08-17
 
