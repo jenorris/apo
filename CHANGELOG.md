@@ -4,6 +4,12 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-08-18
+
+### Fixed
+
+- **Scratchpad frontmatter merge strips YAML comments** — mixed 3-way FM merges (both sides changed different keys) now clone the base `CommentedMap` and apply `yaml_rt` set/delete per field instead of rebuilding from plain dicts. One-sided verbatim fast path unchanged.
+
 ## [0.15.0] — 2026-08-18
 
 ### Added
