@@ -67,7 +67,7 @@ Secondary: `schema_type=` → that vault’s okf-contract `type_profiles` (e.g. 
 
 1. Re-validates bound schemas
 2. Reads current **vault working-tree** bytes at `destination_path` (not a jj bookmark / secondary worktree)
-3. Section-tree + frontmatter 3-way merge; preamble is its own unit
+3. Section-tree + frontmatter 3-way merge; preamble is its own unit. Frontmatter field merges keep YAML comments via `yaml_rt` (one-sided FM edits return that side’s fence text verbatim; mixed key wins apply `set_field` / `delete_field` on a base `CommentedMap`).
 4. Non-overlapping edits auto-merge; same heading both changed → `MERGE_CONFLICT`
 5. CAS re-read; write via `write_note`; session → `PROMOTED` (mutations denied; `read` follows vault)
 

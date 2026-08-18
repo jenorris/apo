@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from typing import Any
 
 from apo_engine import yaml_rt
 from apo_engine.markdown_patch import normalize_lines
 from apo_engine.markdown_sections import BREADCRUMB_SEP, split_sections
-from apo_engine.scratchpad_format import content_hash, section_hashes
+from apo_engine.scratchpad_format import content_hash
+from apo_engine.yaml_rt import CommentedMap
 
 _FM_RE = re.compile(r"\A---\n(.*?)\n---\n?", re.DOTALL)
 
@@ -93,37 +95,87 @@ def _merge_maps(
     return out, []
 
 
-def _merge_frontmatter(base_fm: str | None, ours_fm: str | None, theirs_fm: str | None) -> tuple[str | None, list[dict[str, Any]]]:
-    def as_map(text: str | None) -> dict[str, Any]:
-        if not text or not text.strip():
-            return {}
-        data = yaml_rt.load(text)
-        return dict(data) if isinstance(data, dict) else {}
+class _Missing:
+    def __repr__(self) -> str:
+        return "<missing>"
 
-    b, o, t = as_map(base_fm), as_map(ours_fm), as_map(theirs_fm)
+
+_MISSING = _Missing()
+
+
+def _load_fm_map(text: str | None) -> CommentedMap:
+    if not text or not text.strip():
+        return CommentedMap()
+    data = yaml_rt.load(text)
+    if isinstance(data, CommentedMap):
+        return data
+    if isinstance(data, dict):
+        # Rare PyYAML-fallback / non-round-trip load — wrap without comments.
+        cm = CommentedMap()
+        for k, v in data.items():
+            cm[k] = v
+        return cm
+    return CommentedMap()
+
+
+def _clone_fm_map(m: CommentedMap) -> CommentedMap:
+    try:
+        cloned = copy.deepcopy(m)
+        if isinstance(cloned, CommentedMap):
+            return cloned
+    except Exception:
+        pass
+    return _load_fm_map(yaml_rt.dump(m))
+
+
+def _merge_frontmatter(base_fm: str | None, ours_fm: str | None, theirs_fm: str | None) -> tuple[str | None, list[dict[str, Any]]]:
+    """Field-level 3-way FM merge that preserves YAML comments via yaml_rt."""
+    b = _load_fm_map(base_fm)
+    o = _load_fm_map(ours_fm)
+    t = _load_fm_map(theirs_fm)
     keys = set(b) | set(o) | set(t)
-    out: dict[str, Any] = {}
+
+    # Decision per top-level key: "ours" | "theirs" | "keep" | "delete" | conflict
+    decisions: dict[Any, str] = {}
+    winners: dict[Any, Any] = {}
     conflicts: list[dict[str, Any]] = []
+    ours_only = True
+    theirs_only = True
+
     for key in keys:
-        bv, ov, tv = b.get(key, _MISSING), o.get(key, _MISSING), t.get(key, _MISSING)
+        bv = b[key] if key in b else _MISSING
+        ov = o[key] if key in o else _MISSING
+        tv = t[key] if key in t else _MISSING
         o_changed = ov != bv
         t_changed = tv != bv
         if not o_changed and not t_changed:
-            if bv is not _MISSING:
-                out[key] = bv
+            decisions[key] = "keep"
             continue
         if o_changed and not t_changed:
-            if ov is not _MISSING:
-                out[key] = ov
+            theirs_only = False
+            if ov is _MISSING:
+                decisions[key] = "delete"
+            else:
+                decisions[key] = "ours"
+                winners[key] = ov
             continue
         if t_changed and not o_changed:
-            if tv is not _MISSING:
-                out[key] = tv
+            ours_only = False
+            if tv is _MISSING:
+                decisions[key] = "delete"
+            else:
+                decisions[key] = "theirs"
+                winners[key] = tv
             continue
         # both changed vs base
+        ours_only = False
+        theirs_only = False
         if ov == tv:
-            if ov is not _MISSING:
-                out[key] = ov
+            if ov is _MISSING:
+                decisions[key] = "delete"
+            else:
+                decisions[key] = "ours"
+                winners[key] = ov
             continue
         conflicts.append(
             {
@@ -132,19 +184,45 @@ def _merge_frontmatter(base_fm: str | None, ours_fm: str | None, theirs_fm: str 
                 "message": f"frontmatter field {key!r} changed in both sides",
             }
         )
+
     if conflicts:
         return None, conflicts
-    if not out and base_fm is None and ours_fm is None and theirs_fm is None:
+
+    if not keys and base_fm is None and ours_fm is None and theirs_fm is None:
         return None, []
-    return yaml_rt.dump(out).rstrip("\n"), []
 
+    # One-sided fast path: return that side's FM text verbatim (comments/order intact).
+    changed = [k for k, d in decisions.items() if d != "keep"]
+    if changed and ours_only and not theirs_only:
+        if ours_fm is None or not str(ours_fm).strip():
+            return None if base_fm is None else "", []
+        return str(ours_fm).rstrip("\n"), []
+    if changed and theirs_only and not ours_only:
+        if theirs_fm is None or not str(theirs_fm).strip():
+            return None if base_fm is None else "", []
+        return str(theirs_fm).rstrip("\n"), []
+    if not changed:
+        if base_fm is None and not keys:
+            return None, []
+        if base_fm is not None:
+            return str(base_fm).rstrip("\n"), []
+        return None, []
 
-class _Missing:
-    def __repr__(self) -> str:
-        return "<missing>"
+    # Mixed: clone base carrier and apply surgical set/delete.
+    result = _clone_fm_map(b)
+    for key, decision in decisions.items():
+        if decision == "keep":
+            continue
+        if decision == "delete":
+            if key in result:
+                yaml_rt.delete_field_at_path(result, str(key))
+            continue
+        # ours / theirs
+        yaml_rt.set_field_at_path(result, str(key), winners[key])
 
-
-_MISSING = _Missing()
+    if not result and base_fm is None and ours_fm is None and theirs_fm is None:
+        return None, []
+    return yaml_rt.dump(result).rstrip("\n"), []
 
 
 def merge_markdown(base: str, ours: str, theirs: str) -> tuple[str | None, list[dict[str, Any]]]:

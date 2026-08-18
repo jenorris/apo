@@ -333,6 +333,80 @@ class ScratchpadMergeTests(unittest.TestCase):
         self.assertIn("status: done", merged)
         self.assertIn("title: Other", merged)
 
+    def test_frontmatter_one_sided_preserves_comments(self):
+        """Only ours edits FM; trunk edits body — FM text stays comment-faithful."""
+        base = (
+            "---\n"
+            "title: Test     # display name\n"
+            "# status is set by the watcher\n"
+            "status: open\n"
+            "---\n"
+            "# Body\n"
+            "x\n"
+        )
+        ours = (
+            "---\n"
+            "title: Test     # display name\n"
+            "# status is set by the watcher\n"
+            "status: done\n"
+            "---\n"
+            "# Body\n"
+            "x\n"
+        )
+        theirs = (
+            "---\n"
+            "title: Test     # display name\n"
+            "# status is set by the watcher\n"
+            "status: open\n"
+            "---\n"
+            "# Body\n"
+            "trunk\n"
+        )
+        merged, conflicts = merge_buffers(fmt="markdown", base=base, ours=ours, theirs=theirs)
+        self.assertEqual(conflicts, [])
+        assert merged is not None
+        self.assertIn("status: done", merged)
+        self.assertIn("# status is set by the watcher", merged)
+        self.assertIn("# display name", merged)
+        self.assertIn("trunk", merged)
+
+    def test_frontmatter_mixed_keys_preserve_comments(self):
+        """Ours edits status, theirs edits title — comments on both keys survive."""
+        base = (
+            "---\n"
+            "title: Test     # display name\n"
+            "# status is set by the watcher\n"
+            "status: open\n"
+            "---\n"
+            "# Body\n"
+            "x\n"
+        )
+        ours = (
+            "---\n"
+            "title: Test     # display name\n"
+            "# status is set by the watcher\n"
+            "status: done\n"
+            "---\n"
+            "# Body\n"
+            "x\n"
+        )
+        theirs = (
+            "---\n"
+            "title: Other     # display name\n"
+            "# status is set by the watcher\n"
+            "status: open\n"
+            "---\n"
+            "# Body\n"
+            "x\n"
+        )
+        merged, conflicts = merge_buffers(fmt="markdown", base=base, ours=ours, theirs=theirs)
+        self.assertEqual(conflicts, [])
+        assert merged is not None
+        self.assertIn("status: done", merged)
+        self.assertIn("title: Other", merged)
+        self.assertIn("# status is set by the watcher", merged)
+        self.assertIn("# display name", merged)
+
 
 class ScratchpadCommitTests(unittest.TestCase):
     def setUp(self):
