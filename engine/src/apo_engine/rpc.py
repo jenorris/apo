@@ -297,6 +297,7 @@ def _write(body: dict[str, Any]) -> dict[str, Any]:
         body=body.get("body") if isinstance(body.get("body"), str) else None,
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
+        scratchpad=str(body["scratchpad"]) if isinstance(body.get("scratchpad"), str) else None,
         **_region_kwargs(body),
     )
 
@@ -338,6 +339,7 @@ def _append(body: dict[str, Any]) -> dict[str, Any]:
         create=bool(body.get("create")),
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
+        scratchpad=str(body["scratchpad"]) if isinstance(body.get("scratchpad"), str) else None,
         **_region_kwargs(body),
     )
 
@@ -488,6 +490,53 @@ def _vault(body: dict[str, Any]) -> dict[str, Any]:
         limit=int(body["limit"]) if body.get("limit") is not None else 50,
         offset=int(body["offset"]) if body.get("offset") is not None else 0,
         fix=bool(body.get("fix")),
+    )
+
+
+@_route("GET", "/v1/scratchpad")
+@_route("POST", "/v1/scratchpad")
+def _scratchpad(body: dict[str, Any]) -> dict[str, Any]:
+    action = body.get("action")
+    if not isinstance(action, str) or not action.strip():
+        return {"ok": False, "error": "bad_request", "message": "`action` string required"}
+    ops_raw = body.get("ops")
+    if ops_raw is not None and not isinstance(ops_raw, list):
+        return {"ok": False, "error": "bad_request", "message": "`ops` must be an array"}
+    include = body.get("include")
+    if include is not None and not (
+        isinstance(include, list) and all(isinstance(x, str) for x in include)
+    ):
+        return {"ok": False, "error": "bad_request", "message": "`include` must be a list of strings"}
+    fields = body.get("fields")
+    if fields is not None and not (
+        isinstance(fields, list) and all(isinstance(x, str) for x in fields)
+    ):
+        return {"ok": False, "error": "bad_request", "message": "`fields` must be a list of strings"}
+    validate = body.get("validate")
+    if validate is not None and not isinstance(validate, bool):
+        return {"ok": False, "error": "bad_request", "message": "`validate` must be a boolean"}
+    return ops.scratchpad_op(
+        action.strip(),
+        session_id=str(body["session_id"]) if isinstance(body.get("session_id"), str) else None,
+        format=str(body["format"]) if isinstance(body.get("format"), str) else None,
+        content=body.get("content"),
+        vault=str(body.get("vault") or ""),
+        vault_path=str(body["vault_path"]) if isinstance(body.get("vault_path"), str) else None,
+        schema_path=str(body["schema_path"]) if isinstance(body.get("schema_path"), str) else None,
+        schema_type=str(body["schema_type"]) if isinstance(body.get("schema_type"), str) else None,
+        ops=ops_raw if isinstance(ops_raw, list) else None,
+        destination_path=(
+            str(body["destination_path"]) if isinstance(body.get("destination_path"), str) else None
+        ),
+        include=include,
+        view=str(body["view"]) if isinstance(body.get("view"), str) else None,
+        json_path=str(body["json_path"]) if isinstance(body.get("json_path"), str) else None,
+        heading=str(body["heading"]) if isinstance(body.get("heading"), str) else None,
+        fields=fields,
+        region=str(body["region"]) if isinstance(body.get("region"), str) else None,
+        validate=validate,
+        allow_foreign_schema=bool(body.get("allow_foreign_schema")),
+        allow_cross_vault_schema=bool(body.get("allow_cross_vault_schema")),
     )
 
 

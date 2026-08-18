@@ -80,7 +80,7 @@ Then put the same env block as Cursor into `~/.claude.json` under the `apo` serv
 }
 ```
 
-Expect **10** top-level tools (includes `vault`, `apo_admin`). Optional habit KPIs: `vault(action=stats)`.
+Expect **11** top-level tools (includes `vault`, `apo_admin`, `scratchpad`). Optional habit KPIs: `vault(action=stats)`.
 
 ## 4. Verify
 

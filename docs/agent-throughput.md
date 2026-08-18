@@ -12,6 +12,7 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 6. **Dual-write** → parallel tools in one turn, same `vault=`
 7. **Multi-path patch** → `patch_note(items=…)` (not session log)
 8. **Structure-only atom** → prefer `write_note` / `patch_note(set_field)` on a `.yaml` path (no `append_note` / headings)
+9. **JSON/YAML payload workshop or Plan handoff** → `scratchpad` (vault-free create/patch; bind schema then `commit` / `write_note(scratchpad=)`) — see [scratchpad.md](./scratchpad.md)
 
 ## Hard defaults
 
@@ -109,3 +110,5 @@ Before the final reply on an Apo turn:
 2. `fields=` on status sweeps?
 3. Parallel dual-write same `vault=`?
 4. `mtime` → `expected_mtime` on follow-up writes?
+5. Regenerating a whole JSON/YAML blob? Prefer `scratchpad` + `set_field` ([scratchpad.md](./scratchpad.md)).
+6. Handing a Plan/todos buffer to another agent? Pass `session_id` + `read(view=handoff)`, not a chat paste.

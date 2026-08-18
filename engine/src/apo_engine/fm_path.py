@@ -250,6 +250,19 @@ def set_at_path(data: dict[str, Any], field: str, value: Any) -> None:
     parent[idx] = value
 
 
+def get_at_path(data: dict[str, Any], field: str) -> Any:
+    """Read ``field`` path under ``data``. Missing path → ``None``."""
+    try:
+        parts = split_path(field)
+        parent, leaf = get_parent(data, parts, create=False)
+    except FmPathError:
+        return None
+    try:
+        return _traverse(parent, leaf, create=False)
+    except FmPathError:
+        return None
+
+
 def delete_at_path(data: dict[str, Any], field: str) -> None:
     parts = split_path(field)
     parent, leaf = get_parent(data, parts, create=False)
