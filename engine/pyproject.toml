@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apo-engine"
-version = "0.14.2"
+version = "0.15.0"
 description = "Apo — local hybrid search over a Markdown vault (sqlite-vec, no Docker)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,6 +25,8 @@ dependencies = [
     # PyYAML stays as the tolerant fallback loader.
     "ruamel.yaml>=0.18",
     "watchdog>=4.0.0",
+    # Scratchpad / bind_schema JSON Schema validation (Draft 2020-12).
+    "jsonschema>=4.18",
 ]
 
 [project.optional-dependencies]

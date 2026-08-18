@@ -9,10 +9,10 @@ Semantics:
 - Comments on an *unrelated* key are byte-identical after editing a different key.
 - Comments on an *edited* key survive: the value is replaced and the trailing
   comment is re-emitted at its original column.
-- Deleting a key drops its line, its inline comment, and any comment block that
-  *follows* it — in ruamel's model a comment belongs to the key above it, so the
-  block between the deleted key and the next one goes with the deletion. A block
-  comment written *above* the deleted key belongs to the preceding key and stays.
+- **Human comment ownership:** a stand-alone ``#`` block immediately above a key
+  annotates *that* key (not the predecessor). Deleting a key drops its inline
+  comment and any block comment remapped onto it. Document-level start comments
+  on the root mapping (file headers) stay on the document.
 - Blank lines, quoting style and flow style are preserved as loaded. Block
   indentation is sniffed from the source (:func:`_sniff_indent`) because ruamel
   emits with a fixed indent config rather than the document's own.
@@ -37,9 +37,11 @@ from typing import Any
 
 import yaml as _pyyaml
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from ruamel.yaml.constructor import RoundTripConstructor
+from ruamel.yaml.error import CommentMark
 from ruamel.yaml.representer import RoundTripRepresenter
+from ruamel.yaml.tokens import CommentToken
 
 __all__ = [
     "CommentedMap",
@@ -223,6 +225,177 @@ def _plain_safe(node: Any, depth: int = 0) -> bool:
     return isinstance(node, _PLAIN_TYPES)
 
 
+def _comment_token(value: str, column: int = 0) -> CommentToken:
+    text = value if value.endswith("\n") else value + "\n"
+    return CommentToken(text, CommentMark(column))
+
+
+def _token_lines(tok: Any) -> list[str]:
+    if not isinstance(tok, CommentToken):
+        return []
+    parts = (tok.value or "").split("\n")
+    if parts and parts[-1] == "":
+        parts = parts[:-1]
+    return parts
+
+
+def _ensure_map_items(m: CommentedMap, key: Any) -> list[Any]:
+    if key not in m.ca.items:
+        m.ca.items[key] = [None, None, None, None]
+    slot = m.ca.items[key]
+    while len(slot) < 4:
+        slot.append(None)
+    return slot
+
+
+def _split_post_comment(tok: Any) -> tuple[str | None, list[str]]:
+    """Split a post-value comment into same-line inline + following block lines."""
+    if not isinstance(tok, CommentToken):
+        return None, []
+    val = tok.value or ""
+    if not val:
+        return None, []
+    parts = val.split("\n")
+    if parts and parts[-1] == "":
+        parts = parts[:-1]
+    if val.startswith("\n"):
+        return None, parts[1:]
+    return (parts[0] if parts else None), parts[1:]
+
+
+def _set_before_key(m: CommentedMap, key: Any, block_lines: list[str], indent: int = 0) -> None:
+    if not block_lines:
+        return
+    text = ""
+    for line in block_lines:
+        if line == "":
+            text += "\n"
+            continue
+        if not line.startswith("#"):
+            line = "# " + line
+        text += line + "\n"
+    if not text:
+        return
+    slot = _ensure_map_items(m, key)
+    new_tok = _comment_token(text, indent)
+    prev = slot[1]
+    if prev is None:
+        slot[1] = [new_tok]
+    elif isinstance(prev, list):
+        slot[1] = [new_tok] + prev
+    else:
+        slot[1] = [new_tok, prev]
+
+
+def _set_post_inline(slot: list[Any], tok: Any, inline: str | None) -> None:
+    if inline is None:
+        slot[2] = None
+        return
+    text = inline if inline.endswith("\n") else inline + "\n"
+    if isinstance(tok, CommentToken) and tok.start_mark is not None:
+        tok.value = text
+        slot[2] = tok
+        return
+    col = 0
+    if isinstance(tok, CommentToken) and tok.start_mark is not None:
+        col = tok.start_mark.column
+    slot[2] = _comment_token(text, col)
+
+
+def _peel_seq_index(seq: CommentedSeq, idx: int) -> list[str]:
+    if idx not in seq.ca.items:
+        return []
+    entry = seq.ca.items[idx]
+    if not entry:
+        return []
+    tok = entry[0]
+    if not isinstance(tok, CommentToken) or "#" not in (tok.value or ""):
+        return []
+    parts = _token_lines(tok)
+    # First empty line is the EOL after the list item when the comment trailed the
+    # sequence — drop it when reattaching as a next-key before-comment.
+    if parts and parts[0] == "":
+        parts = parts[1:]
+    entry[0] = None
+    return parts
+
+
+def _peel_trailing_comments(val: Any) -> list[str]:
+    """Peel stand-alone ``#`` blocks that trail after the last leaf of ``val``."""
+    if isinstance(val, CommentedSeq) and len(val):
+        last = val[-1]
+        if isinstance(last, (CommentedMap, CommentedSeq)):
+            peeled = _peel_trailing_comments(last)
+            if peeled:
+                return peeled
+        return _peel_seq_index(val, len(val) - 1)
+    if isinstance(val, CommentedMap) and val:
+        last_key = list(val.keys())[-1]
+        return _peel_trailing_comments(val[last_key])
+    return []
+
+
+def _dedupe_comment_lines(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    for ln in lines:
+        if ln.startswith("#") and out and out[-1] == ln:
+            continue
+        out.append(ln)
+    return out
+
+
+def _move_map_intro_comments(parent: CommentedMap, key: Any, child: CommentedMap) -> None:
+    """Move comments above a nested map's first key onto that key (human model)."""
+    if not child:
+        return
+    first = list(child.keys())[0]
+    lines: list[str] = []
+    slot = parent.ca.items.get(key)
+    if slot and len(slot) > 3 and slot[3] is not None:
+        tok = slot[3]
+        if isinstance(tok, list):
+            for t in tok:
+                lines.extend(_token_lines(t))
+        else:
+            lines.extend(_token_lines(tok))
+        slot[3] = None
+    if child.ca.comment and child.ca.comment[1]:
+        for t in child.ca.comment[1]:
+            lines.extend(_token_lines(t))
+        child.ca.comment = None
+    lines = _dedupe_comment_lines(lines)
+    if lines:
+        _set_before_key(child, first, lines, indent=2)
+
+
+def _remap_comment_ownership(node: Any) -> None:
+    """Reattach ruamel comments so block comments annotate the following key."""
+    if isinstance(node, CommentedMap):
+        keys = list(node.keys())
+        for i, key in enumerate(keys):
+            val = node[key]
+            if isinstance(val, CommentedMap):
+                _move_map_intro_comments(node, key, val)
+            nxt = keys[i + 1] if i + 1 < len(keys) else None
+            slot = node.ca.items.get(key)
+            post = slot[2] if slot and len(slot) > 2 else None
+            inline, blocks = _split_post_comment(post)
+            if blocks and nxt is not None:
+                if slot is None:
+                    slot = _ensure_map_items(node, key)
+                _set_post_inline(slot, post, inline)
+                _set_before_key(node, nxt, blocks)
+            if nxt is not None:
+                peeled = _peel_trailing_comments(val)
+                if peeled:
+                    _set_before_key(node, nxt, peeled)
+        for v in node.values():
+            _remap_comment_ownership(v)
+    elif isinstance(node, CommentedSeq):
+        for v in node:
+            _remap_comment_ownership(v)
+
+
 def load(text: str | None) -> CommentedMap | None:
     """Round-trip parse a YAML mapping. Non-mapping / unparseable → ``None``.
 
@@ -242,6 +415,11 @@ def load(text: str | None) -> CommentedMap | None:
     try:
         setattr(data, _INDENT_ATTR, _sniff_indent(text))
     except Exception:  # pragma: no cover - CommentedMap accepts attributes
+        pass
+    try:
+        _remap_comment_ownership(data)
+    except Exception:
+        # Fail closed: keep ruamel's native attachment rather than strip comments.
         pass
     return data
 
@@ -277,8 +455,8 @@ def set_field_at_path(data: Any, field: str, value: Any) -> None:
 def delete_field_at_path(data: Any, field: str) -> None:
     """``fm_path.delete_at_path`` against a round-trip mapping.
 
-    The deleted key takes its own comments with it (inline, plus any block that
-    follows it) — see the module docstring.
+    The deleted key takes its own comments with it (inline plus any block remapped
+    onto it under the human ownership model) — see the module docstring.
     """
     from apo_engine.fm_path import delete_at_path
 

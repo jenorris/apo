@@ -172,16 +172,15 @@ class TestYamlNoteComments(unittest.TestCase):
         self.assertTrue(result.ok, result.results)
         self.assertNotIn("owner: jeremy", result.content)
         self.assertNotIn("# current owner", result.content)
-        # Documented: a comment block *following* the deleted key belongs to it in
-        # ruamel's model, so it goes too.
-        self.assertNotIn("# trailing note", result.content)
-        # Everything above the deleted key is untouched.
+        # Human model: "# the meta block…" annotates meta → goes with the delete.
+        self.assertNotIn("# the meta block is read by the sweeper", result.content)
+        # "# trailing note" annotates count → stays.
+        self.assertIn("# trailing note", result.content)
         self.assertTrue(
             result.content.startswith(
                 "# catalog record — hand maintained\n"
                 "title: Alpha Queue     # display name\n"
                 "status: open\n"
-                "# the meta block is read by the sweeper\n"
             ),
             result.content,
         )
@@ -262,6 +261,39 @@ class TestFrontmatterComments(unittest.TestCase):
         self.assertIn("title: Test Thread     # display name", result.content)
         self.assertIn("# status is set by the watcher", result.content)
         self.assertIn("Prose that must not move.", result.content)
+
+    def test_delete_status_removes_its_leading_block_comment(self):
+        result = apply_patch(COMMENTED_MD, [{"op": "delete_field", "field": "status"}])
+        self.assertTrue(result.ok, result.results)
+        self.assertNotIn("status:", result.content)
+        self.assertNotIn("# status is set by the watcher", result.content)
+        self.assertIn("title: Test Thread     # display name", result.content)
+        self.assertIn("Prose that must not move.", result.content)
+
+    def test_delete_title_keeps_status_block_comment(self):
+        result = apply_patch(COMMENTED_MD, [{"op": "delete_field", "field": "title"}])
+        self.assertTrue(result.ok, result.results)
+        self.assertNotIn("title:", result.content)
+        self.assertIn("# status is set by the watcher", result.content)
+        self.assertIn("status: open", result.content)
+        self.assertIn("Prose that must not move.", result.content)
+
+    def test_nested_map_leading_comment_annotates_first_key(self):
+        src = (
+            "meta:\n"
+            "  # owner annotation\n"
+            "  owner: jeremy\n"
+            "  tags: [a]\n"
+        )
+        result = apply_yaml_patch(src, [{"op": "delete_field", "field": "meta.owner"}])
+        self.assertTrue(result.ok, result.results)
+        self.assertNotIn("owner:", result.content)
+        self.assertNotIn("# owner annotation", result.content)
+        self.assertIn("tags: [a]", result.content)
+        kept = apply_yaml_patch(src, [{"op": "delete_field", "field": "meta.tags"}])
+        self.assertTrue(kept.ok, kept.results)
+        self.assertIn("# owner annotation", kept.content)
+        self.assertIn("owner: jeremy", kept.content)
 
     def test_sequence_indent_survives_an_unrelated_edit(self):
         result = apply_patch(

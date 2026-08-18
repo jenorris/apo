@@ -39,6 +39,7 @@ Arg names match MCP where possible. Prefer **`limit`** / **`where`** (aliases `t
 | POST | `/v1/backlinks` | `{path, limit?, vault?}` | wiki-link backlinks |
 | POST | `/v1/history` | `{limit?, folder?, path?, vault?, since?, until?, preview?, heading?, exclude?, fields?}` | browse by mtime (digest filters), or file git log when `path` + git contract |
 | GET/POST | `/v1/vault` | `{action, vault?, vaults?, full?}` | registry + contracts + desk merge/project (`list` \| `contracts` \| `describe` \| `merge` \| `project`); `vaults=[...]` scopes to a named subset (not combined with `vault`) |
+| GET/POST | `/v1/scratchpad` | `{action, session_id?, format?, content?, vault?, …}` | ephemeral workshop: create/checkout/patch/validate/bind_schema/commit — see [scratchpad.md](./scratchpad.md) |
 | POST | `/v1/git_sync` | `{action, message?, vault?}` | git contract sync: `status` \| `run` \| `pull` \| `rebase` \| `clear_block` |
 | POST | `/v1/list_refs` | `{kind?, vault?}` | reachable git refs at vault root (`heads` \| `tags` \| `all`) for `ref=` |
 
@@ -48,8 +49,8 @@ Writes update markdown on disk and **enqueue** reindex for `apo-engine watch` (s
 
 | Method | Path | Body | Notes |
 |--------|------|------|-------|
-| POST | `/v1/write` | `{path, content?, text?, expected_mtime?, expected_frontmatter_hash?, expected_body_hash?, expected_content_hash?, vault?}` | create/overwrite only (`content` canonical; `text` alias; `append` key → `append_removed`) |
-| POST | `/v1/append` | `{text?, content?, path?, heading?, chunk_hash?, position?, create?, expected_mtime?, expected_*_hash?, vault?}` | surgical append (`text` canonical; `content` alias; `path` or `chunk_hash` required) |
+| POST | `/v1/write` | `{path, content?, text?, expected_mtime?, expected_*_hash?, vault?, scratchpad?}` | create/overwrite only (`content` canonical; `text` alias; `scratchpad=` session id as content source) |
+| POST | `/v1/append` | `{text?, content?, path?, heading?, chunk_hash?, position?, create?, expected_mtime?, expected_*_hash?, vault?, scratchpad?}` | surgical append (`text` canonical; `content` alias; `path` or `chunk_hash` required; optional `scratchpad=`) |
 | POST | `/v1/patch` | `{path, ops, strict?, dry_run?, verbose?, expected_mtime?, expected_*_hash?, vault?}` | batch mutators |
 | POST | `/v1/patch_notes` | `{items, strict?, dry_run?, verbose?, vault?}` | multi-path patch batch (`items: [{path, ops, expected_mtime?, expected_*_hash?}]`, max 20) |
 | POST | `/v1/place` | `{src, dst, overwrite?, fields?, expected_mtime?, vault?}` | move if src in vault; else copy host `.md` |

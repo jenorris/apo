@@ -4,6 +4,16 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-18
+
+### Added
+
+- **`scratchpad` tool** — ephemeral workshop buffers under `~/.apo/scratchpads/`: `create` / `checkout` / `read` / `patch` / `validate` / `bind_schema` / `commit` / `discard` / `status`. Vault-free create/patch/read; `vault=` required for schema bind and commit. Primary schemas under `system/schemas/**/*.schema.json`; secondary `schema_type` via okf `type_profiles`. Cross-vault pins: `allow_foreign_schema` / `allow_cross_vault_schema` (default false). Section-tree + frontmatter 3-way merge on commit; `PROMOTED` forwarding pointer. Promote also via `write_note` / `append_note` (`scratchpad=`). MCP + `GET|POST /v1/scratchpad`. Dependency: `jsonschema`. See [docs/scratchpad.md](docs/scratchpad.md).
+
+### Fixed
+
+- **`yaml_rt` block-comment ownership** — stand-alone `#` comments immediately above a key now annotate that key (human model), not the predecessor. Deletes/edits no longer lop the wrong comments; nested map / sequence fixtures covered.
+
 ## [0.14.2] — 2026-08-18
 
 ### Fixed

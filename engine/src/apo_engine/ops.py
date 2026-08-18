@@ -2174,10 +2174,63 @@ def write_note(
     expected_content_hash: str | None = None,
     vault: str = "",
     ref: str = "",
+    scratchpad: str | None = None,
 ) -> dict[str, Any]:
     bad = _reject_if_ref(ref, tool="write_note")
     if bad:
         return bad
+    promote_scratchpad = None
+    if scratchpad:
+        from apo_engine.scratchpad_store import load_session
+        from apo_engine.scratchpad_validate import validate_session
+        from apo_engine import vaults as _vaults
+
+        hit = load_session(str(scratchpad).strip())
+        if hit is None:
+            return _err(
+                path=path,
+                error="not_found",
+                message=f"scratchpad session {scratchpad!r} not found or expired",
+            )
+        sp_meta, sp_buf = hit
+        default, bindings = _vaults.load_bindings()
+        vname = (vault or sp_meta.vault or default or "").strip()
+        b = bindings.get(vname)
+        if (
+            sp_meta.schema_vault
+            and b is not None
+            and sp_meta.schema_vault != b.name
+            and not sp_meta.allow_cross_vault_schema
+        ):
+            return {
+                "ok": False,
+                "error": "cross_vault_schema",
+                "message": (
+                    f"buffer validated with schema_vault={sp_meta.schema_vault!r} "
+                    f"but write_note targets vault={b.name!r}"
+                ),
+                "tip": "Pass allow_cross_vault_schema=true on bind/create, or write to schema_vault.",
+                "session_id": sp_meta.session_id,
+            }
+        if sp_meta.schema_path or sp_meta.schema_type:
+            root = Path(b.root) if b else None
+            v = validate_session(sp_meta, sp_buf, vault_root=root)
+            if not v["valid"]:
+                return {
+                    "ok": False,
+                    "error": "validation_failed",
+                    "message": "scratchpad validation failed before write_note",
+                    "diagnostics": v["diagnostics"],
+                    "session_id": sp_meta.session_id,
+                }
+        if content is not None or text is not None or body is not None or sections is not None:
+            return _err(
+                path=path,
+                error="bad_request",
+                message="pass scratchpad= OR content=/sections=, not both",
+            )
+        content = sp_buf
+        promote_scratchpad = sp_meta
     structured = sections is not None or frontmatter is not None
     if structured:
         if body is not None:
@@ -2290,6 +2343,16 @@ def write_note(
         out = _attach_tip(
             out, f"write_note: used {alias_key}= alias; prefer content="
         )
+    if promote_scratchpad is not None:
+        from apo_engine.scratchpad_store import save_session
+
+        promote_scratchpad.state = "PROMOTED"
+        promote_scratchpad.promoted_path = path
+        promote_scratchpad.destination_path = path
+        promote_scratchpad.vault = b.name
+        save_session(promote_scratchpad, to_write)
+        out["session_id"] = promote_scratchpad.session_id
+        out["scratchpad_state"] = "PROMOTED"
     return out
 
 
@@ -2309,10 +2372,61 @@ def append_note(
     expected_content_hash: str | None = None,
     vault: str = "",
     ref: str = "",
+    scratchpad: str | None = None,
 ) -> dict[str, Any]:
     bad = _reject_if_ref(ref, tool="append_note")
     if bad:
         return bad
+    if scratchpad:
+        from apo_engine.scratchpad_store import load_session
+        from apo_engine.scratchpad_validate import validate_session
+        from apo_engine import vaults as _vaults
+
+        hit = load_session(str(scratchpad).strip())
+        if hit is None:
+            return _err(
+                path=(path or "").replace("\\", "/").strip() or None,
+                error="not_found",
+                message=f"scratchpad session {scratchpad!r} not found or expired",
+            )
+        sp_meta, sp_buf = hit
+        default, bindings = _vaults.load_bindings()
+        vname = (vault or sp_meta.vault or default or "").strip()
+        b = bindings.get(vname)
+        if (
+            sp_meta.schema_vault
+            and b is not None
+            and sp_meta.schema_vault != b.name
+            and not sp_meta.allow_cross_vault_schema
+        ):
+            return {
+                "ok": False,
+                "error": "cross_vault_schema",
+                "message": (
+                    f"buffer validated with schema_vault={sp_meta.schema_vault!r} "
+                    f"but append_note targets vault={b.name!r}"
+                ),
+                "tip": "Pass allow_cross_vault_schema=true on bind/create, or append in schema_vault.",
+                "session_id": sp_meta.session_id,
+            }
+        if sp_meta.schema_path or sp_meta.schema_type:
+            root = Path(b.root) if b else None
+            v = validate_session(sp_meta, sp_buf, vault_root=root)
+            if not v["valid"]:
+                return {
+                    "ok": False,
+                    "error": "validation_failed",
+                    "message": "scratchpad validation failed before append_note",
+                    "diagnostics": v["diagnostics"],
+                    "session_id": sp_meta.session_id,
+                }
+        if text is not None or content is not None or body is not None:
+            return _err(
+                path=(path or "").replace("\\", "/").strip() or None,
+                error="bad_request",
+                message="pass scratchpad= OR text=, not both",
+            )
+        text = sp_buf
     body, alias_key, body_err = resolve_body_text(
         text, content, body=body, prefer="text"
     )
@@ -4020,3 +4134,10 @@ def vault_op(
         "contract_ids": list(found),
         "contracts": vault_contracts.present_contracts(found, full=want_full),
     }
+
+
+def scratchpad_op(action: str, **kwargs: Any) -> dict[str, Any]:
+    """Ephemeral scratchpad workshop / validate / commit (see docs/scratchpad.md)."""
+    from apo_engine.scratchpad import scratchpad_op as _sp
+
+    return _sp(action, **kwargs)
