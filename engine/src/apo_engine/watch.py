@@ -273,6 +273,9 @@ def _watch_one(
     debouncer = PathDebouncer(debounce_s)
     event_queue: queue.Queue[str] = queue.Queue()
     sync_ctl = git_sync.VaultSyncController(root, verbose=verbose)
+    from . import optima_merge as _optima_merge
+
+    merge_ctl = _optima_merge.VaultMergeController(root, verbose=verbose)
 
     ignore_res = core._compile_ignore(core._load_ignore())
 
@@ -439,6 +442,12 @@ def _watch_one(
                 except Exception as sync_err:
                     if verbose:
                         print(f"  [{label}] git-sync tick error: {sync_err}", flush=True)
+
+                try:
+                    merge_ctl.tick(index_busy=debouncer.waiting() > 0)
+                except Exception as merge_err:
+                    if verbose:
+                        print(f"  [{label}] optima-merge tick error: {merge_err}", flush=True)
 
                 if due_poll:
                     last_scan = now

@@ -107,6 +107,33 @@ def _cmd_desk_project(args) -> int:
     return 0 if out.get("ok") else 1
 
 
+def _cmd_optima_merge(args) -> int:
+    """Stage B: merge domain schedules → Optima current.yaml (no gws)."""
+    from . import optima_merge
+
+    name = (getattr(args, "vault", None) or "").strip() or "optima"
+    cm, b = _bind_cli_vault(name)
+    with cm:
+        result = optima_merge.run_merge(b.root, dry_run=args.dry_run)
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+    elif result.get("skipped"):
+        print(f"[{b.name}] optima-merge skipped: {result.get('reason')}", file=sys.stderr)
+    elif result.get("ok"):
+        print(
+            f"[{b.name}] optima-merge: {result.get('kind')} — "
+            f"{result.get('theme') or 'free'}"
+            + (" (degraded)" if result.get("degraded") else "")
+            + (" (dry-run)" if result.get("dry_run") else "")
+        )
+    else:
+        print(
+            f"[{b.name}] optima-merge failed: {result.get('message') or result}",
+            file=sys.stderr,
+        )
+    return 0 if result.get("ok") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="apo-engine",
@@ -184,6 +211,19 @@ def main(argv: list[str] | None = None) -> int:
         help="optional bearer token (default APO_RPC_TOKEN; empty = no auth on loopback)",
     )
     pr.set_defaults(func=_cmd_serve)
+
+    po = sub.add_parser(
+        "optima-merge",
+        help="Stage B: merge Work/Meta schedules into Optima current.yaml",
+    )
+    po.add_argument(
+        "--vault",
+        default="optima",
+        help="usage-contract vault_id (default: optima)",
+    )
+    po.add_argument("--dry-run", action="store_true")
+    po.add_argument("--json", action="store_true")
+    po.set_defaults(func=_cmd_optima_merge)
 
     args = p.parse_args(argv)
     vaults.apply_discovery_namespace(args)
