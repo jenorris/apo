@@ -116,6 +116,16 @@ class TestLocalRpc(unittest.TestCase):
         self.assertGreaterEqual(len(search["results"]), 1)
         self.assertIn("alpha", search["results"][0]["content"].lower())
 
+    def test_instructions_matches_mcp_handshake_text(self):
+        """The stdio MCP server hands this text to clients in its handshake;
+        HTTP-only RPC clients (no stdio transport) have no other way to get it."""
+        from apo_engine.mcp_instructions import MCP_INSTRUCTIONS
+
+        status, out = self._get("/v1/instructions")
+        self.assertEqual(status, 200)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["instructions"], MCP_INSTRUCTIONS)
+
     def test_read_note_with_unquoted_date_frontmatter(self):
         """Regression: a YAML date in frontmatter must not kill the connection.
 

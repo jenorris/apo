@@ -17,6 +17,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from apo_engine import ops
+from apo_engine.mcp_instructions import MCP_INSTRUCTIONS
 
 Handler = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -34,6 +35,13 @@ def _route(method: str, path: str):
 @_route("GET", "/health")
 def _health(_body: dict[str, Any]) -> dict[str, Any]:
     return ops.health()
+
+
+@_route("GET", "/v1/instructions")
+def _instructions(_body: dict[str, Any]) -> dict[str, Any]:
+    """The same toolset-routing text the stdio MCP server hands clients in its
+    handshake — surfaced here for HTTP-only RPC clients (no stdio transport)."""
+    return {"ok": True, "instructions": MCP_INSTRUCTIONS}
 
 
 @_route("GET", "/v1/stats")

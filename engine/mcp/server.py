@@ -20,6 +20,7 @@ from apo_engine import deferred as index_deferred
 from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
 from apo_engine.mcp_backend import ApoStore
+from apo_engine.mcp_instructions import MCP_INSTRUCTIONS as _MCP_INSTRUCTIONS
 from apo_engine.patch_ops import OPS_FIELD_DESC, PATCH_NOTES_ITEMS_DESC, PatchNotesItem, PatchOp
 
 # Tool annotation presets
@@ -162,28 +163,6 @@ def _top_level_dirs(v: Vault) -> list[str]:
 # Server
 ###############################################################################
 
-_MCP_INSTRUCTIONS = (
-    "Apo: vault-relative Markdown + YAML catalog notes; sqlite-vec hybrid search; "
-    "files are source of truth. "
-    "apo_admin(action=list|describe|invoke): engine ops (memory_status, reindex, "
-    "delete_note, reload_config, git_sync, list_refs). Destructive invoke requires "
-    "confirm=true (delete_note always; reindex force=true; git_sync run/pull/rebase). "
-    "vault(action=list|contracts|describe|merge|project|stats|lint): registry + contracts + "
-    "optional habit KPIs (stats) + archival lint (flaws[]). "
-    "Routing: write_note=create/overwrite (content=); "
-    "append_note=session log / post-search add (text=); "
-    "patch_note=frontmatter/section mutate or place op (move/copy); "
-    "search_notes(limit=, folder= or folders=[]); filter_notes(where=); "
-    "read_note(path= or chunk_hash= from search hits); "
-    "ref= on filter_notes/read_note/search_notes = read-only git tip (catalog / blob / FTS); "
-    "omit ref= only when intentionally querying the indexed working tree; "
-    "never pass ref= to writes. "
-    "Thread mtime → expected_mtime on follow-up writes. "
-    "Operator traces: otlp-mcp + Jaeger (not Apo MCP). "
-    "Multi-vault: vault= or search_notes(vaults=[]); "
-    "paths may be vault_id:rel (must be a vault configured on this MCP process; "
-    "writes limited to that registry; responses include qualified_path)."
-)
 mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
 
 # FastMCP wraps middleware with reversed(list): first added = outermost.

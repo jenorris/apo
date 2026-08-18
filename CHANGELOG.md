@@ -4,6 +4,12 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.14.2] — 2026-08-18
+
+### Fixed
+
+- **RPC clients had no way to receive Apo's toolset-routing instructions** — the stdio MCP server hands this text to clients automatically as part of its `FastMCP(..., instructions=...)` handshake, but any client talking to the local RPC server instead (no stdio transport — e.g. the Hermes/Lyra memory-provider plugin) never received it. Extracted the shared text to `apo_engine.mcp_instructions.MCP_INSTRUCTIONS` (single source for both transports) and added `GET /v1/instructions` to serve it over RPC.
+
 ## [0.14.1] — 2026-08-18
 
 ### Fixed
