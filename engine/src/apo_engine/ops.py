@@ -3984,11 +3984,10 @@ def vault_op(
         return _merge_payload(bodies=want_full)
 
     if act == "project":
-        # Summaries for inventory; attach usage-contract bodies for contribution.
-        merge = _merge_payload(bodies=False)
+        # Full parsed bodies for every contract — render_desk_body() decides what to surface.
+        merge = _merge_payload(bodies=True)
         if not merge.get("ok"):
             return merge
-        vault_project.attach_usage_contribution_bodies(merge)
         projected = vault_project.project(merge)
         if not projected.get("ok"):
             return projected

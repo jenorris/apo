@@ -4,6 +4,23 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-08-18
+
+### Fixed
+
+- **`vault(action=project)` discarded every contract except usage-contract before rendering** — `vault_op`'s `project` action merged with `bodies=False` (strips parsed YAML from all contracts) and then re-attached full data for `usage-contract` only, via a helper whose own docstring said "other contracts stay summary-only." okf-contract, git-contract, telemetry-contract, search-contract, and local-web-contract were parsed and then thrown away before `render_desk_body()` ever saw them — only a bare `` `id` ← `path` `` line survived in "Contract inventory." `project` now merges with `bodies=True` directly; the now-dead re-attach helper is removed.
+- **`write_habits` ids outside the built-in `okf_type` dialect rendered a dead-end stub** — any vault whose `write_habits` id wasn't in the hardcoded `_WRITE_HABIT_LINES` dict (e.g. a vault tagging notes by `memory_type` instead of `okf_type`) silently got `` - `{id}` — see usage-contract / apo-write-api. `` instead of real guidance. `write_habits` entries can now be `{id, text}` objects carrying vault-authored guidance directly, bypassing the dict; backfilled real entries for `task_router_threads` and `filter_memory_type`.
+
+### Added
+
+- **Projected desk body now surfaces usage-contract fields that were populated but never rendered**: `purpose`/`in_scope`/`out_scope` (§ Vault purpose & scope), `layout` (§ Folder layout), `frontmatter_floor` (§ Frontmatter floor), and `consult_vault_first`/`task_routing` (§ Vault directives) — the latter two promoted from an atlas-only convention into the canonical `docs/contracts/usage-contract.schema.yaml` template.
+- **§ Type routing (OKF)** — a folder → `okf_type` → required-fields table rendered from each vault's okf-contract `path_rules`, truncated to fit `usage-contract.token_budget` (first real consumer of that previously-unenforced field).
+- **§ Git safety** and **§ Telemetry privacy** — never-commit globs / sync block hook / restore drill from git-contract, and privacy allow/deny / retention from telemetry-contract, when present.
+- **`local-web-contract` formalized**: `docs/contracts/local-web-contract.schema.yaml` template + `apo_engine.local_web_contract` loader (mirrors `search_contract.py`), giving it template/loader parity with the other lightweight contracts instead of being legacy-filename-only. Projected as § Local web browser when present.
+- Projected body now names when `~/.apo/desk.yaml` is absent — `vault_roles`/`dual_write`/`workspace` were silently inert defaults with no signal in the rendered markdown (only in the JSON API's `desk_meta.source`).
+
+**Upgrade:** no schema or config changes required — all additions are read from fields vaults may already have populated. Re-run `vault(action=project)` / `just desk-project` to see the fuller output.
+
 ## [0.13.3] — 2026-08-17
 
 ### Fixed

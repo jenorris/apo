@@ -1,0 +1,51 @@
+# Apo local-web contract — template / example
+# Copy to <vault>/system/contracts/local-web-contract.schema.yaml and edit.
+# Legacy path system/config/local-web-contract.schema.yaml still loaded.
+# Runtime: `just serve --vault <name>` (or APO_LOCAL_WEB_CONTRACT override) —
+# a read-only local HTML browser over the vault (search/filter/backlinks),
+# rendered from the same markdown as Apo indexes. Desk projection emits a
+# one-line pointer (bind:port, mode) into apo-desk when this file is present;
+# the engine does not otherwise interpret it for search/write.
+
+local_web_version: "0.2"
+
+# Bind address / port for the local server.
+bind: "127.0.0.1"
+port: 7432
+
+# adaptive = pick a template per note (memo/wiki/etc.); fixed = always default_layout.
+mode: adaptive
+
+# Extra roots to browse beyond the vault root (rare — usually []).
+browse_roots: []
+
+# Path globs excluded from browse/search (secrets, working dirs, resolved audit).
+exclude_globs:
+  - "inbox/daily/**"
+  - "system/agent-client/**"
+  - "system/audit/**"
+  - "**/audit/resolved/**"
+  - "**/.git/**"
+  - "**/node_modules/**"
+  - "archives/**"
+
+audit:
+  enabled: true
+  default_root: "system/audit"
+  source_label: web-viewer
+
+features:
+  search: true
+  filter: true
+  backlinks: true
+  mermaid: true
+  math: true
+
+render:
+  engine: pandoc
+  default_layout: memo
+  stylesheet: system/assets/htmlize.css
+  template: system/assets/htmlize.template.html
+  header: system/assets/htmlize-header.html
+  strip_frontmatter: true
+  resolve_wikilinks: serve-routes

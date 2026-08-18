@@ -48,12 +48,55 @@ class IntegrationsFormatTest(unittest.TestCase):
 class WriteHabitsProjectTest(unittest.TestCase):
     def test_render_write_habit_lines_known_ids(self):
         lines = vault_project._render_write_habit_lines(
-            ["folder_on_search", "patch_note_wire", "vault_api_routing"]
+            [
+                ("folder_on_search", None),
+                ("patch_note_wire", None),
+                ("vault_api_routing", None),
+            ]
         )
         self.assertEqual(len(lines), 3)
         self.assertIn("folder=", lines[0])
         self.assertIn("patch_note", lines[1])
         self.assertIn("vault(action=", lines[2])
+
+    def test_render_write_habit_lines_dialect_specific_ids(self):
+        lines = vault_project._render_write_habit_lines(
+            [("task_router_threads", None), ("filter_memory_type", None)]
+        )
+        self.assertEqual(len(lines), 2)
+        self.assertIn("areas/threads/", lines[0])
+        self.assertIn("memory_type", lines[1])
+
+    def test_render_write_habit_lines_inline_text_overrides_dict(self):
+        lines = vault_project._render_write_habit_lines(
+            [("custom_habit", "Do the custom thing.")]
+        )
+        self.assertEqual(lines, ["- **`custom_habit`:** Do the custom thing."])
+
+    def test_render_write_habit_lines_unknown_id_falls_back(self):
+        lines = vault_project._render_write_habit_lines([("totally_unknown_id", None)])
+        self.assertEqual(
+            lines, ["- `totally_unknown_id` — see usage-contract / apo-write-api."]
+        )
+
+    def test_usage_write_habits_parses_str_and_inline_object(self):
+        row = {
+            "contracts": {
+                "usage-contract": {
+                    "ok": True,
+                    "data": {
+                        "write_habits": [
+                            "folder_on_search",
+                            {"id": "custom_habit", "text": "Do the custom thing."},
+                        ]
+                    },
+                }
+            }
+        }
+        habits = vault_project._usage_write_habits(row)
+        self.assertEqual(
+            habits, [("folder_on_search", None), ("custom_habit", "Do the custom thing.")]
+        )
 
     def test_render_desk_body_includes_apo_throughput(self):
         merge = {
@@ -81,6 +124,121 @@ class WriteHabitsProjectTest(unittest.TestCase):
         self.assertIn("## Apo throughput", body)
         self.assertIn("Hard gate", body)
         self.assertIn("**One** `search_notes`", body)
+
+    def test_render_desk_body_flags_missing_desk_yaml(self):
+        merge = {
+            "default_vault": "meta",
+            "vaults": {"meta": {"root": "/tmp/x", "default": True, "contracts": {}}},
+            "desk": {"habits": {}},
+            "desk_meta": {"source": "defaults", "path": None},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertIn("No `~/.apo/desk.yaml` found", body)
+
+    def test_render_desk_body_omits_missing_desk_yaml_note_when_configured(self):
+        merge = {
+            "default_vault": "meta",
+            "vaults": {"meta": {"root": "/tmp/x", "default": True, "contracts": {}}},
+            "desk": {"habits": {}},
+            "desk_meta": {"source": "file", "path": "/home/jeremy/.apo/desk.yaml"},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertNotIn("No `~/.apo/desk.yaml` found", body)
+
+    def test_render_desk_body_surfaces_previously_dropped_contract_fields(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {
+                "atlas": {
+                    "root": "/vault/atlas",
+                    "default": True,
+                    "contracts": {
+                        "usage-contract": {
+                            "ok": True,
+                            "data": {
+                                "purpose": "Personal PKB. Second sentence.",
+                                "in_scope": ["areas/", "projects/"],
+                                "out_scope": ["household content"],
+                                "layout": {"areas": "standing responsibilities"},
+                                "frontmatter_floor": ["title", "okf_type"],
+                                "consult_vault_first": "Search this vault before asking.",
+                                "task_routing": "Route tasks through areas/threads/.",
+                                "token_budget": 800,
+                            },
+                        },
+                        "okf-contract": {
+                            "ok": True,
+                            "data": {
+                                "path_rules": [
+                                    {
+                                        "match": "areas/threads/**",
+                                        "enforcement": "soft",
+                                        "okf_type": "Thread",
+                                        "required_fields": ["okf_type", "timestamp"],
+                                    }
+                                ]
+                            },
+                        },
+                        "git-contract": {
+                            "ok": True,
+                            "data": {
+                                "never_commit": [".env"],
+                                "sync": {"on_block_command": "notify-send blocked"},
+                                "restore": {"owner": "jeremy", "drill": "quarterly"},
+                            },
+                        },
+                        "telemetry-contract": {
+                            "ok": True,
+                            "data": {
+                                "privacy": {
+                                    "allow": {"dimensions": ["path"]},
+                                    "deny": ["body"],
+                                },
+                                "retention_days": 30,
+                                "agent_access": {"expose_paths": ["system/audit"]},
+                            },
+                        },
+                        "local-web-contract": {
+                            "ok": True,
+                            "data": {"bind": "127.0.0.1", "port": 7432, "mode": "adaptive"},
+                        },
+                    },
+                },
+            },
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertIn("## Vault purpose & scope", body)
+        self.assertIn("Personal PKB", body)
+        self.assertIn("in scope: areas/; projects/", body)
+        self.assertIn("## Folder layout", body)
+        self.assertIn("standing responsibilities", body)
+        self.assertIn("## Frontmatter floor", body)
+        self.assertIn("`title`, `okf_type`", body)
+        self.assertIn("## Vault directives", body)
+        self.assertIn("Search this vault before asking.", body)
+        self.assertIn("Route tasks through areas/threads/.", body)
+        self.assertIn("## Type routing (OKF)", body)
+        self.assertIn("`areas/threads/**`", body)
+        self.assertIn("Thread", body)
+        self.assertIn("## Git safety", body)
+        self.assertIn("`.env`", body)
+        self.assertIn("notify-send blocked", body)
+        self.assertIn("## Telemetry privacy", body)
+        self.assertIn("retention=30d", body)
+        self.assertIn("## Local web browser", body)
+        self.assertIn("127.0.0.1:7432", body)
+
+    def test_format_okf_path_rules_lines_truncates_to_token_budget(self):
+        okf = {
+            "path_rules": [
+                {"match": f"path{i}/**", "enforcement": "soft", "okf_type": "Note"}
+                for i in range(60)
+            ]
+        }
+        lines = vault_project.format_okf_path_rules_lines("atlas", okf, token_budget=20)
+        self.assertLess(len(lines), 60)
+        self.assertTrue(any("more — see okf-contract" in line for line in lines))
 
 
 class DiscoverContractsTest(unittest.TestCase):
@@ -181,7 +339,11 @@ class VaultOpTest(unittest.TestCase):
         cfg = self.b / "system" / "config"
         cfg.mkdir(parents=True)
         (cfg / "git-contract.schema.yaml").write_text(
-            "git_contract_version: '0.1'\nremote: 'https://b.git'\n",
+            "git_contract_version: '0.1'\n"
+            "remote: 'https://b.git'\n"
+            "never_commit: ['.env']\n"
+            "sync:\n"
+            "  on_block_command: notify-send blocked\n",
             encoding="utf-8",
         )
         b_contracts = self.b / "system" / "contracts"
@@ -285,6 +447,16 @@ class VaultOpTest(unittest.TestCase):
         self.assertTrue(projected["ok"])
         self.assertIn("`alpha`", projected["body"])
         self.assertNotIn("`beta`", projected["body"])
+
+    def test_project_surfaces_non_usage_contract_data(self):
+        # Regression: vault_op("project") used to merge with bodies=False and only
+        # re-attach usage-contract data, silently dropping every other contract's
+        # parsed body (git/okf/telemetry/search/local-web) before rendering.
+        out = ops.vault_op("project")
+        self.assertTrue(out["ok"])
+        self.assertIn("## Git safety", out["body"])
+        self.assertIn("`.env`", out["body"])
+        self.assertIn("notify-send blocked", out["body"])
 
     def test_project_scopes_role_notes_and_pointers_to_active_vaults(self):
         desk = self.tmp / "desk-scope.yaml"

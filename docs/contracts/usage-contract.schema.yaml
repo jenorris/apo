@@ -40,6 +40,12 @@ frontmatter_floor:
 
 # Enum-ish habit ids (documented in docs/agent-throughput.md; projected into apo-desk § Apo throughput).
 # Channel split: tip=habits · warning=ops · flaws=corpus. Prefer address_flaws_on_write.
+# Each entry is normally a bare string id, resolved against the engine's built-in
+# id → prose dict. A vault whose dialect diverges from that dict (e.g. tags notes
+# by memory_type instead of okf_type) can supply its own text inline instead of
+# hitting the generic "see usage-contract / apo-write-api" fallback:
+#   - id: my_custom_habit
+#     text: "One-line imperative guidance, same voice as the built-in lines."
 write_habits:
   - prefer_append_patch
   - folder_on_search
@@ -115,5 +121,17 @@ machine_contracts:
 # Use vault_id:relative/path or absolute paths.
 pointers: []
 
-# Soft cap for harness-compiled skill snippets drawn from this file.
+# Soft cap for harness-compiled skill snippets drawn from this file. Applied
+# today to the okf-contract path_rules table in the projected "Type routing"
+# section (approx chars/4 estimate) — the largest single addition a vault can
+# make to the compiled skill.
 token_budget: 800
+
+# Agent-behavior directives, projected verbatim into apo-desk § Vault directives
+# when set. Optional — most vaults don't need either.
+# consult_vault_first: >
+#   When agents must search/read this vault BEFORE asking the operator for a
+#   fact this vault is the source of truth for (e.g. personal/device facts).
+# task_routing: >
+#   How to file a task/todo for this vault's domain (e.g. "create or update
+#   areas/threads/<slug>.md; do not create flat tasks.md entries").

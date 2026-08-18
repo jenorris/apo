@@ -25,6 +25,7 @@ Do **not** confuse templates here with a setting in MCP config. Opt-in means: pu
 | [usage-contract.schema.yaml](./usage-contract.schema.yaml) | **Ship** | Host-neutral vault usage IR for harness / `vault(project)` — **not** interpreted by the engine for search/write |
 | [telemetry-contract.schema.yaml](./telemetry-contract.schema.yaml) | **Ship** | Vault-defined tool-use telemetry privacy + agent `session_stats` access — [telemetry.md](./telemetry.md) |
 | [archival-contract.schema.yaml](./archival-contract.schema.yaml) | **Ship (suggest)** | Cold-note eligibility → `flaws[]` + `vault(action=lint)`; agent `place` — [archival.md](./archival.md) |
+| [local-web-contract.schema.yaml](./local-web-contract.schema.yaml) | **Ship** | `just serve` read-only local HTML browser (bind/port/mode/exclude); desk projection emits a one-line pointer |
 
 **Existing vault:** [../onboard-prompt.md](../onboard-prompt.md) — infer first; do not force a contract.
 

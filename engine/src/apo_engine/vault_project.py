@@ -11,8 +11,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import vault_contracts
-
 # Deterministic lines for usage-contract ``write_habits`` ids (projected into apo-desk).
 _WRITE_HABIT_LINES: dict[str, str] = {
     "prefer_append_patch": (
@@ -67,6 +65,16 @@ _WRITE_HABIT_LINES: dict[str, str] = {
     "lint_before_conclude": (
         "- Before concluding a large vault hygiene pass, run `vault(action=lint, folder=…)` "
         "and drain `remediation: llm` findings within budget — do not unbounded lint→fix loops."
+    ),
+    "task_router_threads": (
+        "- **Task routing:** tasks are threads with status action-needed. Create or update "
+        "`areas/threads/<slug>.md` (`okf_type: Thread`, `status: active`, priority, "
+        "`## Next action`) — do **not** create flat `tasks.md` entries."
+    ),
+    "filter_memory_type": (
+        "- When a vault tags notes by `memory_type` instead of `okf_type`: stamp "
+        "`memory_type` / `description` / `timestamp` on concept writes; prefer "
+        "`filter_notes({\"memory_type\": \"…\"}, folder=…)`."
     ),
 }
 
@@ -166,14 +174,24 @@ def _md_link(label: str, path: str) -> str:
     return f"{label}: `{path}`"
 
 
-def _usage_data(row: dict[str, Any]) -> dict[str, Any] | None:
-    """Return parsed usage-contract ``data`` when present and ok."""
+def _contract_data(row: dict[str, Any], contract_id: str) -> dict[str, Any] | None:
+    """Return a vault row's parsed ``<contract_id>`` body when present and ok.
+
+    Requires ``vault_op("project", ...)`` to have merged with ``bodies=True`` —
+    with ``bodies=False`` every contract entry is summary-only (``id``/``path``/
+    ``source``/``ok``, no ``data``) and this always returns ``None``.
+    """
     contracts = row.get("contracts") if isinstance(row.get("contracts"), dict) else {}
-    entry = contracts.get("usage-contract")
+    entry = contracts.get(contract_id)
     if not isinstance(entry, dict) or not entry.get("ok", True):
         return None
     data = entry.get("data")
     return data if isinstance(data, dict) else None
+
+
+def _usage_data(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Return parsed usage-contract ``data`` when present and ok."""
+    return _contract_data(row, "usage-contract")
 
 
 def _usage_contribution(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -209,6 +227,158 @@ def _usage_pointers(row: dict[str, Any]) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [p.strip() for p in raw if isinstance(p, str) and p.strip()]
+
+
+def format_purpose_scope_lines(name: str, data: dict[str, Any]) -> list[str]:
+    """Lines for apo-desk Vault purpose & scope section (deterministic)."""
+    purpose = str(data.get("purpose") or "").strip()
+    # First sentence only — full purpose can run to a paragraph; deep prose
+    # belongs in a pointer, not the compiled skill.
+    first_sentence = purpose.split(". ")[0].split("\n")[0].strip().rstrip(".")
+    in_scope = _str_list(data.get("in_scope"))
+    out_scope = _str_list(data.get("out_scope"))
+    if not first_sentence and not in_scope and not out_scope:
+        return []
+    bits = [f"- `{name}`: " + (first_sentence + "." if first_sentence else "")]
+    if in_scope:
+        bits.append(f"  - in scope: {'; '.join(in_scope)}")
+    if out_scope:
+        bits.append(f"  - out of scope: {'; '.join(out_scope)}")
+    return bits
+
+
+def format_layout_line(name: str, layout: dict[str, Any]) -> str | None:
+    """One-liner for apo-desk Folder layout section (deterministic)."""
+    if not isinstance(layout, dict) or not layout:
+        return None
+    bits = [
+        f"`{folder}`={str(rule).strip()}"
+        for folder, rule in sorted(layout.items())
+        if str(rule or "").strip()
+    ]
+    if not bits:
+        return None
+    return f"- `{name}`: " + "; ".join(bits)
+
+
+def format_frontmatter_floor_line(name: str, keys: list[str]) -> str | None:
+    """One-liner for apo-desk Frontmatter floor section (deterministic)."""
+    if not keys:
+        return None
+    return f"- `{name}`: " + ", ".join(f"`{k}`" for k in keys)
+
+
+def format_directive_lines(name: str, data: dict[str, Any]) -> list[str]:
+    """Lines for apo-desk Vault directives section — usage-contract prose fields
+    ``consult_vault_first`` / ``task_routing`` (deterministic, verbatim)."""
+    lines: list[str] = []
+    consult = str(data.get("consult_vault_first") or "").strip()
+    if consult:
+        lines.append(f"- `{name}` — consult first: {' '.join(consult.split())}")
+    routing = str(data.get("task_routing") or "").strip()
+    if routing:
+        lines.append(f"- `{name}` — task routing: {' '.join(routing.split())}")
+    return lines
+
+
+def format_okf_path_rules_lines(
+    name: str, okf: dict[str, Any], *, token_budget: int | None
+) -> list[str]:
+    """Table rows for apo-desk Type routing section from okf-contract ``path_rules``.
+
+    Truncated to fit ``token_budget`` (rough chars/4 estimate) when set — the
+    fullest contract in practice (atlas: ~30 rules) can otherwise dominate the
+    compiled skill on its own.
+    """
+    rules = okf.get("path_rules")
+    if not isinstance(rules, list) or not rules:
+        return []
+    rows: list[str] = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        match = str(rule.get("match") or "").strip()
+        if not match:
+            continue
+        enforcement = str(rule.get("enforcement") or "").strip()
+        okf_type = str(rule.get("okf_type") or "").strip() or "—"
+        required = _str_list(rule.get("required_fields"))
+        req_s = ", ".join(f"`{f}`" for f in required) if required else "—"
+        rows.append(f"| `{match}` | {enforcement or '—'} | {okf_type} | {req_s} |")
+    if not rows:
+        return []
+    header = [f"### `{name}`", "", "| Match | Enforcement | Type | Required fields |", "|---|---|---|---|"]
+    if token_budget:
+        budget_chars = token_budget * 4
+        kept: list[str] = []
+        used = sum(len(line) for line in header)
+        for row in rows:
+            used += len(row) + 1
+            if used > budget_chars and kept:
+                remaining = len(rows) - len(kept)
+                kept.append(f"| … | | | +{remaining} more — see okf-contract |")
+                break
+            kept.append(row)
+        rows = kept
+    return header + rows + [""]
+
+
+def format_git_safety_lines(name: str, git: dict[str, Any]) -> list[str]:
+    """Lines for apo-desk Git safety section from git-contract (deterministic)."""
+    lines: list[str] = []
+    never_commit = _str_list(git.get("never_commit"))
+    sync = git.get("sync") if isinstance(git.get("sync"), dict) else {}
+    on_block = str(sync.get("on_block_command") or "").strip()
+    restore = git.get("restore") if isinstance(git.get("restore"), dict) else {}
+    owner = str(restore.get("owner") or "").strip()
+    drill = str(restore.get("drill") or "").strip()
+    bits: list[str] = []
+    if never_commit:
+        bits.append("never_commit=" + ", ".join(f"`{g}`" for g in never_commit))
+    if on_block:
+        bits.append(f"on_block=`{on_block}`")
+    if owner or drill:
+        bits.append(f"restore={owner or '—'}" + (f" ({drill})" if drill else ""))
+    if bits:
+        lines.append(f"- `{name}`: " + "; ".join(bits))
+    return lines
+
+
+def format_telemetry_privacy_lines(name: str, tel: dict[str, Any]) -> list[str]:
+    """Lines for apo-desk Telemetry privacy section from telemetry-contract."""
+    privacy = tel.get("privacy") if isinstance(tel.get("privacy"), dict) else {}
+    allow = privacy.get("allow") if isinstance(privacy.get("allow"), dict) else {}
+    deny = _str_list(privacy.get("deny"))
+    retention = tel.get("retention_days")
+    access = tel.get("agent_access") if isinstance(tel.get("agent_access"), dict) else {}
+    expose = _str_list(access.get("expose_paths"))
+    bits: list[str] = []
+    allow_dims = _str_list(allow.get("dimensions"))
+    if allow_dims:
+        bits.append("allow=" + ", ".join(f"`{d}`" for d in allow_dims))
+    if deny:
+        bits.append("deny=" + ", ".join(f"`{d}`" for d in deny))
+    if retention:
+        bits.append(f"retention={retention}d")
+    if expose:
+        bits.append("expose_paths=" + ", ".join(f"`{p}`" for p in expose))
+    if not bits:
+        return []
+    return [f"- `{name}`: " + "; ".join(bits)]
+
+
+def format_local_web_line(name: str, web: dict[str, Any]) -> str | None:
+    """One-liner for apo-desk Local web browser section from local-web-contract."""
+    bind = str(web.get("bind") or "").strip()
+    port = web.get("port")
+    mode = str(web.get("mode") or "").strip()
+    if not bind and not port:
+        return None
+    addr = f"{bind or '—'}:{port}" if port else (bind or "—")
+    bits = [f"`{addr}`"]
+    if mode:
+        bits.append(f"mode=`{mode}`")
+    return f"- `{name}`: " + " ".join(bits)
 
 
 def _str_list(raw: Any) -> list[str]:
@@ -323,62 +493,54 @@ def format_contribution_line(name: str, contrib: dict[str, Any]) -> str:
         return f"- `{name}`: `{dialect}` ({'; '.join(extras)})"
     return f"- `{name}`: `{dialect}`"
 
-def _usage_write_habits(row: dict[str, Any]) -> list[str]:
-    """Return ``write_habits`` id list from usage-contract ``data``."""
+def _usage_write_habits(row: dict[str, Any]) -> list[tuple[str, str | None]]:
+    """Return ``write_habits`` (id, inline_text) pairs from usage-contract ``data``.
+
+    Each entry may be a bare string id (resolved against ``_WRITE_HABIT_LINES``)
+    or an inline object ``{id: ..., text: ...}`` carrying vault-authored guidance
+    directly — for a vault dialect that has no matching dict entry, this is how
+    it gets real projected text instead of the generic fallback line.
+    """
     data = _usage_data(row)
     if not data:
         return []
     raw = data.get("write_habits")
     if not isinstance(raw, list):
         return []
-    out: list[str] = []
+    out: list[tuple[str, str | None]] = []
     for item in raw:
         if isinstance(item, str) and item.strip():
-            out.append(item.strip())
+            out.append((item.strip(), None))
+        elif isinstance(item, dict):
+            hid = str(item.get("id") or "").strip()
+            if not hid:
+                continue
+            text = str(item.get("text") or "").strip() or None
+            out.append((hid, text))
     return out
 
 
-def _render_write_habit_lines(habit_ids: list[str]) -> list[str]:
-    """Map usage-contract write_habit ids to projected markdown bullets."""
+def _render_write_habit_lines(habits: list[tuple[str, str | None]]) -> list[str]:
+    """Map usage-contract write_habit (id, inline_text) pairs to markdown bullets.
+
+    Precedence: inline ``text`` from the contract, then a ``_WRITE_HABIT_LINES``
+    dict entry, then a generic pointer-only fallback.
+    """
     lines: list[str] = []
     seen: set[str] = set()
-    for hid in habit_ids:
+    for hid, inline_text in habits:
         if hid in seen:
             continue
         seen.add(hid)
+        if inline_text:
+            lines.append(f"- **`{hid}`:** {inline_text}")
+            continue
         line = _WRITE_HABIT_LINES.get(hid)
         if line:
             lines.append(line)
         else:
             lines.append(f"- `{hid}` — see usage-contract / apo-write-api.")
     return lines
-
-
-def attach_usage_contribution_bodies(merge: dict[str, Any]) -> dict[str, Any]:
-    """Ensure each vault's usage-contract entry includes parsed ``data`` for project.
-
-    Other contracts stay summary-only. Mutates and returns ``merge``.
-    """
-    vaults = merge.get("vaults")
-    if not isinstance(vaults, dict):
-        return merge
-    for _name, row in vaults.items():
-        if not isinstance(row, dict):
-            continue
-        root_s = str(row.get("root") or "").strip()
-        if not root_s:
-            continue
-        found = vault_contracts.discover_contracts(Path(root_s))
-        usage = found.get("usage-contract")
-        if not usage:
-            continue
-        contracts = row.get("contracts")
-        if not isinstance(contracts, dict):
-            contracts = {}
-            row["contracts"] = contracts
-        # Keep summary fields; attach full entry (with data) for usage only.
-        contracts["usage-contract"] = usage
-    return merge
 
 
 def render_desk_body(merge: dict[str, Any]) -> str:
@@ -403,6 +565,14 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     lines.append("")
     lines.append("Engine API / throughput / diagnose: skill **`mcp-apo`** (stable product skill).")
     lines.append("")
+    desk_meta = merge.get("desk_meta") if isinstance(merge.get("desk_meta"), dict) else {}
+    if desk_meta.get("source") == "defaults":
+        lines.append(
+            "**No `~/.apo/desk.yaml` found** — the Role column below, dual-write, and "
+            "workspace label are all inert built-in defaults, not real desk policy. "
+            "Create `~/.apo/desk.yaml` to populate them."
+        )
+        lines.append("")
     if workspace:
         lines.append(f"Desk workspace: `{workspace}`.")
         lines.append("")
@@ -428,6 +598,14 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     integ_lines: list[str] = []
     proxy_lines: list[str] = []
     contrib_pointer_raws: list[str] = []
+    scope_lines: list[str] = []
+    layout_lines: list[str] = []
+    frontmatter_lines: list[str] = []
+    directive_lines: list[str] = []
+    okf_lines: list[str] = []
+    git_safety_lines: list[str] = []
+    telemetry_lines: list[str] = []
+    local_web_lines: list[str] = []
     for name, row in sorted(vaults.items()):
         if not isinstance(row, dict):
             continue
@@ -454,6 +632,37 @@ def render_desk_body(merge: dict[str, Any]) -> str:
                     if isinstance(p, str) and p.strip():
                         contrib_pointer_raws.append(p.strip())
         contrib_pointer_raws.extend(_usage_pointers(row))
+
+        usage = _usage_data(row)
+        if usage:
+            scope_lines.extend(format_purpose_scope_lines(name, usage))
+            layout_line = format_layout_line(name, usage.get("layout") or {})
+            if layout_line:
+                layout_lines.append(layout_line)
+            fm_line = format_frontmatter_floor_line(name, _str_list(usage.get("frontmatter_floor")))
+            if fm_line:
+                frontmatter_lines.append(fm_line)
+            directive_lines.extend(format_directive_lines(name, usage))
+
+        okf = _contract_data(row, "okf-contract")
+        if okf:
+            token_budget = usage.get("token_budget") if usage else None
+            token_budget = token_budget if isinstance(token_budget, int) else None
+            okf_lines.extend(format_okf_path_rules_lines(name, okf, token_budget=token_budget))
+
+        git = _contract_data(row, "git-contract")
+        if git:
+            git_safety_lines.extend(format_git_safety_lines(name, git))
+
+        telemetry = _contract_data(row, "telemetry-contract")
+        if telemetry:
+            telemetry_lines.extend(format_telemetry_privacy_lines(name, telemetry))
+
+        local_web = _contract_data(row, "local-web-contract")
+        if local_web:
+            lw_line = format_local_web_line(name, local_web)
+            if lw_line:
+                local_web_lines.append(lw_line)
     if contrib_lines:
         lines.append("## Contribution")
         lines.append("")
@@ -488,6 +697,65 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         )
         lines.append("")
         lines.extend(proxy_lines)
+        lines.append("")
+
+    if scope_lines:
+        lines.append("## Vault purpose & scope")
+        lines.append("")
+        lines.extend(scope_lines)
+        lines.append("")
+
+    if layout_lines:
+        lines.append("## Folder layout")
+        lines.append("")
+        lines.extend(layout_lines)
+        lines.append("")
+
+    if frontmatter_lines:
+        lines.append("## Frontmatter floor")
+        lines.append("")
+        lines.append("Minimum frontmatter keys agents should stamp on concept notes, per vault.")
+        lines.append("")
+        lines.extend(frontmatter_lines)
+        lines.append("")
+
+    if directive_lines:
+        lines.append("## Vault directives")
+        lines.append("")
+        lines.extend(directive_lines)
+        lines.append("")
+
+    if okf_lines:
+        lines.append("## Type routing (OKF)")
+        lines.append("")
+        lines.append(
+            "Folder → `okf_type` → required fields, from each vault's okf-contract "
+            "`path_rules` (first match wins). Use this to pick `okf_type` and required "
+            "fields when creating a concept note — do not guess."
+        )
+        lines.append("")
+        lines.extend(okf_lines)
+
+    if git_safety_lines:
+        lines.append("## Git safety")
+        lines.append("")
+        lines.append("From each vault's git-contract — never-commit globs, sync block hook, restore drill.")
+        lines.append("")
+        lines.extend(git_safety_lines)
+        lines.append("")
+
+    if telemetry_lines:
+        lines.append("## Telemetry privacy")
+        lines.append("")
+        lines.append("From each vault's telemetry-contract — what agent-facing telemetry captures and retains.")
+        lines.append("")
+        lines.extend(telemetry_lines)
+        lines.append("")
+
+    if local_web_lines:
+        lines.append("## Local web browser")
+        lines.append("")
+        lines.extend(local_web_lines)
         lines.append("")
 
     sv = dual.get("session_vault") or "sessions"
@@ -567,9 +835,9 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     throughput_ids = _usage_write_habits(default_row if isinstance(default_row, dict) else {})
     # Skip ids already rendered by desk.yaml boolean habits (avoid duplicate bullets).
     if habits.get("prefer_append_patch", True):
-        throughput_ids = [h for h in throughput_ids if h != "prefer_append_patch"]
+        throughput_ids = [h for h in throughput_ids if h[0] != "prefer_append_patch"]
     if habits.get("filter_okf_type", True):
-        throughput_ids = [h for h in throughput_ids if h != "filter_okf_type"]
+        throughput_ids = [h for h in throughput_ids if h[0] != "filter_okf_type"]
     throughput_lines = _render_write_habit_lines(throughput_ids)
     if throughput_lines:
         lines.append("## Apo throughput")
