@@ -18,6 +18,7 @@ from apo_engine import (
     config,
     core,
     deferred as index_deferred,
+    git_catalog,
     git_contract,
     git_sync,
     note_lint,
@@ -235,6 +236,43 @@ _recent_writes = _recent_touches
 
 def _write_key(vault: str, path: str) -> str:
     return f"{(vault or '').strip()}:{path.replace(chr(92), '/')}"
+
+
+def _reject_if_ref(ref: str, *, tool: str = "write") -> dict[str, Any] | None:
+    """Hard-reject ``ref=`` on mutators (git catalog is read-only)."""
+    r = (ref or "").strip()
+    if not r:
+        return None
+    return _err(
+        error="bad_request",
+        message=(
+            f"{tool} does not support ref= — git catalog views are read-only; "
+            "mutate the working tree (or a jj workspace) then filter/read with ref= after export"
+        ),
+    )
+
+
+def _build_toc_from_blob(text: str, file_bytes: int) -> dict[str, Any]:
+    """Lean outline from blob ATX headings — no index / no chunk_hash."""
+    from apo_engine.markdown_sections import find_headings, hierarchical_end
+
+    lines = text.split("\n")
+    headings = find_headings(lines)
+    toc: list[dict[str, Any]] = []
+    n = len(lines)
+    for i, h in enumerate(headings):
+        end = hierarchical_end(headings, i, n)
+        section_text = "\n".join(lines[h.line : end])
+        toc.append(
+            {
+                "level": h.level,
+                "title": h.title,
+                "chunk_hash": None,
+                "chunk_kind": "section",
+                "section_bytes": len(section_text.encode("utf-8")),
+            }
+        )
+    return {"toc": toc, "file_bytes": file_bytes}
 
 
 def _prune_recent_touches(now: float | None = None) -> None:
@@ -777,6 +815,101 @@ def _search_folder_pairs(
     return pairs
 
 
+def _search_at_ref(
+    query: str,
+    b: vaults.VaultBinding,
+    *,
+    ref: str,
+    folder: str,
+    folders: list[str] | None,
+    snippet_chars: int,
+    exclude: list[str] | None,
+    top_k: int | None,
+    limit: int | None,
+    offset: int,
+) -> dict[str, Any]:
+    """FTS-only search over a git tip (no embeddings / chunk_hash)."""
+    k, err = resolve_top_k(top_k, limit)
+    if err:
+        return _err(error="bad_request", message=err)
+    if offset < 0:
+        return _err(error="bad_request", message="offset must be >= 0")
+    if folder.strip() and folders:
+        return _err(error="bad_request", message="pass folder= or folders=[], not both")
+    folder_clean = ""
+    if folders:
+        cleaned = [f for f in folders if isinstance(f, str) and f.strip()]
+        if len(cleaned) > 1:
+            return _err(
+                error="bad_request",
+                message="search_notes ref= accepts a single folder= (not folders=[] fan-out)",
+            )
+        folder_clean = cleaned[0].strip() if cleaned else ""
+    elif folder.strip():
+        folder_clean = folder.strip()
+    root = b.resolved().root
+    if folder_clean:
+        try:
+            _safe_resolve(root, folder_clean)
+        except ValueError as e:
+            return _err(error="bad_path", message=str(e))
+    effective_exclude, applied_default, _source = search_contract.resolve_search_exclude(
+        root,
+        caller_exclude=exclude,
+        folder_clean=folder_clean,
+    )
+    try:
+        with vaults.bind(b):
+            resolved = git_catalog.ensure_catalog(root, ref)
+            page, total = core.search_at_ref(
+                query,
+                resolved.tree_oid,
+                folder=folder_clean,
+                exclude=effective_exclude,
+                k=k,
+                offset=offset,
+                snippet_chars=snippet_chars,
+            )
+    except git_catalog.GitCatalogError as e:
+        return _err(error=e.code, message=e.message)
+    except Exception as e:
+        return _err(error="git_error", message=str(e)[:400])
+    results: list[dict[str, Any]] = []
+    for hit in page:
+        path = str(hit.get("path") or "")
+        mtime = float(hit.get("mtime") or 0.0)
+        row = {
+            "source": path,
+            "content": hit.get("content") or "",
+            "score": round(float(hit.get("score") or 0.0), 4),
+            "mtime": mtime,
+            "modified": datetime.fromtimestamp(mtime).isoformat(timespec="seconds")
+            if mtime
+            else None,
+            "qualified_path": _qualified_path(b.name, path),
+        }
+        results.append(row)
+    out: dict[str, Any] = {
+        "ok": True,
+        "results": results,
+        "vault": b.name,
+        "source": "git_ref",
+        "ref": resolved.ref,
+        "tree_oid": resolved.tree_oid,
+        "has_more": offset + len(results) < total,
+    }
+    if offset:
+        out["offset"] = offset
+    if applied_default:
+        out["default_exclude"] = applied_default
+    if results:
+        out = _attach_tip(
+            out,
+            "ref= FTS is note-level — follow up with read_note(path=…, ref=…); no chunk_hash",
+        )
+    return _attach_folder_tip(out, folder_clean, root=root)
+
+
 def search(
     query: str,
     *,
@@ -790,11 +923,31 @@ def search(
     hybrid: bool = True,
     limit: int | None = None,
     offset: int = 0,
+    ref: str = "",
 ) -> dict[str, Any]:
+    ref_s = (ref or "").strip()
+    if ref_s and vaults:
+        return _err(
+            error="bad_request",
+            message="search_notes ref= is single-vault — do not combine with vaults=[]",
+        )
     try:
         targets = _resolve_search_bindings(vault, vaults)
     except OpsError as e:
         return _err(error=e.code, message=e.message)
+    if ref_s:
+        return _search_at_ref(
+            query,
+            targets[0],
+            ref=ref_s,
+            folder=folder,
+            folders=folders,
+            snippet_chars=snippet_chars,
+            exclude=exclude,
+            top_k=top_k,
+            limit=limit,
+            offset=offset,
+        )
     k, err = resolve_top_k(top_k, limit)
     if err:
         return _err(error="bad_request", message=err)
@@ -1221,9 +1374,16 @@ def read_note(
     sibling: str | None = None,
     siblings: bool = False,
     lint: bool = False,
+    ref: str = "",
 ) -> dict[str, Any]:
     path_s = (path or "").strip()
     ch = (chunk_hash or "").strip()
+    ref_s = (ref or "").strip()
+    if ref_s and ch:
+        return _err(
+            error="bad_request",
+            message="ref= is path-mode only — chunk_hash= uses the working-tree index",
+        )
     if path_s and ch:
         return _err(
             error="bad_request",
@@ -1262,6 +1422,22 @@ def read_note(
     mode = (mode or "auto").strip().lower()
     if mode not in ("auto", "toc", "section"):
         return _err(path=path_s, error="bad_request", message="mode must be auto|toc|section")
+
+    if ref_s:
+        return _read_note_at_ref(
+            path_s,
+            ref=ref_s,
+            heading=heading,
+            vault=vault,
+            start_line=start_line,
+            end_line=end_line,
+            max_chars=max_chars,
+            raw=raw,
+            force=force,
+            fields=fields,
+            mode=mode,
+            lint=lint,
+        )
 
     try:
         b, path_s = _resolve_binding_and_rel(path_s, vault)
@@ -1374,6 +1550,144 @@ def read_note(
     return _stamp_qualified(out, vault=b.name, path=path_s)
 
 
+def _read_note_at_ref(
+    path_s: str,
+    *,
+    ref: str,
+    heading: str | None,
+    vault: str,
+    start_line: int | None,
+    end_line: int | None,
+    max_chars: int | None,
+    raw: bool,
+    force: bool,
+    fields: list[str] | None,
+    mode: str,
+    lint: bool,
+) -> dict[str, Any]:
+    """Path-mode read from a git blob — never touches FS / ``_recent_touches``."""
+    try:
+        b, path_s = _resolve_binding_and_rel(path_s, vault)
+        root = b.resolved().root
+        # Path traversal guard without requiring the file on the working tree.
+        _safe_resolve(root, path_s)
+    except OpsError as e:
+        return _err(path=path_s, error=e.code, message=e.message)
+    except ValueError as e:
+        return _err(path=path_s, error="bad_path", message=str(e))
+
+    try:
+        resolved = git_catalog.resolve_tree(root, ref)
+        text = git_catalog.read_blob(root, resolved.commit_oid, path_s)
+    except git_catalog.GitCatalogError as e:
+        return _err(path=path_s, error=e.code, message=e.message)
+
+    file_bytes = len(text.encode("utf-8"))
+    if mode == "toc" and heading is None:
+        toc_out = _build_toc_from_blob(text, file_bytes)
+        toc_out.update(
+            {
+                "ok": True,
+                "path": path_s,
+                "vault": b.name,
+                "scope": "toc",
+                "source": "git_ref",
+                "ref": resolved.ref,
+                "tree_oid": resolved.tree_oid,
+            }
+        )
+        return _stamp_qualified(toc_out, vault=b.name, path=path_s)
+
+    out: dict[str, Any] = {
+        "ok": True,
+        "path": path_s,
+        "size": file_bytes,
+        "vault": b.name,
+        "source": "git_ref",
+        "ref": resolved.ref,
+        "tree_oid": resolved.tree_oid,
+        # Tip commit unix time for display only — not a worktree FS mtime / CAS token.
+        "git_tip_mtime": resolved.tip_mtime,
+    }
+    try:
+        shaped = shape_note_read(
+            text,
+            path=path_s,
+            heading=heading,
+            start_line=start_line,
+            end_line=end_line,
+            max_chars=max_chars,
+            raw_content=raw,
+        )
+    except PatchError as e:
+        return _err(
+            path=path_s,
+            error=e.code,
+            message=e.message,
+            suggestions=e.suggestions,
+        )
+    except ValueError as e:
+        return _err(path=path_s, error="bad_request", message=str(e))
+    _apply_read_frontmatter(
+        out,
+        raw_fm=shaped["frontmatter"],
+        fields=fields,
+        path_mode=True,
+    )
+    if shaped["heading"]:
+        out["heading"] = shaped["heading"]
+    out["content"] = shaped["content"]
+    out["start_line"] = shaped["start_line"]
+    out["end_line"] = shaped["end_line"]
+    out["truncated"] = shaped["truncated"]
+
+    if (
+        heading is not None
+        and not raw
+        and max_chars is None
+        and start_line is None
+        and end_line is None
+        and not force
+    ):
+        sec_bytes = len(out["content"].encode("utf-8"))
+        if sec_bytes > config.SECTION_PREVIEW_BYTES:
+            out["content"] = out["content"][: config.SECTION_PREVIEW_CHARS]
+            out["section_bytes"] = sec_bytes
+            out["preview_truncated"] = True
+            out["tip"] = (
+                f"section is {sec_bytes} bytes — pass force=true for the full body, "
+                "or max_chars= / start_line=/end_line= for a sub-range"
+            )
+    elif (
+        mode == "auto"
+        and heading is None
+        and not raw
+        and start_line is None
+        and end_line is None
+        and file_bytes > config.FILE_TIP_BYTES
+    ):
+        out.setdefault(
+            "tip",
+            f"note is {file_bytes} bytes — read_note(path, mode=toc, ref=…) for a lean outline",
+        )
+
+    # No attach_region_hashes / mtime — blob hashes and tip time are not WT CAS tokens.
+    # Deliberately do NOT call _record_path_touch.
+    if lint:
+        _, lint_flaws = note_lint.lint_note(
+            text,
+            path=path_s,
+            vault_root=root,
+            vault=b.name,
+            include_links=True,
+            include_usage=True,
+            include_format=True,
+            auto_fix=False,
+        )
+        out = _attach_flaws(out, lint_flaws)
+    return _stamp_qualified(out, vault=b.name, path=path_s)
+
+
 def expand_section(
     chunk_hash: str,
     *,
@@ -1395,6 +1709,7 @@ def filter_notes(
     fields: list[str] | None = None,
     sort: str = "mtime",
     order: str = "desc",
+    ref: str = "",
 ) -> dict[str, Any]:
     where_obj, where_err = resolve_where(where, filters)
     if where_err:
@@ -1407,6 +1722,7 @@ def filter_notes(
     if fields is not None:
         if not isinstance(fields, list) or any(not isinstance(x, str) for x in fields):
             return _err(error="bad_request", message="fields must be a list of strings")
+    ref_s = (ref or "").strip()
     try:
         if (folder or "").strip():
             b, folder_clean = _resolve_binding_and_rel(folder.strip(), vault)
@@ -1418,11 +1734,58 @@ def filter_notes(
     except OpsError as e:
         return _err(error=e.code, message=e.message)
 
-    if folder_clean:
+    if folder_clean and not ref_s:
         try:
             _safe_resolve(root, folder_clean)
         except ValueError as e:
             return _err(error="bad_path", message=str(e))
+    elif folder_clean and ref_s:
+        try:
+            _safe_resolve(root, folder_clean)
+        except ValueError as e:
+            return _err(error="bad_path", message=str(e))
+
+    if ref_s:
+        try:
+            with vaults.bind(b):
+                resolved = git_catalog.ensure_catalog(root, ref_s)
+                total, matches = core.filter_notes_at_ref(
+                    where_obj,
+                    resolved.tree_oid,
+                    folder_clean,
+                    limit,
+                    offset,
+                    sort=sort,
+                    order=order,
+                )
+        except git_catalog.GitCatalogError as e:
+            return _err(error=e.code, message=e.message)
+        except ValueError as e:
+            return _err(error="bad_request", message=str(e))
+        except Exception as e:
+            # TimeoutExpired and unexpected git failures are mapped above; keep a soft net.
+            return _err(error="git_error", message=str(e)[:400])
+        notes = [
+            {
+                "path": path,
+                "qualified_path": _qualified_path(b.name, path),
+                "modified": datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
+                "frontmatter": project_frontmatter(fm, fields),
+            }
+            for mt, path, fm in matches
+        ]
+        return {
+            "ok": True,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset + len(notes) < total,
+            "notes": notes,
+            "vault": b.name,
+            "source": "git_ref",
+            "ref": resolved.ref,
+            "tree_oid": resolved.tree_oid,
+        }
 
     try:
         with vaults.bind(b):
@@ -1810,7 +2173,11 @@ def write_note(
     expected_body_hash: str | None = None,
     expected_content_hash: str | None = None,
     vault: str = "",
+    ref: str = "",
 ) -> dict[str, Any]:
+    bad = _reject_if_ref(ref, tool="write_note")
+    if bad:
+        return bad
     structured = sections is not None or frontmatter is not None
     if structured:
         if body is not None:
@@ -1941,7 +2308,11 @@ def append_note(
     expected_body_hash: str | None = None,
     expected_content_hash: str | None = None,
     vault: str = "",
+    ref: str = "",
 ) -> dict[str, Any]:
+    bad = _reject_if_ref(ref, tool="append_note")
+    if bad:
+        return bad
     body, alias_key, body_err = resolve_body_text(
         text, content, body=body, prefer="text"
     )
@@ -2486,7 +2857,11 @@ def patch_note(
     expected_body_hash: str | None = None,
     expected_content_hash: str | None = None,
     vault: str = "",
+    ref: str = "",
 ) -> dict[str, Any]:
+    bad = _reject_if_ref(ref, tool="patch_note")
+    if bad:
+        return bad
     try:
         b, path = _resolve_binding_and_rel(path, vault)
         root = b.resolved().root
@@ -2986,6 +3361,7 @@ def place_note(
     fields: dict[str, Any] | None = None,
     expected_mtime: float | None = None,
     vault: str = "",
+    ref: str = "",
 ) -> dict[str, Any]:
     """Place a note at ``dst``: move if ``src`` is in the vault, else copy from host.
 
@@ -2994,6 +3370,9 @@ def place_note(
     - Absolute host ``.md`` outside the vault (allow-roots) → ``copied`` / promote
       (same as former ``send_note``; leaves src; optional ``fields`` merge).
     """
+    bad = _reject_if_ref(ref, tool="place_note")
+    if bad:
+        return bad
     raw = (src or "").strip()
     if not raw:
         return _err(src=src, dst=dst, error="bad_path", message="src required")
@@ -3254,7 +3633,10 @@ def send_note(
     )
 
 
-def delete_note(path: str, *, vault: str = "") -> dict[str, Any]:
+def delete_note(path: str, *, vault: str = "", ref: str = "") -> dict[str, Any]:
+    bad = _reject_if_ref(ref, tool="delete_note")
+    if bad:
+        return bad
     try:
         b, path = _resolve_binding_and_rel(path, vault)
         root = b.resolved().root
@@ -3316,6 +3698,28 @@ def git_sync_op(
     )
     out.setdefault("vault", b.name)
     return out
+
+
+def list_refs_op(*, vault: str = "", kind: str = "heads") -> dict[str, Any]:
+    """Reachable git refs at the vault registry root (for ``ref=`` discovery)."""
+    try:
+        b = _binding(vault)
+        root = b.resolved().root
+    except OpsError as e:
+        return _err(error=e.code, message=e.message)
+    k = (kind or "heads").strip().lower()
+    try:
+        refs = git_catalog.list_refs(root, kind=k)
+    except git_catalog.GitCatalogError as e:
+        return _err(error=e.code, message=e.message, vault=b.name, root=str(root))
+    return {
+        "ok": True,
+        "vault": b.name,
+        "root": str(root),
+        "kind": k,
+        "refs": refs,
+        "count": len(refs),
+    }
 
 
 def _vault_row(b: vaults.VaultBinding, *, default_name: str) -> dict[str, Any]:

@@ -22,6 +22,7 @@ _ADMIN_CAPABILITIES = frozenset({
     "reindex",
     "delete_note",
     "git_sync",
+    "list_refs",
 })
 
 _TOP_LEVEL = frozenset({

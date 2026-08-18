@@ -74,6 +74,19 @@ _ADMIN_CATALOG: dict[str, dict[str, Any]] = {
             "vault": "vault name (default registry default)",
         },
     },
+    "list_refs": {
+        "description": (
+            "List reachable git refs (branches / jj bookmarks, optional tags) at the "
+            "vault registry root for filter_notes/read_note ref= discovery. Read-only."
+        ),
+        "read_only": True,
+        "destructive": False,
+        "confirm_policy": None,
+        "parameters": {
+            "kind": "heads | tags | all (default heads)",
+            "vault": "vault name (default registry default)",
+        },
+    },
 }
 
 ADMIN_NAMES = frozenset(_ADMIN_CATALOG)

@@ -4,13 +4,42 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
-## [0.12.3] — 2026-08-17
+## [0.13.3] — 2026-08-17
 
 ### Fixed
 
-- **RPC dropped the connection on unquoted YAML dates** — an unquoted `timestamp: 2026-08-12` in note frontmatter loads as a `datetime.date`, which `json.dumps` cannot encode. The `TypeError` raised out of `_dispatch` and killed the handler thread *before any response was written*, so the client saw a reset socket rather than an error body. `_json_bytes` now serializes with a `default=` coercion (`datetime` / `date` / `time` → ISO 8601, other unencodable values → `str`), matching the `default=str` convention `core.py` already uses when storing frontmatter in the index. Reachable when reading a note the watcher has not indexed yet — indexed notes return frontmatter from the index, which was already string-coerced, so the failure only showed on the fresh-file path (e.g. Obsidian writes a note with an unquoted date and an agent reads it inside the debounce + embed window).
+- **RPC dropped the connection on unquoted YAML dates** — an unquoted `timestamp: 2026-08-12` in note frontmatter loads as a `datetime.date`, which `json.dumps` cannot encode. The `TypeError` raised out of `_dispatch` and killed the handler thread *before any response was written*, so the client saw a reset socket rather than an error body. `_json_bytes` now serializes with a `default=` coercion (`datetime` / `date` / `time` → ISO 8601, other unencodable values → `str`), matching the `default=str` convention `core.py` already uses when storing frontmatter in the index. Indexed notes return frontmatter from the index, which was already string-coerced, so the failure only showed on paths that parse YAML live: reading a note the watcher has not indexed yet (an editor writes `date: 2026-08-17` and an agent reads it inside the debounce + embed window), and the 0.13.0 `ref=` catalog, which projects frontmatter straight from git blobs.
 
 **Upgrade:** `systemctl --user restart apo-rpc` — no schema or config changes.
+
+## [0.13.2] — 2026-08-17
+
+### Added
+
+- **`apo_admin list_refs`** — list reachable git heads/tags at the vault registry root for `ref=` discovery (`kind=heads|tags|all`). RPC: `POST /v1/list_refs`. Unknown `ref=` now names reachable heads and points at `list_refs` (jj colocated export habit). See [docs/contracts/git.md](docs/contracts/git.md). Fixes [#29](https://github.com/jenorris/apo/issues/29).
+- **`search_notes(…, ref=)`** — FTS-only body recall at a reachable git tip (no embeddings / `chunk_hash`). Same streamed blob caps and LRU as the `ref=` catalog. Follow up with `read_note(path, ref=)`. See [docs/contracts/git.md](docs/contracts/git.md). Fixes [#31](https://github.com/jenorris/apo/issues/31).
+
+### Fixed
+
+- **`_TOOL_PARAM_HINTS` unique keys** — build the tool map via `_unique(**kwargs)` so a second `read_note=` is a SyntaxError (the 0.13.0 last-wins overwrite). Tests assert required params and AST-walk the source for duplicate keys. Fixes [#30](https://github.com/jenorris/apo/issues/30).
+
+## [0.13.1] — 2026-08-17
+
+### Fixed
+
+- **`read_note` validation hints** — a duplicate `"read_note"` key in `_TOOL_PARAM_HINTS` overwrote the `snippet_chars` → `max_chars` hint (and the rest of the original map). CI failed on both hint tests.
+
+## [0.13.0] — 2026-08-17
+
+### Added
+
+- **`ref=` catalog (read-only)** — `filter_notes(…, ref=)` and `read_note(path, ref=)` project frontmatter/YAML from a reachable git tip at the vault root (no per-branch embeddings). Cache: `ref_trees` / `ref_files` keyed by `tree_oid` (LRU 8). Writes reject `ref=`. See [docs/contracts/git.md](docs/contracts/git.md).
+
+### Fixed
+
+- **`ref=` catalog streaming caps** — `git cat-file --batch`, `ls-tree -z`, and `git log -z` are streamed (no unbounded `capture_output`); per-blob / listing / total size limits apply before retaining bodies; stdin write is threaded to avoid pipe deadlock; watchdog kills hung git; non-zero `cat-file` exit rejects partial catalogs. `read_blob` checks `cat-file -s` before `-p`.
+
+**Upgrade:** Quit Cursor/Claude fully (Cmd+Q) so MCP reloads `ref=` on `filter_notes` / `read_note`.
 
 ## [0.12.2] — 2026-08-17
 

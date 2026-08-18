@@ -166,7 +166,7 @@ _MCP_INSTRUCTIONS = (
     "Apo: vault-relative Markdown + YAML catalog notes; sqlite-vec hybrid search; "
     "files are source of truth. "
     "apo_admin(action=list|describe|invoke): engine ops (memory_status, reindex, "
-    "delete_note, reload_config, git_sync). Destructive invoke requires "
+    "delete_note, reload_config, git_sync, list_refs). Destructive invoke requires "
     "confirm=true (delete_note always; reindex force=true; git_sync run/pull/rebase). "
     "vault(action=list|contracts|describe|merge|project|stats|lint): registry + contracts + "
     "optional habit KPIs (stats) + archival lint (flaws[]). "
@@ -175,6 +175,9 @@ _MCP_INSTRUCTIONS = (
     "patch_note=frontmatter/section mutate or place op (move/copy); "
     "search_notes(limit=, folder= or folders=[]); filter_notes(where=); "
     "read_note(path= or chunk_hash= from search hits); "
+    "ref= on filter_notes/read_note/search_notes = read-only git tip (catalog / blob / FTS); "
+    "omit ref= only when intentionally querying the indexed working tree; "
+    "never pass ref= to writes. "
     "Thread mtime → expected_mtime on follow-up writes. "
     "Operator traces: otlp-mcp + Jaeger (not Apo MCP). "
     "Multi-vault: vault= or search_notes(vaults=[]); "
@@ -353,6 +356,12 @@ def _git_sync_admin(params: dict[str, Any], *, vault: str = "") -> dict:
     return apo_ops.git_sync_op(action, message=message, vault=v)
 
 
+def _list_refs_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    v = vault or str(params.get("vault") or "")
+    kind = str(params.get("kind") or "heads")
+    return apo_ops.list_refs_op(vault=v, kind=kind)
+
+
 def _delete_note_admin(params: dict[str, Any], *, vault: str = "") -> dict:
     path = params.get("path")
     if not isinstance(path, str) or not path.strip():
@@ -397,6 +406,7 @@ _ADMIN_HANDLERS: dict[str, apo_admin_ops.AdminHandler] = {
     "reindex_deferred": _reindex_deferred_legacy_admin,
     "delete_note": _delete_note_admin,
     "git_sync": _git_sync_admin,
+    "list_refs": _list_refs_admin,
 }
 
 
@@ -668,6 +678,16 @@ async def read_note(
             ),
         ),
     ] = False,
+    ref: Annotated[
+        str,
+        Field(
+            description=(
+                "Path mode only: read a git blob at this ref (branch/bookmark/OID) "
+                "from the vault root repo. Read-only; not compatible with chunk_hash=. "
+                "For jj WIP preview, pass the exported feature bookmark."
+            ),
+        ),
+    ] = "",
 ) -> dict:
     """Read by path or search hit chunk_hash. Search → read_note(chunk_hash=)."""
     return await asyncio.to_thread(
@@ -687,6 +707,7 @@ async def read_note(
         sibling=sibling,
         siblings=siblings,
         lint=lint,
+        ref=ref,
     )
 
 
@@ -734,8 +755,20 @@ async def search_notes(
             ),
         ),
     ] = None,
+    ref: Annotated[
+        str,
+        Field(
+            description=(
+                "Read-only git tip at the vault registry root. FTS-only over note "
+                "bodies (no embeddings / chunk_hash). Follow up with read_note(path, ref=)."
+            ),
+        ),
+    ] = "",
 ) -> dict:
-    """Hybrid search. Hits include chunk_hash — read more via read_note(chunk_hash=)."""
+    """Hybrid search. Hits include chunk_hash — read more via read_note(chunk_hash=).
+
+    With ref=, FTS-only over a git tip (no embeddings); follow up with read_note(path, ref=).
+    """
     return await asyncio.to_thread(
         apo_ops.search,
         query,
@@ -747,6 +780,7 @@ async def search_notes(
         limit=limit,
         offset=offset,
         exclude=exclude,
+        ref=ref,
     )
 
 
@@ -792,6 +826,17 @@ async def filter_notes(
         Literal["asc", "desc"],
         Field(description="Sort direction (default desc — newest/largest first)."),
     ] = "desc",
+    ref: Annotated[
+        str,
+        Field(
+            description=(
+                "Optional git ref (branch/bookmark/OID) at the vault root. "
+                "Projects a frontmatter-only catalog from that tree (no embeddings). "
+                "For jj feature WIP, pass the exported bookmark; omit to query the "
+                "indexed working tree."
+            ),
+        ),
+    ] = "",
 ) -> dict:
     """Frontmatter catalog (no embeddings). Prefer where=; omit where or pass {} to list."""
     return await asyncio.to_thread(
@@ -804,6 +849,7 @@ async def filter_notes(
         fields=fields,
         sort=sort,
         order=order,
+        ref=ref,
     )
 
 

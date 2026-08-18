@@ -584,6 +584,33 @@ def _ensure_files_columns(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE files ADD COLUMN bytes INTEGER")
 
 
+def _ensure_ref_catalog_tables(db: sqlite3.Connection) -> None:
+    """Frontmatter-only cache for ``filter_notes(ref=)`` (see ``git_catalog``)."""
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ref_trees (
+            tree_oid TEXT PRIMARY KEY,
+            commit_oid TEXT NOT NULL,
+            built_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ref_files (
+            tree_oid TEXT NOT NULL,
+            path TEXT NOT NULL,
+            mtime REAL NOT NULL,
+            frontmatter TEXT,
+            PRIMARY KEY (tree_oid, path)
+        );
+        CREATE INDEX IF NOT EXISTS ref_files_tree ON ref_files(tree_oid);
+        CREATE VIRTUAL TABLE IF NOT EXISTS ref_fts USING fts5(
+            tree_oid UNINDEXED,
+            path UNINDEXED,
+            mtime UNINDEXED,
+            text
+        );
+        """
+    )
+
+
 def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
     cols = {row[1] for row in db.execute("PRAGMA table_info(chunks)").fetchall()}
     for name, ddl in (
@@ -668,6 +695,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
         )
         _ensure_chunk_columns(db)
         _ensure_files_columns(db)
+        _ensure_ref_catalog_tables(db)
         _schema_ready.add(key)
     return db
 
@@ -2188,6 +2216,99 @@ def _filter_notes_cmp(
     return c if order == "asc" else -c
 
 
+def _filter_notes_from_table(
+    db: sqlite3.Connection,
+    table: str,
+    where: dict,
+    folder: str = "",
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    sort: str = "mtime",
+    order: str = "desc",
+    tree_oid: str | None = None,
+) -> tuple[int, list[tuple[float, str, dict]]]:
+    """Shared catalog query over ``files`` or ``ref_files`` (same column contract).
+
+    When ``table='ref_files'``, ``tree_oid`` is required and scopes the projection.
+    """
+    if table not in ("files", "ref_files"):
+        raise ValueError(f"unsupported filter table: {table!r}")
+    if table == "ref_files" and not tree_oid:
+        raise ValueError("tree_oid required for ref_files filter")
+    if offset < 0:
+        raise ValueError("offset must be >= 0")
+    if limit < 0:
+        raise ValueError("limit must be >= 0")
+    sort_key, order_key = _normalize_filter_sort(sort, order)
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    sql_pred = _sql_pushdown_predicates(where) if where else ("1", [])
+    where_parts = ["frontmatter IS NOT NULL"]
+    params: list[Any] = []
+    if table == "ref_files":
+        where_parts.append("tree_oid = ?")
+        params.append(tree_oid)
+    if folder_prefix:
+        where_parts.append("path LIKE ? ESCAPE '\\'")
+        params.append(_escape_like(folder_prefix) + "/%")
+
+    if sql_pred is not None:
+        pred_sql, pred_params = sql_pred
+        where_parts.append(f"({pred_sql})")
+        params.extend(pred_params)
+        where_sql = " AND ".join(where_parts)
+        total = int(
+            db.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE {where_sql}", params
+            ).fetchone()[0]
+        )
+        dir_sql = "ASC" if order_key == "asc" else "DESC"
+        order_params: list[Any] = []
+        if sort_key == "mtime":
+            order_sql = f"mtime {dir_sql}"
+        else:
+            jpath = f"$.{sort_key}"
+            order_sql = (
+                f"(json_extract(frontmatter, ?) IS NULL) ASC, "
+                f"json_extract(frontmatter, ?) {dir_sql}, "
+                f"mtime DESC"
+            )
+            order_params.extend([jpath, jpath])
+        rows = db.execute(
+            f"SELECT path, mtime, frontmatter FROM {table} WHERE {where_sql} "
+            f"ORDER BY {order_sql} LIMIT ? OFFSET ?",
+            [*params, *order_params, limit, offset],
+        ).fetchall()
+        matches: list[tuple[float, str, dict]] = []
+        for path, mtime, fm_json in rows:
+            try:
+                fm = json.loads(fm_json) if fm_json else {}
+            except json.JSONDecodeError:
+                fm = {}
+            matches.append((mtime, path, fm))
+        return total, matches
+
+    scope_sql = " AND ".join(where_parts)
+    rows = db.execute(
+        f"SELECT path, mtime, frontmatter FROM {table} WHERE {scope_sql}",
+        params,
+    ).fetchall()
+    matches = []
+    for path, mtime, fm_json in rows:
+        try:
+            fm = json.loads(fm_json) if fm_json else {}
+        except json.JSONDecodeError:
+            fm = {}
+        if all(_match_where_clause(fm, k, cond) for k, cond in where.items()):
+            matches.append((mtime, path, fm))
+    matches.sort(
+        key=cmp_to_key(
+            lambda a, b: _filter_notes_cmp(a, b, sort=sort_key, order=order_key)
+        )
+    )
+    return len(matches), matches[offset : offset + limit]
+
+
 def filter_notes(
     where: dict,
     folder: str = "",
@@ -2213,73 +2334,98 @@ def filter_notes(
     blob just to page ``limit`` rows. Frontmatter ``sort`` uses SQL ``json_extract``
     ordering on the pushdown path, or Python sort after match on the complex path.
     """
-    if offset < 0:
-        raise ValueError("offset must be >= 0")
-    if limit < 0:
-        raise ValueError("limit must be >= 0")
-    sort_key, order_key = _normalize_filter_sort(sort, order)
-    folder_prefix = folder.replace("\\", "/").strip("/")
     db = reader_connect()
-    sql_pred = _sql_pushdown_predicates(where) if where else ("1", [])
-    where_parts = ["frontmatter IS NOT NULL"]
-    params: list[Any] = []
-    if folder_prefix:
-        where_parts.append("path LIKE ? ESCAPE '\\'")
-        params.append(_escape_like(folder_prefix) + "/%")
-
-    if sql_pred is not None:
-        pred_sql, pred_params = sql_pred
-        where_parts.append(f"({pred_sql})")
-        params.extend(pred_params)
-        where_sql = " AND ".join(where_parts)
-        total = int(db.execute(f"SELECT COUNT(*) FROM files WHERE {where_sql}", params).fetchone()[0])
-        dir_sql = "ASC" if order_key == "asc" else "DESC"
-        order_params: list[Any] = []
-        if sort_key == "mtime":
-            order_sql = f"mtime {dir_sql}"
-        else:
-            # Null / missing FM values last for both asc and desc.
-            jpath = f"$.{sort_key}"
-            order_sql = (
-                f"(json_extract(frontmatter, ?) IS NULL) ASC, "
-                f"json_extract(frontmatter, ?) {dir_sql}, "
-                f"mtime DESC"
-            )
-            order_params.extend([jpath, jpath])
-        rows = db.execute(
-            f"SELECT path, mtime, frontmatter FROM files WHERE {where_sql} "
-            f"ORDER BY {order_sql} LIMIT ? OFFSET ?",
-            [*params, *order_params, limit, offset],
-        ).fetchall()
-        matches: list[tuple[float, str, dict]] = []
-        for path, mtime, fm_json in rows:
-            try:
-                fm = json.loads(fm_json) if fm_json else {}
-            except json.JSONDecodeError:
-                fm = {}
-            matches.append((mtime, path, fm))
-        return total, matches
-
-    # Complex operators — folder-scoped fetch, then Python match + sort.
-    scope_sql = " AND ".join(where_parts)
-    rows = db.execute(
-        f"SELECT path, mtime, frontmatter FROM files WHERE {scope_sql}",
-        params,
-    ).fetchall()
-    matches = []
-    for path, mtime, fm_json in rows:
-        try:
-            fm = json.loads(fm_json) if fm_json else {}
-        except json.JSONDecodeError:
-            fm = {}
-        if all(_match_where_clause(fm, k, cond) for k, cond in where.items()):
-            matches.append((mtime, path, fm))
-    matches.sort(
-        key=cmp_to_key(
-            lambda a, b: _filter_notes_cmp(a, b, sort=sort_key, order=order_key)
-        )
+    return _filter_notes_from_table(
+        db,
+        "files",
+        where,
+        folder,
+        limit,
+        offset,
+        sort=sort,
+        order=order,
     )
-    return len(matches), matches[offset : offset + limit]
+
+
+def filter_notes_at_ref(
+    where: dict,
+    tree_oid: str,
+    folder: str = "",
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    sort: str = "mtime",
+    order: str = "desc",
+) -> tuple[int, list[tuple[float, str, dict]]]:
+    """Like ``filter_notes`` but over the ``ref_files`` catalog for ``tree_oid``."""
+    db = reader_connect()
+    _ensure_ref_catalog_tables(db)
+    return _filter_notes_from_table(
+        db,
+        "ref_files",
+        where,
+        folder,
+        limit,
+        offset,
+        sort=sort,
+        order=order,
+        tree_oid=tree_oid,
+    )
+
+
+def search_at_ref(
+    query: str,
+    tree_oid: str,
+    *,
+    folder: str = "",
+    exclude: list[str] | None = None,
+    k: int = 8,
+    offset: int = 0,
+    snippet_chars: int = 240,
+) -> tuple[list[dict[str, Any]], int]:
+    """FTS-only note-level search over ``ref_fts`` for ``tree_oid``.
+
+    Returns ``(hits, total)``. Hits have path/content/score/mtime — no chunk_hash.
+    """
+    match = _fts_query(query)
+    if not match:
+        return [], 0
+    db = reader_connect()
+    _ensure_ref_catalog_tables(db)
+    prefixes, globs = _compile_excludes(exclude)
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    where = ["tree_oid = ?", "ref_fts MATCH ?"]
+    params: list[Any] = [tree_oid, match]
+    if folder_prefix:
+        where.append("path LIKE ? ESCAPE '\\'")
+        params.append(_escape_like(folder_prefix) + "/%")
+    where_sql = " AND ".join(where)
+    tokens = max(1, min(int(snippet_chars) // 6, 64)) if snippet_chars else 64
+    rows = db.execute(
+        f"SELECT path, mtime, snippet(ref_fts, 3, '', '', ' … ', ?), rank "
+        f"FROM ref_fts WHERE {where_sql} ORDER BY rank",
+        [tokens, *params],
+    ).fetchall()
+    hits: list[dict[str, Any]] = []
+    for path, mtime, snip, rank in rows:
+        rel = str(path or "")
+        if _path_excluded(rel, prefixes, globs):
+            continue
+        score = 1.0 / (1.0 + abs(float(rank or 0.0)))
+        text = str(snip or "")
+        if snippet_chars and len(text) > snippet_chars:
+            text = text[:snippet_chars].rstrip() + "…"
+        hits.append(
+            {
+                "path": rel,
+                "content": text,
+                "score": score,
+                "mtime": float(mtime or 0.0),
+            }
+        )
+    total = len(hits)
+    page = hits[offset : offset + k]
+    return page, total
 
 
 def _escape_like(s: str) -> str:

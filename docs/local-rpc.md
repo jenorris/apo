@@ -32,7 +32,7 @@ Arg names match MCP where possible. Prefer **`limit`** / **`where`** (aliases `t
 | GET/POST | `/v1/stats` | `{vault?}` | index stats |
 | POST | `/v1/session_stats` | `{vault?, conversation_id?, days?, tool?}` | **deprecated** — use `/v1/telemetry` |
 | POST | `/v1/telemetry` | `{action, surface?, vault?, conversation_id?, days?, tool?}` | `surface=agent` (default): status/session/active/efficiency; `surface=admin`: collection/workbench/events |
-| POST | `/v1/search` | `{query, limit?, top_k?, folder?, exclude?, snippet_chars?, vault?, vaults?, no_hybrid?}` | hybrid search — prefer `limit`; `vaults=[]` fans out across separate indexes |
+| POST | `/v1/search` | `{query, limit?, top_k?, folder?, exclude?, snippet_chars?, vault?, vaults?, no_hybrid?, ref?}` | hybrid search — prefer `limit`; `vaults=[]` fans out; `ref=` is FTS-only at a git tip |
 | POST | `/v1/read` | `{path, heading?, start_line?, end_line?, max_chars?, raw?, vault?}` | `frontmatter` sidecar + body `content` (raw=true → byte-exact) |
 | POST | `/v1/filter` | `{where, folder?, limit?, offset?, fields?, vault?}` | frontmatter catalog — prefer `where`; `fields` projects FM keys |
 | POST | `/v1/expand` | `{chunk_hash, scope?, vault?}` | section or chunk |
@@ -40,6 +40,7 @@ Arg names match MCP where possible. Prefer **`limit`** / **`where`** (aliases `t
 | POST | `/v1/history` | `{limit?, folder?, path?, vault?, since?, until?, preview?, heading?, exclude?, fields?}` | browse by mtime (digest filters), or file git log when `path` + git contract |
 | GET/POST | `/v1/vault` | `{action, vault?, vaults?, full?}` | registry + contracts + desk merge/project (`list` \| `contracts` \| `describe` \| `merge` \| `project`); `vaults=[...]` scopes to a named subset (not combined with `vault`) |
 | POST | `/v1/git_sync` | `{action, message?, vault?}` | git contract sync: `status` \| `run` \| `pull` \| `rebase` \| `clear_block` |
+| POST | `/v1/list_refs` | `{kind?, vault?}` | reachable git refs at vault root (`heads` \| `tags` \| `all`) for `ref=` |
 
 ### Write
 

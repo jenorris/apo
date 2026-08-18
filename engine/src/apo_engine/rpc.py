@@ -104,6 +104,7 @@ def _search(body: dict[str, Any]) -> dict[str, Any]:
         snippet_chars=int(body.get("snippet_chars", 240)),
         exclude=[str(x) for x in exclude] if exclude else None,
         hybrid=not bool(body.get("no_hybrid")),
+        ref=str(body.get("ref") or ""),
     )
 
 
@@ -152,6 +153,9 @@ def _read(body: dict[str, Any]) -> dict[str, Any]:
         raw=raw,
         fields=fields if isinstance(fields, list) else None,
         lint=bool(body.get("lint")),
+        ref=str(body.get("ref") or ""),
+        mode=str(body.get("mode") or "auto"),
+        force=bool(body.get("force")),
     )
 
 
@@ -185,6 +189,7 @@ def _filter(body: dict[str, Any]) -> dict[str, Any]:
         fields=body.get("fields") if isinstance(body.get("fields"), list) else None,
         sort=str(sort) if sort is not None else "mtime",
         order=str(order) if order is not None else "desc",
+        ref=str(body.get("ref") or ""),
     )
 
 
@@ -437,6 +442,17 @@ def _git_sync(body: dict[str, Any]) -> dict[str, Any]:
         action.strip(),
         message=str(message or ""),
         vault=str(body.get("vault") or ""),
+    )
+
+
+@_route("POST", "/v1/list_refs")
+def _list_refs(body: dict[str, Any]) -> dict[str, Any]:
+    kind = body.get("kind", "heads")
+    if kind is not None and not isinstance(kind, str):
+        return {"ok": False, "error": "bad_request", "message": "`kind` must be a string"}
+    return ops.list_refs_op(
+        vault=str(body.get("vault") or ""),
+        kind=str(kind or "heads"),
     )
 
 

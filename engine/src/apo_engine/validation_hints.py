@@ -19,8 +19,14 @@ _OPS_HINT = (
     "Keys: field/find/replace — never path/key/old/new/old_text/new_text."
 )
 
-_TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
-    "read_note": {
+
+def _unique(**kwargs: Any) -> dict[str, Any]:
+    """Kwargs builder — a second ``read_note=`` is a SyntaxError, not last-wins."""
+    return dict(kwargs)
+
+
+_TOOL_PARAM_HINTS: dict[str, dict[str, str]] = _unique(
+    read_note={
         "snippet_chars": (
             "read_note has no snippet_chars — use max_chars to truncate, "
             "or search_notes(snippet_chars=…) for search hit previews."
@@ -35,8 +41,12 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
             "read_note has no scope — pass chunk_hash= from search_notes "
             "(optional force= for full section above preview threshold)."
         ),
+        "branch": (
+            "read_note uses ref= (path mode) for a git blob at a bookmark/branch tip; "
+            "not compatible with chunk_hash=."
+        ),
     },
-    "write_note": {
+    write_note={
         "body": "write_note uses content= only on MCP. For append under a heading use append_note(path, text, heading=…).",
         "text": "write_note uses content= (not text). For append under a heading use append_note(path, text, heading=…).",
         "ops": "write_note has no ops — use patch_note for surgical edits.",
@@ -54,7 +64,7 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
             "create= belongs on append_note."
         ),
     },
-    "append_note": {
+    append_note={
         "body": "append_note uses text= only on MCP. For full overwrite use write_note(path, content).",
         "content": "append_note uses text= (not content). For full overwrite use write_note(path, content).",
         "ops": "append_note has no ops — use patch_note for mutators, or append_note(path, text, heading=…).",
@@ -65,7 +75,7 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
             "YAML (.yaml/.yml) notes reject append_note — use write_note / patch_note set_field."
         ),
     },
-    "patch_note": {
+    patch_note={
         "text": "patch_note mutates via ops[] — put text on an op (append/replace_section), not top-level.",
         "content": "patch_note has no content — use write_note for full overwrite, or ops with replace_section/replace_text.",
         "find": "find belongs inside an op: {\"op\":\"replace_text\",\"find\":\"…\",\"replace\":\"…\"}.",
@@ -87,7 +97,7 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
             "move/copy uses place op: patch_note(ops=[{op:place, src, dst, overwrite?, fields?}])."
         ),
     },
-    "search_notes": {
+    search_notes={
         "path": (
             "search_notes uses query= (+ optional folder= or folders=[]). "
             "To read a known path: read_note(path=…)."
@@ -102,8 +112,12 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
             "pass folder= or folders=[], not both. Single folder: folder=… instead."
         ),
         "top_k": "search_notes uses limit= (not top_k).",
+        "branch": (
+            "search_notes uses ref= for FTS-only body recall at a git tip "
+            "(no embeddings). Follow up with read_note(path=…, ref=…)."
+        ),
     },
-    "filter_notes": {
+    filter_notes={
         "query": (
             "filter_notes is frontmatter catalog — pass where={} (or where={\"status\":\"active\"}), "
             "not query=. For semantic search use search_notes."
@@ -111,8 +125,15 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = {
         "top_k": "filter_notes uses limit= (and offset=), not top_k.",
         "filters": "filter_notes uses where= (not filters=).",
         "order_by": "filter_notes uses sort= (mtime or FM key) and order=asc|desc, not order_by.",
+        "branch": (
+            "filter_notes uses ref= for a git branch/bookmark tip catalog "
+            "(frontmatter only; read-only)."
+        ),
+        "tree": (
+            "filter_notes v1 has no tree= — pass ref= for an exported git bookmark/branch."
+        ),
     },
-}
+)
 
 
 def _pydantic_errors(exc: BaseException) -> list[dict[str, Any]]:

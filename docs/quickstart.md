@@ -55,7 +55,7 @@ Add an `apo` block to `~/.cursor/mcp.json` (merge into existing `mcpServers`):
 
 Per-vault search noise filters live in `<vault>/system/contracts/search-contract.schema.yaml` — not MCP env.
 
-Engine admin ops (`memory_status`, `reindex`, `delete_note`, `git_sync`, `reload_config`) are reached via **`apo_admin(action=list|describe|invoke)`**. Destructive invoke requires **`confirm=true`** (`delete_note` always; `reindex` when `force=true`; `git_sync` for `run`/`pull`/`rebase`).
+Engine admin ops (`memory_status`, `reindex`, `delete_note`, `git_sync`, `list_refs`, `reload_config`) are reached via **`apo_admin(action=list|describe|invoke)`**. Destructive invoke requires **`confirm=true`** (`delete_note` always; `reindex` when `force=true`; `git_sync` for `run`/`pull`/`rebase`).
 
 **Quit Cursor fully** (Cmd+Q on macOS) and reopen. MCP subprocesses do not reliably hot-reload.
 
