@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -291,6 +292,43 @@ class TestLocalRpc(unittest.TestCase):
         dest = self.vault / "resources" / "wiki" / "host-report.md"
         self.assertTrue(dest.is_file())
         self.assertIn("source: rpc-test", dest.read_text(encoding="utf-8"))
+
+    def test_patch_scratchpad_promote(self):
+        spill = self.tmp / "spill"
+        spill.mkdir()
+        prev = os.environ.get("APO_SCRATCHPADS_ROOT")
+        os.environ["APO_SCRATCHPADS_ROOT"] = str(spill)
+        try:
+            status, created = self._post(
+                "/v1/scratchpad",
+                {
+                    "action": "create",
+                    "format": "markdown",
+                    "content": "# Rpc\nbody\n",
+                },
+            )
+            self.assertEqual(status, 200, created)
+            self.assertTrue(created["ok"], created)
+            sid = created["session_id"]
+            status, patched = self._post(
+                "/v1/patch",
+                {
+                    "path": "inbox/rpc-spill.md",
+                    "scratchpad": sid,
+                    "ops": [{"op": "set_field", "field": "status", "value": "open"}],
+                },
+            )
+            self.assertEqual(status, 200, patched)
+            self.assertTrue(patched["ok"], patched)
+            self.assertEqual(patched.get("scratchpad_state"), "PROMOTED")
+            dest = self.vault / "inbox" / "rpc-spill.md"
+            self.assertTrue(dest.is_file())
+            self.assertIn("status: open", dest.read_text(encoding="utf-8"))
+        finally:
+            if prev is None:
+                os.environ.pop("APO_SCRATCHPADS_ROOT", None)
+            else:
+                os.environ["APO_SCRATCHPADS_ROOT"] = prev
 
     def test_search_prefers_limit(self):
         status, search = self._post("/v1/search", {"query": "alpha widget", "limit": 3})

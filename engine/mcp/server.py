@@ -586,6 +586,15 @@ async def patch_note(
         Field(description=_REGION_HASH_DESC + " Single-path only; per-item for items[]."),
     ] = None,
     vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
+    scratchpad: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Optional scratchpad session_id: apply ops to buffer then merge-commit to path. "
+                "Markdown-only; XOR with items[]. Re-validates when schema bound."
+            ),
+        ),
+    ] = None,
 ) -> dict:
     """Mutate frontmatter/sections or place (ops place). Single: path+ops or place-only ops. Multi: items[]."""
     return await asyncio.to_thread(
@@ -601,6 +610,7 @@ async def patch_note(
         expected_body_hash=expected_body_hash,
         expected_content_hash=expected_content_hash,
         vault=vault,
+        scratchpad=scratchpad,
     )
 
 

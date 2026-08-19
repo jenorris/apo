@@ -20,7 +20,7 @@ MCP_INSTRUCTIONS = (
     "scratchpad(action=create|checkout|read|patch|validate|bind_schema|commit|discard|status): "
     "ephemeral workshop buffer under ~/.apo/scratchpads/; vault-free create/patch/read; "
     "vault= required for bind_schema/commit; schemas under system/schemas/; "
-    "promote via commit or write_note/append_note(scratchpad=session_id). "
+    "promote via commit, write_note/append_note(scratchpad=session_id), or patch_note(scratchpad=session_id). "
     "Routing: write_note=create/overwrite (content=); "
     "append_note=session log / post-search add (text=); "
     "patch_note=frontmatter/section mutate or place op (move/copy); "

@@ -51,7 +51,7 @@ Writes update markdown on disk and **enqueue** reindex for `apo-engine watch` (s
 |--------|------|------|-------|
 | POST | `/v1/write` | `{path, content?, text?, expected_mtime?, expected_*_hash?, vault?, scratchpad?}` | create/overwrite only (`content` canonical; `text` alias; `scratchpad=` session id as content source) |
 | POST | `/v1/append` | `{text?, content?, path?, heading?, chunk_hash?, position?, create?, expected_mtime?, expected_*_hash?, vault?, scratchpad?}` | surgical append (`text` canonical; `content` alias; `path` or `chunk_hash` required; optional `scratchpad=`) |
-| POST | `/v1/patch` | `{path, ops, strict?, dry_run?, verbose?, expected_mtime?, expected_*_hash?, vault?}` | batch mutators |
+| POST | `/v1/patch` | `{path, ops, strict?, dry_run?, verbose?, expected_mtime?, expected_*_hash?, vault?, scratchpad?}` | batch mutators; `scratchpad=` applies ops then merge-commit (markdown-only) |
 | POST | `/v1/patch_notes` | `{items, strict?, dry_run?, verbose?, vault?}` | multi-path patch batch (`items: [{path, ops, expected_mtime?, expected_*_hash?}]`, max 20) |
 | POST | `/v1/place` | `{src, dst, overwrite?, fields?, expected_mtime?, vault?}` | move if src in vault; else copy host `.md` |
 | POST | `/v1/move` | same as `/v1/place` | **alias** — prefer `/v1/place` |

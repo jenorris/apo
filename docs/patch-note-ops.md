@@ -16,10 +16,10 @@ add new aliases without an agent-success regression and a docs bump.
 | Frontmatter + section mutate in one call | **`patch_note`** (`set_field`, `replace_*`, …) |
 | Append text *while* batching other ops | `patch_note` `append` / `prepend` / `append_eof` |
 | Create / full overwrite | `write_note` — **no** `append` param (use `append_note`); optional `scratchpad=` session id as content source |
-| Ephemeral workshop / validate / merge-promote | **`scratchpad`** — see [scratchpad.md](./scratchpad.md); same `ops[]` dialect; not a substitute for `patch_note` on vault paths |
+| Ephemeral workshop / validate / merge-promote | **`scratchpad`** — see [scratchpad.md](./scratchpad.md); same `ops[]` dialect; promote also via `write_note` / `append_note` / `patch_note(scratchpad=)` |
 | Dual-write (domain + daily) | **Parallel** `append_note` / `patch_note` in one turn |
 | Multi-path patch-only (N≥2) | **`patch_note`** with `items: [{path, ops, expected_mtime?}]` (max 20; XOR with path+ops) |
-| Move / host promote | **`place_note(src, dst, fields=?)`** — move if src in vault; else copy absolute host `.md` (leaves src) |
+| Move / host promote | **`patch_note(ops=[{op:place, src, dst, …}])`** — place-only, no `path`; move if src in vault; else copy host `.md` |
 | Status / frontmatter sweeps | `filter_notes(where=…, fields=["status","okf_type","last_checked","title"])` |
 | Browse by mtime / file git log | `history` (`since`/`until`, `preview=first\|last`, `heading=`, `exclude=`, `fields=`, `chunk_hash`; `path=` + git contract → commits) — status sweeps still use `filter_notes` |
 
