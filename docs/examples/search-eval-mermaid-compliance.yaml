@@ -1,0 +1,104 @@
+# Mermaid search eval — compliance DFD catalog
+# Copy to ~/.apo/search-eval-mermaid-compliance.yaml
+# Run: just search-eval --file ~/.apo/search-eval-mermaid-compliance.yaml
+
+vault: compliance
+k: 3
+
+queries:
+  - query: Stripe payment processor standard data flow
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/standard-data-flow/diagram.mmd]
+    expect_chunk_kind: mermaid_node
+    expect_entity: Stripe
+
+  - query: GradGuard renters program billing API
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/standard-data-flow/diagram.mmd]
+    expect_chunk_kind: mermaid_node
+    expect_entity: RAPI
+
+  - query: tuition program billing in standard flow
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/standard-data-flow/diagram.mmd]
+    expect_chunk_kind: mermaid_node
+    expect_entity: Tuition
+
+  - query: CDE network PCI diagram
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/network-diagram-pci/diagram.mmd]
+    expect_chunk_kind: mermaid_file
+
+  - query: AWS network diagram compliance
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/network-diagram/diagram.mmd]
+
+  - query: integrated API v2 data flow
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/integrated-api-v2/diagram.mmd]
+
+  - query: renters pro API data flow
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/renters-pro-api/diagram.mmd]
+
+  - query: tuition pro API data flow
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/tuition-pro-api/diagram.mmd]
+
+  - query: agency data flow diagram
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/agency-data-flow/diagram.mmd]
+
+  - query: delegated tuition only flow
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/delegated-tuition/diagram.mmd]
+
+  - query: cardholder data flow scenarios
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
+
+  - query: StarRez renters portal integration
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/enrollment-renters-portal-starrez/diagram.mmd]
+
+  - query: enrollment tuition retail flow
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/enrollment-tuition-retail/diagram.mmd]
+
+  - query: enrollment renters retail
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/enrollment-renters-retail/diagram.mmd]
+
+  - query: Nelnet integration v2
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/nelnet-integration-v2/diagram.mmd]
+
+  - query: TouchNet integration diagram
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/touchnet-integration/diagram.mmd]
+
+  - query: coverage confirmation pro data flow
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/coverage-confirmation-pro/diagram.mmd]
+
+  - query: integrated data flow legacy
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/integrated-data-flow/diagram.mmd]
+
+  - query: enrollment tuition pro API
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/enrollment-tuition-pro-api/diagram.mmd]
+
+  - query: enrollment renters pro API
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/enrollment-renters-pro-api/diagram.mmd]
+
+  - query: enrollment tuition integrated campus
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/enrollment-tuition-integrated/diagram.mmd]
+
+  - query: RAPI to Stripe payment edge
+    folder: diagrams/mermaid-catalog
+    expect: [diagrams/mermaid-catalog/standard-data-flow/diagram.mmd]
+    expect_chunk_kind: mermaid_edge
+    expect_entity: RAPI

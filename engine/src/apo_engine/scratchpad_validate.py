@@ -146,6 +146,41 @@ def load_type_profile(vault_root: Path, schema_type: str) -> dict[str, Any] | No
     return profile if isinstance(profile, dict) else None
 
 
+def profile_allowlists(
+    meta: ScratchpadMeta,
+    vault_root: Path | None,
+) -> dict[str, list[str]] | None:
+    """Expose okf type_profile allowlists on status/bind/validate envelopes."""
+    if not meta.schema_type or vault_root is None:
+        return None
+    profile = load_type_profile(vault_root, meta.schema_type)
+    if not profile:
+        return None
+    allow: dict[str, list[str]] = {}
+    note_status = profile.get("note_status")
+    if isinstance(note_status, list):
+        allow["note_status"] = [str(x) for x in note_status]
+    todos_spec = profile.get("todos")
+    if isinstance(todos_spec, dict):
+        item_status = todos_spec.get("item_status")
+        if isinstance(item_status, list):
+            allow["todo_status"] = [str(x) for x in item_status]
+    return allow or None
+
+
+def _profile_status_hint(raw_status: Any, note_status: list[Any]) -> str | None:
+    allowed = [str(x) for x in note_status]
+    val = str(raw_status)
+    if val == "open":
+        return (
+            f"Plan note_status uses {allowed}, not thread status 'open'; "
+            "prefer 'active' or 'draft'"
+        )
+    if val in {"closed", "archived", "complete"}:
+        return f"Plan note_status uses {allowed}; prefer 'done' or 'abandoned'"
+    return f"Plan note_status allowlist: {allowed}"
+
+
 def validate_type_profile(instance: dict[str, Any], schema_type: str, profile: dict[str, Any]) -> list[dict[str, Any]]:
     """Best-effort shape checks for okf type_profiles (e.g. Plan todos)."""
     diagnostics: list[dict[str, Any]] = []
@@ -183,12 +218,14 @@ def validate_type_profile(instance: dict[str, Any], schema_type: str, profile: d
     note_status = profile.get("note_status")
     if isinstance(note_status, list) and "status" in instance:
         if str(instance.get("status")) not in {str(x) for x in note_status}:
+            hint = _profile_status_hint(instance.get("status"), note_status)
             diagnostics.append(
                 _diag(
                     "ERROR",
                     "PROFILE_STATUS",
                     "status",
                     f"status {instance.get('status')!r} not in {note_status}",
+                    hint=hint,
                 )
             )
     return diagnostics

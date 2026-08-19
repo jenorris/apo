@@ -1,0 +1,16 @@
+# Apo mermaid contract — template / example
+# Copy to <vault>/system/contracts/mermaid-contract.schema.yaml and edit.
+
+mermaid_contract_version: "0.1"
+
+catalogs:
+  - match: "diagrams/mermaid-catalog/**/diagram.mmd"
+    catalog_path: "diagrams/mermaid-catalog/catalog.yaml"
+    slug_from: parent_dir
+
+diagrams:
+  - match: "diagrams/mermaid-catalog/**/diagram.mmd"
+    chunk_strategy: nodes_and_edges
+    flatten_template: "{title} > {subgraph} > {node} — {label}"
+    include_edge_chunks: true
+    validation: soft

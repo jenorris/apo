@@ -4,6 +4,16 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-08-19
+
+### Added
+
+- **Mermaid diagram indexing** — `.mmd` files and fenced ` ```mermaid ` blocks in markdown index as `mermaid_file`, `mermaid_header`, `mermaid_node`, and `mermaid_edge` chunks (flattened embed text, catalog join for `diagrams/mermaid-catalog/`). `read_note(chunk_hash=, format=node)` on `mermaid_node` hits. Vault `mermaid-contract` tunables (`chunk_strategy`, `validation` hard/soft/off). `scratchpad(format=mmd)` workshop buffers. Search-eval fixtures for compliance catalog and work fenced diagrams. See [docs/contracts/mermaid-notes.md](docs/contracts/mermaid-notes.md).
+
+### Fixed
+
+- **Scratchpad promote** — JSON/YAML/MMD catalog paths write raw bytes (no OKF frontmatter wrapper); `write_note(scratchpad=)` ignores empty `content=`; `append_eof` merge path; bind_schema envelope atomicity docs.
+
 ## [0.15.2] — 2026-08-19
 
 ### Added

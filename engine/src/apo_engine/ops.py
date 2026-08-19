@@ -45,7 +45,7 @@ from apo_engine.markdown_patch import (
     normalize_lines,
     section_from_chunk,
 )
-from apo_engine.note_format import ensure_indexed_path, is_yaml_note
+from apo_engine.note_format import ensure_indexed_path, is_mmd_note, is_markdown_note, is_yaml_note, matches_scratchpad_catalog_path
 from apo_engine.yaml_patch import apply_yaml_patch
 from apo_engine.chunk_anchor import materialize_ops_chunk_hashes, resolve_chunk_anchor
 from apo_engine.mcp_backend import shape_search_hits
@@ -1179,8 +1179,8 @@ def _read_from_chunk(
 
     if sibling is not None and sibling not in ("prev", "next"):
         return _err(error="bad_request", message="sibling must be 'prev' or 'next'")
-    if format not in ("markdown", "json", "row"):
-        return _err(error="bad_request", message="format must be markdown|json|row")
+    if format not in ("markdown", "json", "row", "node"):
+        return _err(error="bad_request", message="format must be markdown|json|row|node")
 
     with vaults.bind(b):
         chunk = core.lookup_chunk(chunk_hash, include_text=True)
@@ -1302,7 +1302,7 @@ def _read_from_chunk(
         out_sec["content_hash"] = region_content_hash(body) if body else ""
 
     # Structured (opt-in) — default stays markdown to avoid token bloat.
-    if format in ("json", "row"):
+    if format in ("json", "row", "node"):
         _attach_structured_table(out_sec, chunk, rel, file_text, format)
 
     return _stamp_qualified(out_sec, vault=b.name, path=rel)
@@ -1336,6 +1336,48 @@ def _attach_structured_table(
         out_sec["columns"] = dict(zip(table.headers, table.rows[ri]))
         out_sec["row_key"] = chunk.get("row_key") or tm.row_key_for(table, ri)
         out_sec["row_hash"] = tm.row_raw_hash(table.rows[ri])
+        return
+
+    if format == "node":
+        if chunk_kind != "mermaid_node":
+            out_sec["format_warning"] = "format=node only valid on a mermaid_node chunk_hash"
+            return
+        from . import mermaid_parse as mp
+
+        body, _body_line = core._body_start_line(file_text)
+        if rel.endswith(".mmd"):
+            src = file_text
+        else:
+            from . import mermaid_markdown as mm
+
+            diagram_id = str(chunk.get("table_id") or "")
+            block_index = 0
+            if "#mermaid-" in diagram_id:
+                try:
+                    block_index = int(diagram_id.rsplit("#mermaid-", 1)[-1])
+                except ValueError:
+                    block_index = 0
+            fences = mm.find_mermaid_fences(body.split("\n"))
+            fence = next((f for f in fences if f.block_index == block_index), None)
+            if fence is None and fences:
+                fence = fences[0]
+            if fence is None:
+                out_sec["format_warning"] = "mermaid block not found on disk"
+                return
+            src = fence.text
+        diagram = mp.parse_mermaid(src)
+        node_id = chunk.get("row_key") or ""
+        node = next((n for n in diagram.nodes if n.node_id == node_id), None)
+        if node is None:
+            out_sec["format_warning"] = f"node {node_id!r} not found in diagram"
+            return
+        out_sec["format"] = "node"
+        out_sec["node"] = {
+            "id": node.node_id,
+            "label": node.label,
+            "subgraph": node.subgraph,
+        }
+        out_sec["diagram_id"] = chunk.get("table_id")
         return
 
     # format == "json": header/section chunk → whole table.
@@ -2160,6 +2202,22 @@ def _assemble_structured_note(
     return "\n\n".join(parts).rstrip() + "\n"
 
 
+def _write_body_args_provided(
+    *,
+    content: str | None,
+    text: str | None,
+    body: str | None,
+    sections: list[dict[str, Any]] | None,
+    frontmatter: dict[str, Any] | None,
+) -> bool:
+    if sections is not None or frontmatter is not None:
+        return True
+    for val in (content, text, body):
+        if val is not None and str(val).strip():
+            return True
+    return False
+
+
 def write_note(
     path: str,
     content: str | None = None,
@@ -2175,6 +2233,7 @@ def write_note(
     vault: str = "",
     ref: str = "",
     scratchpad: str | None = None,
+    catalog_format: str | None = None,
 ) -> dict[str, Any]:
     bad = _reject_if_ref(ref, tool="write_note")
     if bad:
@@ -2223,14 +2282,26 @@ def write_note(
                     "diagnostics": v["diagnostics"],
                     "session_id": sp_meta.session_id,
                 }
-        if content is not None or text is not None or body is not None or sections is not None:
+        if _write_body_args_provided(
+            content=content,
+            text=text,
+            body=body,
+            sections=sections,
+            frontmatter=frontmatter,
+        ):
             return _err(
                 path=path,
                 error="bad_request",
-                message="pass scratchpad= OR content=/sections=, not both",
+                message=(
+                    "pass path + scratchpad= only (omit content=/text=/sections=/frontmatter=); "
+                    "buffer comes from the spill session"
+                ),
+                tip="write_note(path, scratchpad=<session_id>, vault=…)",
             )
         content = sp_buf
         promote_scratchpad = sp_meta
+        if catalog_format is None:
+            catalog_format = sp_meta.format
     structured = sections is not None or frontmatter is not None
     if structured:
         if body is not None:
@@ -2276,6 +2347,69 @@ def write_note(
         return _err(path=path, error=e.code, message=e.message)
     except ValueError as e:
         return _err(path=path, error="bad_path", message=str(e))
+
+    if is_mmd_note(path) or (is_markdown_note(path) and "```mermaid" in content):
+        from apo_engine.mermaid_validate import should_block_write
+
+        block, mflaws = should_block_write(content, path)
+        if block:
+            return _err(
+                path=path,
+                error="validation_failed",
+                message="mermaid validation failed (hard mode)",
+                flaws=mflaws,
+            )
+
+    raw_fmt = catalog_format or (promote_scratchpad.format if promote_scratchpad else None)
+    if raw_fmt in ("json", "yaml", "mmd") and matches_scratchpad_catalog_path(path, raw_fmt):
+        prior_text = full.read_text(encoding="utf-8") if full.exists() else None
+        if (
+            guard := _guard_write(
+                full,
+                path,
+                vault=b.name,
+                regions=WriteRegions(whole_file=True),
+                expected_mtime=expected_mtime,
+                expected_frontmatter_hash=expected_frontmatter_hash,
+                expected_body_hash=expected_body_hash,
+                expected_content_hash=expected_content_hash,
+                content=prior_text,
+            )
+        ):
+            return guard
+        existed = full.exists()
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(content, encoding="utf-8")
+        _enqueue_index(b, full)
+        out = {
+            "ok": True,
+            "path": path,
+            "action": "overwrote" if existed else "created",
+            "bytes": full.stat().st_size,
+            "mtime": _mtime(full),
+            "vault": b.name,
+            "catalog_format": raw_fmt,
+            "tip": "raw catalog write (no OKF frontmatter wrapper)",
+        }
+        attach_region_hashes(out, content)
+        out = _finalize_write(
+            out,
+            vault=b.name,
+            path=path,
+            expected_mtime=expected_mtime,
+            content=content,
+        )
+        if promote_scratchpad is not None:
+            from apo_engine.scratchpad_store import save_session
+
+            promote_scratchpad.state = "PROMOTED"
+            promote_scratchpad.promoted_path = path
+            promote_scratchpad.destination_path = path
+            promote_scratchpad.vault = b.name
+            save_session(promote_scratchpad, content)
+            out["session_id"] = promote_scratchpad.session_id
+            out["scratchpad_state"] = "PROMOTED"
+        return out
 
     prior_text = full.read_text(encoding="utf-8") if full.exists() else None
     if (
@@ -2493,6 +2627,12 @@ def append_note(
                 "write_note / patch_note(set_field|delete_field)"
             ),
         )
+    if is_mmd_note(path):
+        return _err(
+            path=path,
+            error="unsupported_format",
+            message="append_note is Markdown-only; .mmd diagrams use write_note / patch_note(replace_text)",
+        )
 
     regions = classify_append_regions(
         heading=resolved_heading, from_chunk=from_hash
@@ -2592,6 +2732,16 @@ def append_note(
         out = _attach_tip(
             out, f"append_note: used {alias_key}= alias; prefer text="
         )
+    if scratchpad:
+        from apo_engine.scratchpad_store import save_session
+
+        sp_meta.state = "PROMOTED"
+        sp_meta.promoted_path = path
+        sp_meta.destination_path = path
+        sp_meta.vault = b.name
+        save_session(sp_meta, sp_buf)
+        out["session_id"] = sp_meta.session_id
+        out["scratchpad_state"] = "PROMOTED"
     return out
 
 
@@ -3011,7 +3161,7 @@ def _patch_note_scratchpad(
             error="unsupported_format",
             message=(
                 "patch_note(scratchpad=) is markdown-only; "
-                "use write_note(scratchpad=) or scratchpad(commit) for json/yaml"
+                "use write_note(scratchpad=) or scratchpad(commit) for json/yaml/mmd"
             ),
             session_id=sp_meta.session_id,
         )

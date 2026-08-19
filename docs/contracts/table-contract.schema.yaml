@@ -9,6 +9,7 @@ table_contract_version: "0.1"
 
 # Per-pattern table rules. `match` is a vault-relative path glob; the first match
 # wins. Omit this file entirely to accept engine defaults everywhere.
+# See also docs/contracts/mermaid-notes.md for diagram chunk_kind search habits.
 tables:
   - match: "areas/vehicle/*.md"
     # Column whose value is the stable row_key. Falls back to the first non-empty

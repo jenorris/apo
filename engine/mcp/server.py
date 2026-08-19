@@ -463,7 +463,8 @@ async def write_note(
         str | None,
         Field(
             description=(
-                "Optional scratchpad session_id: use buffer as content= (XOR with content/sections). "
+                "Optional scratchpad session_id: promote spill buffer as note body. "
+                "Omit content=/sections=/frontmatter= (empty content= is ignored). "
                 "Re-validates when the session has a bound schema."
             ),
         ),
@@ -665,7 +666,8 @@ async def read_note(
         Field(
             description=(
                 "chunk_hash mode: markdown (default) | json (whole table as "
-                "{headers, rows}) | row (single table_row as {columns, row_key}). "
+                "{headers, rows}) | row (table_row as {columns, row_key}) | "
+                "node (mermaid_node as {id, label, subgraph, diagram_id}). "
                 "Structured payloads are opt-in to avoid token bloat."
             ),
         ),

@@ -41,6 +41,31 @@ def _is_hit(result_path: str, expect: list[str]) -> bool:
     return False
 
 
+def _score_hit(
+    results: list[dict[str, Any]],
+    *,
+    expect: list[str],
+    expect_chunk_kind: str = "",
+    expect_entity: str = "",
+    cut: int,
+) -> tuple[int | None, dict[str, Any] | None]:
+    """Return (rank, matching_result) for path / chunk_kind / entity constraints."""
+    kind = (expect_chunk_kind or "").strip()
+    entity = (expect_entity or "").strip().lower()
+    for i, r in enumerate(results[:cut], start=1):
+        src = str(r.get("source") or "")
+        if not _is_hit(src, expect):
+            continue
+        if kind and str(r.get("chunk_kind") or "") != kind:
+            continue
+        if entity:
+            text = str(r.get("text") or r.get("content") or r.get("snippet") or "").lower()
+            if entity not in text:
+                continue
+        return i, r
+    return None, None
+
+
 def load_eval_file(path: str | Path) -> dict[str, Any]:
     data = yaml.safe_load(Path(path).expanduser().read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("queries"), list):
@@ -77,13 +102,15 @@ def run_eval(
         if not query or not expect:
             continue
         q_exclude = list(global_exclude) + list(q.get("exclude") or [])
+        expect_entity = str(q.get("expect_entity") or "").strip()
+        snippet = 1 if not expect_entity else 512
         out = ops.search(
             query,
             limit=cut,
             folder=str(q.get("folder") or ""),
             vault=vault_name,
             exclude=q_exclude or None,
-            snippet_chars=1,  # paths only; keep responses tiny
+            snippet_chars=snippet,
         )
         if not out.get("ok"):
             rows.append({"query": query, "error": out.get("error"), "message": out.get("message")})
@@ -92,22 +119,33 @@ def run_eval(
             reranked_any = True
         if out.get("warning"):
             warnings.add(str(out["warning"]))
-        rank = None
-        for i, r in enumerate(out.get("results") or [], start=1):
-            if _is_hit(str(r.get("source") or ""), expect):
-                rank = i
-                break
+        expect_kind = str(q.get("expect_chunk_kind") or "").strip()
+        expect_entity = str(q.get("expect_entity") or "").strip()
+        rank, hit = _score_hit(
+            out.get("results") or [],
+            expect=expect,
+            expect_chunk_kind=expect_kind,
+            expect_entity=expect_entity,
+            cut=cut,
+        )
         if rank is not None:
             hits_at_k += 1
             rr_sum += 1.0 / rank
-        rows.append(
-            {
-                "query": query,
-                "rank": rank,
-                "expect": expect,
-                "top": [str(r.get("source") or "") for r in (out.get("results") or [])[:3]],
-            }
-        )
+        row_detail: dict[str, Any] = {
+            "query": query,
+            "rank": rank,
+            "expect": expect,
+            "top": [str(r.get("source") or "") for r in (out.get("results") or [])[:3]],
+        }
+        if expect_kind:
+            row_detail["expect_chunk_kind"] = expect_kind
+        if expect_entity:
+            row_detail["expect_entity"] = expect_entity
+        if hit:
+            row_detail["hit_chunk_kind"] = hit.get("chunk_kind")
+            row_detail["hit_row_key"] = hit.get("row_key")
+            row_detail["hit_table_id"] = hit.get("table_id")
+        rows.append(row_detail)
 
     n = len(rows)
     scored = [r for r in rows if "error" not in r]
@@ -140,6 +178,11 @@ def format_report(report: dict[str, Any], *, verbose: bool = False) -> str:
             lines.append(f"  ERR  {r['query']!r}: {r['error']} {r.get('message', '')}")
         elif r["rank"] is None:
             lines.append(f"  MISS {r['query']!r} → wanted {r['expect']}; top: {r['top']}")
-        elif verbose:
-            lines.append(f"  ok@{r['rank']} {r['query']!r}")
+        elif verbose and r["rank"] is not None:
+            extra = ""
+            if r.get("hit_chunk_kind"):
+                extra = f" kind={r['hit_chunk_kind']}"
+                if r.get("hit_row_key"):
+                    extra += f" key={r['hit_row_key']!r}"
+            lines.append(f"  ok@{r['rank']} {r['query']!r}{extra}")
     return "\n".join(lines)

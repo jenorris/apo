@@ -82,6 +82,23 @@ read_note(chunk_hash=row, format=row) → expected_row_hash    → patch_note(ro
 - **Row ops require a precondition** — pass `expected_content_hash` (from the search hit) or `expected_row_hash` (from `read_note(format=row)`); a stale hash hard-rejects.
 - **After a row/table write, re-search** (or wait for the watcher) before reading by `chunk_hash` — the response returns `reembed: pending`, not a live searchable hash.
 - **Bulk ingest**: `write_note(sections=[{content_type: csv|json, …}])` for a new note; `patch_note(replace_table, merge=upsert)` for an existing one — fuzzy header mapping rejects ambiguous columns unless `allow_new_columns=true`.
+
+## Diagrams + Mermaid (0.7)
+
+Standalone `.mmd` files and fenced ` ```mermaid ` blocks in markdown index as **`mermaid_*`** chunks (table analog — flattened embed text, not raw syntax):
+
+```
+filter_notes({"okf_type":"Diagram"}, folder="diagrams/mermaid-catalog")
+search_notes(query, folder="diagrams/mermaid-catalog") → mermaid_node hit
+read_note(chunk_hash=…, format=node)   # structured node payload
+```
+
+- **Catalog join** on `diagrams/mermaid-catalog/<slug>/diagram.mmd` — `diagram_id` := catalog slug; see [mermaid-notes.md](contracts/mermaid-notes.md).
+- **Fenced-md** in `.md` notes uses the same chunk kinds; breadcrumb = note title + section heading.
+- **Scratchpad**: `format=mmd` for diagram workshops; promote with `write_note(path, scratchpad=…)`.
+- **Eval**: `search-eval-mermaid-compliance.yaml` + `expect_chunk_kind` / `expect_entity` scoring.
+
+See [mermaid-notes.md](contracts/mermaid-notes.md).
 - **Column renames/adds/drops** go through `alter_table_schema` with `confirm=true` (they re-embed every row).
 
 See [tables.md](tables.md) and [toc-navigation.md](toc-navigation.md) for the full contract.

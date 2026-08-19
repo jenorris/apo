@@ -97,6 +97,8 @@ agent (budget N per turn)
 | `layout.unexpected_folder` | `llm` |
 | `status.body_conflict` | `llm` |
 | `format.trailing_ws` | `auto` |
+| `mermaid.syntax` | `llm` (parse fail / deprecated dialect; `MERMAID_PARSE` / `MERMAID_WARN`) |
+| `mermaid.catalog_missing` | `human` (catalog.yaml slug missing for contracted path) |
 
 `habit.*` stays in `tip` — out of scope for `flaws`.
 

@@ -1,0 +1,18 @@
+flowchart LR
+    subgraph GG["GradGuard"]
+        RProg["Renters Program"]
+        RBill["Billing Info"]
+        RAPI["API"]
+        TProg["Tuition Program"]
+        TBill["Billing Info"]
+        TAPI["API"]
+    end
+    subgraph PROC["Payment processor"]
+        P["Stripe"]
+    end
+    RProg --> RBill
+    RBill --> RAPI
+    RAPI --> P
+    TProg --> TBill
+    TBill --> TAPI
+    TAPI --> P

@@ -64,6 +64,29 @@ class ScratchpadWorkshopTests(unittest.TestCase):
         self.assertTrue(discarded["ok"])
         self.assertIsNone(load_session(sid))
 
+    def test_discard_idempotent(self):
+        created = scratchpad.scratchpad_op("create", format="json", content={})
+        sid = created["session_id"]
+        self.assertTrue(scratchpad.scratchpad_op("discard", session_id=sid)["ok"])
+        again = scratchpad.scratchpad_op("discard", session_id=sid)
+        self.assertTrue(again["ok"])
+        self.assertIsNone(load_session(sid))
+
+    def test_read_buffer_truncation_tip(self):
+        big = "x" * (9 * 1024)
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="markdown",
+            content=f"# Big\n\n{big}\n",
+        )
+        raw = scratchpad.scratchpad_op(
+            "read",
+            session_id=created["session_id"],
+            include=["buffer"],
+        )
+        self.assertIn("tip", raw)
+        self.assertLess(len(raw["buffer"].encode("utf-8")), 9 * 1024)
+
     def test_ill_formed_json_keeps_raw(self):
         created = scratchpad.scratchpad_op(
             "create",
@@ -140,8 +163,8 @@ class ScratchpadValidateTests(unittest.TestCase):
             "type_profiles:\n"
             "  Plan:\n"
             "    todos:\n"
-            "      item_status: [pending, completed]\n"
-            "    note_status: [open, done]\n",
+            "      item_status: [pending, in_progress, completed, cancelled]\n"
+            "    note_status: [draft, active, blocked, done, abandoned]\n",
             encoding="utf-8",
         )
         reg = self.root / "vaults.json"
@@ -281,7 +304,7 @@ class ScratchpadValidateTests(unittest.TestCase):
             "create",
             format="json",
             content={
-                "status": "open",
+                "status": "draft",
                 "todos": [{"id": "1", "content": "do", "status": "pending"}],
             },
             vault="alpha",
@@ -294,6 +317,84 @@ class ScratchpadValidateTests(unittest.TestCase):
             ops=[{"op": "set_field", "field": "status", "value": "nope"}],
         )
         self.assertFalse(bad.get("valid"))
+
+    def test_plan_status_open_hint(self):
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="json",
+            content={"status": "open", "todos": []},
+            vault="alpha",
+            schema_type="Plan",
+        )
+        diags = created.get("diagnostics") or []
+        self.assertTrue(any(d.get("code") == "PROFILE_STATUS" for d in diags))
+        status_diag = next(d for d in diags if d.get("code") == "PROFILE_STATUS")
+        self.assertIn("active", status_diag.get("hint", ""))
+
+    def test_status_includes_profile_allowlists(self):
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="json",
+            content={"status": "draft", "todos": []},
+            vault="alpha",
+            schema_type="Plan",
+        )
+        sid = created["session_id"]
+        st = scratchpad.scratchpad_op("status", session_id=sid)
+        allow = st.get("profile_allowlists") or {}
+        self.assertEqual(
+            allow.get("note_status"),
+            ["draft", "active", "blocked", "done", "abandoned"],
+        )
+        self.assertIn("pending", allow.get("todo_status") or [])
+
+    def test_dual_bind_schema_path_and_type(self):
+        schema_file = self.vault_a / "system" / "schemas" / "widget.schema.json"
+        data = json.loads(schema_file.read_text(encoding="utf-8"))
+        data["properties"]["status"] = {"type": "string"}
+        data["properties"]["todos"] = {"type": "array"}
+        schema_file.write_text(json.dumps(data) + "\n", encoding="utf-8")
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="json",
+            content={
+                "name": "bolt",
+                "qty": 2,
+                "status": "draft",
+                "todos": [{"id": "1", "content": "ship", "status": "pending"}],
+            },
+            vault="alpha",
+            schema_path="system/schemas/widget.schema.json",
+            schema_type="Plan",
+        )
+        self.assertTrue(created.get("valid"), created)
+        sid = created["session_id"]
+        bad = scratchpad.scratchpad_op(
+            "patch",
+            session_id=sid,
+            ops=[{"op": "delete_field", "field": "qty"}],
+        )
+        self.assertFalse(bad.get("valid"))
+        diags = bad.get("diagnostics") or []
+        self.assertTrue(any(d.get("code") == "SCHEMA_ERROR" for d in diags))
+
+    def test_schema_hash_drift_warning(self):
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="json",
+            content={"name": "bolt", "qty": 1},
+            vault="alpha",
+            schema_path="system/schemas/widget.schema.json",
+        )
+        sid = created["session_id"]
+        schema_file = self.vault_a / "system" / "schemas" / "widget.schema.json"
+        data = json.loads(schema_file.read_text(encoding="utf-8"))
+        data["properties"]["note"] = {"type": "string"}
+        schema_file.write_text(json.dumps(data) + "\n", encoding="utf-8")
+        validated = scratchpad.scratchpad_op("validate", session_id=sid, vault="alpha")
+        self.assertTrue(validated.get("valid"))
+        diags = validated.get("diagnostics") or []
+        self.assertTrue(any(d.get("code") == "SCHEMA_CHANGED" for d in diags))
 
 
 class ScratchpadMergeTests(unittest.TestCase):
@@ -314,6 +415,27 @@ class ScratchpadMergeTests(unittest.TestCase):
         merged, conflicts = merge_buffers(fmt="markdown", base=base, ours=ours, theirs=theirs)
         self.assertIsNone(merged)
         self.assertTrue(conflicts)
+
+    def test_append_eof_new_section_merges_without_duplication(self):
+        """append_eof adds a section that must not appear twice after FM-only trunk edits."""
+        base = "---\ntitle: T\n---\n# Hello\none\n"
+        ours = base + "\n## Scratchpad-only section\n\nAdded only in scratchpad.\n"
+        theirs = "---\ntitle: T\nstatus: active\n---\n# Hello\none\n"
+        merged, conflicts = merge_buffers(fmt="markdown", base=base, ours=ours, theirs=theirs)
+        self.assertEqual(conflicts, [])
+        assert merged is not None
+        self.assertEqual(merged.count("Scratchpad-only section"), 1)
+
+    def test_top_level_eof_section_merges_without_duplication(self):
+        base = "# A\nbase-a\n\n# B\nbase-b\n"
+        ours = base + "\n# C\nnew-c\n"
+        theirs = "# A\nbase-a\n\n# B\ntrunk-b\n"
+        merged, conflicts = merge_buffers(fmt="markdown", base=base, ours=ours, theirs=theirs)
+        self.assertEqual(conflicts, [])
+        assert merged is not None
+        self.assertEqual(merged.count("# C"), 1)
+        self.assertIn("trunk-b", merged)
+        self.assertIn("new-c", merged)
 
     def test_frontmatter_delete_conflict(self):
         base = "---\nstatus: open\ntitle: T\n---\n# Body\nx\n"
@@ -419,6 +541,14 @@ class ScratchpadCommitTests(unittest.TestCase):
         (self.vault / "system" / "contracts").mkdir(parents=True)
         (self.vault / "system" / "contracts" / "usage-contract.schema.yaml").write_text(
             "vault_id: work\n", encoding="utf-8"
+        )
+        (self.vault / "system" / "contracts" / "okf-contract.schema.yaml").write_text(
+            "type_profiles:\n"
+            "  Plan:\n"
+            "    todos:\n"
+            "      item_status: [pending, in_progress, completed, cancelled]\n"
+            "    note_status: [draft, active, blocked, done, abandoned]\n",
+            encoding="utf-8",
         )
         note = self.vault / "areas" / "thread.md"
         note.write_text(
@@ -587,6 +717,140 @@ class ScratchpadCommitTests(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"], "bad_request")
 
+    def test_write_note_scratchpad_ignores_empty_content(self):
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="markdown",
+            content="# Only\nspill\n",
+        )
+        sid = created["session_id"]
+        written = ops.write_note(
+            "areas/empty-content-promote.md",
+            content="",
+            scratchpad=sid,
+            vault="work",
+        )
+        self.assertTrue(written["ok"], written)
+        text = (self.vault / "areas" / "empty-content-promote.md").read_text(encoding="utf-8")
+        self.assertIn("spill", text)
+
+    def test_commit_json_catalog_writes_raw(self):
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="json",
+            content={"status": "draft", "todos": []},
+            vault="work",
+            schema_type="Plan",
+        )
+        sid = created["session_id"]
+        committed = scratchpad.scratchpad_op(
+            "commit",
+            session_id=sid,
+            destination_path="areas/plan-handoff.json",
+            vault="work",
+        )
+        self.assertTrue(committed["ok"], committed)
+        raw = (self.vault / "areas/plan-handoff.json").read_text(encoding="utf-8")
+        self.assertFalse(raw.lstrip().startswith("---"))
+        parsed = json.loads(raw)
+        self.assertEqual(parsed.get("status"), "draft")
+
+    def test_commit_mmd_writes_raw(self):
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="mmd",
+            content="flowchart LR\n  A[Alpha] --> B[Beta]\n",
+            vault="work",
+        )
+        sid = created["session_id"]
+        committed = scratchpad.scratchpad_op(
+            "commit",
+            session_id=sid,
+            destination_path="diagrams/workshop/diagram.mmd",
+            vault="work",
+        )
+        self.assertTrue(committed["ok"], committed)
+        raw = (self.vault / "diagrams/workshop/diagram.mmd").read_text(encoding="utf-8")
+        self.assertIn("flowchart LR", raw)
+        self.assertFalse(raw.lstrip().startswith("---"))
+
+    def test_append_note_scratchpad_promote(self):
+        target = self.vault / "areas" / "host.md"
+        target.write_text("# Host\noriginal\n", encoding="utf-8")
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="markdown",
+            content="# Spill\nfrom scratchpad\n",
+        )
+        sid = created["session_id"]
+        appended = ops.append_note(
+            "areas/host.md",
+            scratchpad=sid,
+            vault="work",
+        )
+        self.assertTrue(appended["ok"], appended)
+        self.assertEqual(appended.get("scratchpad_state"), "PROMOTED")
+        text = target.read_text(encoding="utf-8")
+        self.assertIn("original", text)
+        self.assertIn("from scratchpad", text)
+        meta, _ = load_session(sid)  # type: ignore[misc]
+        self.assertEqual(meta.state, "PROMOTED")
+
+    def test_append_note_scratchpad_xor_text(self):
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="markdown",
+            content="# Spill\n",
+        )
+        sid = created["session_id"]
+        bad = ops.append_note(
+            "areas/host.md",
+            text="nope",
+            scratchpad=sid,
+            vault="work",
+        )
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"], "bad_request")
+
+    def test_checkout_append_eof_commit_merge(self):
+        note = self.vault / "areas" / "eof-thread.md"
+        note.write_text(
+            "---\nstatus: open\n---\n# Alpha\none\n\n# Beta\ntwo\n",
+            encoding="utf-8",
+        )
+        co = scratchpad.scratchpad_op(
+            "checkout",
+            vault="work",
+            vault_path="areas/eof-thread.md",
+        )
+        self.assertTrue(co["ok"], co)
+        sid = co["session_id"]
+        patched = scratchpad.scratchpad_op(
+            "patch",
+            session_id=sid,
+            ops=[
+                {
+                    "op": "append_eof",
+                    "text": "\n## Gamma\n\nscratchpad-only\n",
+                }
+            ],
+        )
+        self.assertTrue(patched["ok"], patched)
+        note.write_text(
+            "---\nstatus: done\n---\n# Alpha\none\n\n# Beta\ntwo\n",
+            encoding="utf-8",
+        )
+        committed = scratchpad.scratchpad_op(
+            "commit",
+            session_id=sid,
+            destination_path="areas/eof-thread.md",
+            vault="work",
+        )
+        self.assertTrue(committed["ok"], committed)
+        text = note.read_text(encoding="utf-8")
+        self.assertEqual(text.count("Gamma"), 1)
+        self.assertIn("status: done", text)
+        self.assertIn("scratchpad-only", text)
 
 class ScratchpadRpcRouteTests(unittest.TestCase):
     def test_rpc_route_registered(self):
