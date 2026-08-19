@@ -114,6 +114,59 @@ class SearchContractTests(unittest.TestCase):
         self.assertNotIn("default_exclude", out)
         self.assertIn("noise/log.md", [r["source"] for r in out["results"]])
 
+    def test_folder_exclude_from_contract(self):
+        rel = search_contract.SEARCH_CONTRACT_REL
+        path = self.vault / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "search_contract_version": "0.1",
+                    "folder_exclude": [
+                        {
+                            "folder": "noise",
+                            "exclude": ["noise/log.md"],
+                        }
+                    ],
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        search_contract.clear_default_exclude_cache()
+        out = ops.search("alpha", folder="noise", limit=5)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out.get("default_exclude"), ["noise/log.md"])
+        sources = [r["source"] for r in out["results"]]
+        self.assertNotIn("noise/log.md", sources)
+        self.assertEqual(sources, [])
+
+    def test_folder_exclude_unless_query(self):
+        rel = search_contract.SEARCH_CONTRACT_REL
+        path = self.vault / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "search_contract_version": "0.1",
+                    "folder_exclude": [
+                        {
+                            "folder": "noise",
+                            "exclude": ["noise/log.md"],
+                            "unless_query": ["confluence"],
+                        }
+                    ],
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        search_contract.clear_default_exclude_cache()
+        out = ops.search("alpha confluence", folder="noise", limit=5)
+        self.assertTrue(out["ok"], out)
+        self.assertNotIn("default_exclude", out)
+        self.assertIn("noise/log.md", [r["source"] for r in out["results"]])
+
     def test_history_browse_inherits_vault_default_exclude(self):
         _write_search_contract(self.vault, ["noise/*"])
         search_contract.clear_default_exclude_cache()
