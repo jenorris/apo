@@ -534,6 +534,59 @@ class ScratchpadCommitTests(unittest.TestCase):
         meta, _ = load_session(sid)  # type: ignore[misc]
         self.assertEqual(meta.state, "PROMOTED")
 
+    def test_patch_note_scratchpad_promote(self):
+        co = scratchpad.scratchpad_op(
+            "checkout",
+            vault="work",
+            vault_path="areas/thread.md",
+        )
+        self.assertTrue(co["ok"], co)
+        sid = co["session_id"]
+        trunk = self.vault / "areas" / "thread.md"
+        trunk.write_text(
+            "---\nstatus: open\n---\n# Alpha\none\n\n# Beta\ntrunk-b\n",
+            encoding="utf-8",
+        )
+        patched = ops.patch_entry(
+            path="areas/thread.md",
+            ops=[{"op": "replace_section", "heading": "Alpha", "text": "via-patch\n"}],
+            scratchpad=sid,
+            vault="work",
+        )
+        self.assertTrue(patched["ok"], patched)
+        self.assertEqual(patched.get("scratchpad_state"), "PROMOTED")
+        text = trunk.read_text(encoding="utf-8")
+        self.assertIn("via-patch", text)
+        self.assertIn("trunk-b", text)
+        meta, _ = load_session(sid)  # type: ignore[misc]
+        self.assertEqual(meta.state, "PROMOTED")
+
+    def test_patch_note_rejects_place_with_path(self):
+        out = ops.patch_note(
+            "areas/thread.md",
+            [{"op": "place", "src": "areas/thread.md", "dst": "areas/other.md"}],
+            vault="work",
+        )
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_request")
+        self.assertIn("place-only", out.get("message") or "")
+
+    def test_patch_note_scratchpad_rejects_place(self):
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="markdown",
+            content="# X\ny\n",
+        )
+        sid = created["session_id"]
+        out = ops.patch_entry(
+            path="areas/from-spill.md",
+            ops=[{"op": "place", "src": "a.md", "dst": "b.md"}],
+            scratchpad=sid,
+            vault="work",
+        )
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_request")
+
 
 class ScratchpadRpcRouteTests(unittest.TestCase):
     def test_rpc_route_registered(self):

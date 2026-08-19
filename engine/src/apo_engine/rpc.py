@@ -366,6 +366,7 @@ def _patch(body: dict[str, Any]) -> dict[str, Any]:
         verbose=bool(body.get("verbose")),
         expected_mtime=_opt_float(body, "expected_mtime"),
         vault=str(body.get("vault") or ""),
+        scratchpad=str(body["scratchpad"]) if isinstance(body.get("scratchpad"), str) else None,
         **_region_kwargs(body),
     )
 

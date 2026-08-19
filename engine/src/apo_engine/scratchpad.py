@@ -177,10 +177,10 @@ def scratchpad_op(
             meta.allow_cross_vault_schema = True
         if allow_foreign_schema:
             meta.allow_foreign_schema = True
-        return _commit(
+        return commit_session(
             meta,
             buf,
-            destination_path=destination_path or meta.destination_path,
+            destination_path=destination_path or meta.destination_path or "",
             vault=vault or meta.vault or "",
         )
     return _bad("bad_action", f"unknown scratchpad action {action!r}")
@@ -499,13 +499,14 @@ def _bind_schema(
     return _validate(meta, content)
 
 
-def _commit(
+def commit_session(
     meta: ScratchpadMeta,
     content: str,
     *,
-    destination_path: str | None,
+    destination_path: str,
     vault: str,
 ) -> dict[str, Any]:
+    """Merge-promote spill buffer to a vault path (3-way section/FM merge + CAS)."""
     if not destination_path:
         return _bad("bad_request", "destination_path is required for commit")
     if not vault:

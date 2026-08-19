@@ -2959,6 +2959,132 @@ def _apply_table_ops(
     )
 
 
+def _patch_note_scratchpad(
+    path: str,
+    ops: list[Any] | None,
+    *,
+    scratchpad: str,
+    vault: str = "",
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Apply patch ops to a scratchpad buffer, then merge-commit to path."""
+    from apo_engine.scratchpad import commit_session
+    from apo_engine.scratchpad_format import apply_ops_to_buffer
+    from apo_engine.scratchpad_store import load_session, save_session
+    from apo_engine.scratchpad_validate import validate_session
+    from apo_engine import vaults as _vaults
+
+    if dry_run:
+        return _err(
+            error="bad_request",
+            message=(
+                "dry_run is not supported for patch_note(scratchpad=); "
+                "use scratchpad(patch) then scratchpad(commit)"
+            ),
+        )
+
+    sid = str(scratchpad).strip()
+    hit = load_session(sid)
+    if hit is None:
+        return _err(
+            error="not_found",
+            message=f"scratchpad session {scratchpad!r} not found or expired",
+        )
+    sp_meta, sp_buf = hit
+    if sp_meta.state == "PROMOTED":
+        return _err(
+            error="bad_request",
+            message="scratchpad session already promoted",
+            session_id=sp_meta.session_id,
+        )
+
+    path_s = (path or "").strip()
+    if not path_s:
+        return _err(error="bad_request", message="path is required with scratchpad=")
+
+    default, bindings = _vaults.load_bindings()
+    vname = (vault or sp_meta.vault or default or "").strip()
+    b = bindings.get(vname)
+
+    if sp_meta.format != "markdown":
+        return _err(
+            error="unsupported_format",
+            message=(
+                "patch_note(scratchpad=) is markdown-only; "
+                "use write_note(scratchpad=) or scratchpad(commit) for json/yaml"
+            ),
+            session_id=sp_meta.session_id,
+        )
+
+    dict_ops: list[dict[str, Any]] = []
+    if ops:
+        try:
+            dict_ops = ops_to_dicts(ops)
+        except (TypeError, ValueError) as e:
+            return _err(error="bad_request", message=str(e))
+        if any(o.get("op") == "place" for o in dict_ops):
+            return _err(
+                error="bad_request",
+                message="place ops are not supported with scratchpad= on patch_note",
+                tip="use place-only patch_note(ops=[{op:place,src,dst}], vault=...) without path",
+            )
+
+    buf = sp_buf
+    if dict_ops:
+        new_buf, results, ok = apply_ops_to_buffer(sp_meta.format, buf, dict_ops)
+        if not ok:
+            return _err(
+                error="patch_failed",
+                message="one or more ops failed",
+                results=results,
+                session_id=sp_meta.session_id,
+            )
+        sp_meta.state = "STAGED"
+        save_session(sp_meta, new_buf)
+        buf = new_buf
+
+    if (
+        sp_meta.schema_vault
+        and b is not None
+        and sp_meta.schema_vault != b.name
+        and not sp_meta.allow_cross_vault_schema
+    ):
+        return {
+            "ok": False,
+            "error": "cross_vault_schema",
+            "message": (
+                f"buffer validated with schema_vault={sp_meta.schema_vault!r} "
+                f"but patch_note targets vault={b.name!r}"
+            ),
+            "tip": "Pass allow_cross_vault_schema=true on bind/create, or patch in schema_vault.",
+            "session_id": sp_meta.session_id,
+        }
+
+    if sp_meta.schema_path or sp_meta.schema_type:
+        root = Path(b.root) if b else None
+        v = validate_session(sp_meta, buf, vault_root=root)
+        if not v["valid"]:
+            return {
+                "ok": False,
+                "error": "validation_failed",
+                "message": "scratchpad validation failed before patch_note",
+                "diagnostics": v["diagnostics"],
+                "session_id": sp_meta.session_id,
+            }
+
+    try:
+        b2, rel_path = _resolve_binding_and_rel(path_s, vname)
+    except OpsError as e:
+        return _err(path=path_s, error=e.code, message=e.message)
+    except ValueError as e:
+        return _err(path=path_s, error="bad_path", message=str(e))
+
+    result = commit_session(sp_meta, buf, destination_path=rel_path, vault=b2.name)
+    if result.get("ok"):
+        result["scratchpad_state"] = "PROMOTED"
+    return result
+
+
 def patch_note(
     path: str,
     ops: list[Any],
@@ -2993,6 +3119,17 @@ def patch_note(
         dict_ops = ops_to_dicts(ops)
     except (TypeError, ValueError) as e:
         return _err(path=path, error="bad_request", message=str(e))
+
+    if any(o.get("op") == "place" for o in dict_ops):
+        return _err(
+            path=path,
+            error="bad_request",
+            message=(
+                "place op requires place-only patch_note(ops=[{op:place,src,dst}], vault=...) "
+                "without path"
+            ),
+            tip="omit path when using place; path+ops patch does not support place",
+        )
 
     # Row-keyed table ops take a dedicated, strict path (no markdown section apply).
     if _table_ops_present(dict_ops):
@@ -3191,8 +3328,35 @@ def patch_entry(
     expected_body_hash: str | None = None,
     expected_content_hash: str | None = None,
     vault: str = "",
+    scratchpad: str | None = None,
 ) -> dict[str, Any]:
     """Dispatch single-path ``patch_note`` or multi-path ``patch_notes`` (XOR)."""
+    if scratchpad:
+        if items is not None:
+            return _err(
+                error="bad_request",
+                message="pass scratchpad= with path+ops only, not items[]",
+            )
+        if expected_mtime is not None or any(
+            x is not None
+            for x in (
+                expected_frontmatter_hash,
+                expected_body_hash,
+                expected_content_hash,
+            )
+        ):
+            return _err(
+                error="bad_request",
+                message="expected_mtime / region hashes are not supported with scratchpad=",
+            )
+        return _patch_note_scratchpad(
+            path,
+            ops if isinstance(ops, list) else None,
+            scratchpad=str(scratchpad).strip(),
+            vault=vault,
+            dry_run=dry_run,
+        )
+
     raw_items = items
     if raw_items is not None and hasattr(raw_items, "__iter__") and not isinstance(raw_items, (str, dict)):
         # Normalize Pydantic models from MCP

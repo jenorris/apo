@@ -78,10 +78,11 @@ Secondary: `schema_type=` → that vault’s okf-contract `type_profiles` (e.g. 
 ```text
 write_note(path, scratchpad=<session_id>, vault=…)
 append_note(path, scratchpad=<session_id>, vault=…)
+patch_note(path, scratchpad=<session_id>, ops=[…], vault=…)   # markdown: ops then merge-commit
 scratchpad(action=commit, session_id=…, destination_path=…, vault=…)
 ```
 
-`patch_note` does **not** accept `scratchpad=`. Bound schemas always re-validate before promote.
+`patch_note(scratchpad=)` applies `ops` to the spill buffer then merge-commits to `path` (markdown-only). Bound schemas always re-validate before promote.
 
 ## Related
 

@@ -4,6 +4,16 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-08-19
+
+### Added
+
+- **`patch_note(scratchpad=)`** — apply `ops` to spill buffer then 3-way merge-commit to `path` (markdown-only). MCP + `POST /v1/patch`. Shared `commit_session()` helper for scratchpad commit paths.
+
+### Fixed
+
+- **`patch_note` with `path` + place op** — early `bad_request` with tip to use place-only `patch_note(ops=[{op:place,…}], vault=…)` without `path`.
+
 ## [0.15.1] — 2026-08-18
 
 ### Fixed
