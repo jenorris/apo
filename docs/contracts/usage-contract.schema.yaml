@@ -56,6 +56,10 @@ write_habits:
   - dedupe_search
   - vault_api_routing
   - address_flaws_on_write
+  - filter_diagram_catalog
+  - search_chunk_kind_aware
+  - diagram_validate_before_commit
+  - promote_plan_on_execute
   # - lint_before_conclude
 
 # Authoring dialect + optional render profile (harness / desk projection).

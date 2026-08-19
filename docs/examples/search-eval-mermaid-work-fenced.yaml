@@ -1,0 +1,31 @@
+# Mermaid search eval — Work vault fenced diagrams
+# Copy to ~/.apo/search-eval-mermaid-work-fenced.yaml
+
+vault: work
+k: 3
+
+queries:
+  - query: vault registers mermaid architecture
+    expect: [areas/work/vault-registers.md]
+    expect_chunk_kind: mermaid_node
+
+  - query: gradguard ai workbench plan diagram
+    expect: [projects/gradguard-ai-workbench/plan.md]
+
+  - query: slack status bot flow diagram
+    expect: [system/config/slack-status-bot.md]
+
+  - query: app module git ref pinning plan architecture
+    expect: [areas/gradguard-platform/app-module-git-ref-pinning-plan.md]
+
+  - query: core api memory optimization plan diagram
+    expect: [areas/gradguard-platform/core-api-memory-optimization-plan.md]
+
+  - query: RDS proxy path forward diagram
+    expect: [areas/gradguard-platform/rds-proxy-path-forward.md]
+
+  - query: partner IDP SSO sis architecture
+    expect: [projects/partner-idp-sso/sis-complementary-architecture.md]
+
+  - query: SDLC cycle retrospective diagram
+    expect: [areas/work/sdlc/cycle-retrospective.md]

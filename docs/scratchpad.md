@@ -71,16 +71,20 @@ Secondary: `schema_type=` → that vault’s okf-contract `type_profiles` (e.g. 
 4. Non-overlapping edits auto-merge; same heading both changed → `MERGE_CONFLICT`
 5. CAS re-read; write via `write_note`; session → `PROMOTED` (mutations denied; `read` follows vault)
 
+**JSON / YAML catalog paths:** when buffer `format` matches the destination suffix (`.json`, `.yaml`/`.yml`), promote/commit writes **raw catalog bytes** — no OKF frontmatter wrapper. Markdown destinations still go through OKF as usual.
+
 **Workbench note:** Apo writes registered vault roots (e.g. `~/Notes/Work`, `~/Workbench/compliance`). Scratchpad does **not** replace jj worktrees for compliance SoT — it helps when multiple writers hit the same registered path.
 
 ## Promote without re-emit
 
 ```text
-write_note(path, scratchpad=<session_id>, vault=…)
-append_note(path, scratchpad=<session_id>, vault=…)
+write_note(path, scratchpad=<session_id>, vault=…)     # omit content=/sections=/frontmatter=
+append_note(path, scratchpad=<session_id>, vault=…)    # omit text=
 patch_note(path, scratchpad=<session_id>, ops=[…], vault=…)   # markdown: ops then merge-commit
 scratchpad(action=commit, session_id=…, destination_path=…, vault=…)
 ```
+
+Pass **`path + scratchpad=` only** on `write_note` — empty `content=` is ignored; non-empty body args are rejected. Prefer the **`bind_schema` / `patch` response envelope** over a parallel `status` in the same turn (meta is written atomically; parallel `status` may read pre-bind state).
 
 `patch_note(scratchpad=)` applies `ops` to the spill buffer then merge-commits to `path` (markdown-only). Bound schemas always re-validate before promote.
 

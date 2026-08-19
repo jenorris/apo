@@ -46,6 +46,42 @@ def _section_map(body: str) -> dict[str, str]:
     return out
 
 
+def _trim_nested_from_ancestors(body_map: dict[str, str]) -> dict[str, str]:
+    """Drop descendant chunks duplicated inside an ancestor section span.
+
+    ``append_eof`` can add nested headings that ``split_sections`` indexes both
+    on the parent span (heading through body_end) and as a child breadcrumb key.
+    Emitting both during merge assembly duplicates the nested section.
+    """
+    if not body_map:
+        return body_map
+    out = dict(body_map)
+    keys = list(out.keys())
+    for parent in keys:
+        if parent == "__preamble__":
+            continue
+        parent_chunk = out.get(parent)
+        if not parent_chunk:
+            continue
+        prefix = parent + BREADCRUMB_SEP
+        trimmed = parent_chunk
+        for child in keys:
+            if child == parent or not child.startswith(prefix):
+                continue
+            child_chunk = out.get(child)
+            if not child_chunk:
+                continue
+            needle = child_chunk.rstrip("\n")
+            if needle and needle in trimmed:
+                trimmed = trimmed.replace(needle, "", 1)
+        trimmed = trimmed.rstrip("\n")
+        if trimmed:
+            out[parent] = trimmed + "\n"
+        else:
+            out.pop(parent, None)
+    return out
+
+
 def _merge_maps(
     base: dict[str, str],
     ours: dict[str, str],
@@ -245,6 +281,8 @@ def merge_markdown(base: str, ours: str, theirs: str) -> tuple[str | None, list[
     if conflicts or body_map is None:
         return None, conflicts
 
+    body_map = _trim_nested_from_ancestors(body_map)
+
     # Preserve ours section order when possible
     order = list(_section_map(ours_body).keys())
     for k in body_map:
@@ -266,7 +304,7 @@ def merge_buffers(
 ) -> tuple[str | None, list[dict[str, Any]]]:
     if theirs == base:
         return ours, []
-    if fmt in ("json", "yaml"):
+    if fmt in ("json", "yaml", "mmd"):
         # Whole-file 3-way: if both changed vs base differently → conflict
         if ours != base and theirs != base and ours != theirs:
             return None, [

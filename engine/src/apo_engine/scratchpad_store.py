@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-Format = Literal["markdown", "yaml", "json"]
+Format = Literal["markdown", "yaml", "json", "mmd"]
 State = Literal["ACTIVE", "STAGED", "VALID", "PROMOTED"]
 
 DEFAULT_TTL_S = 24 * 60 * 60
@@ -69,6 +69,8 @@ def buffer_filename(fmt: Format) -> str:
         return "buffer.json"
     if fmt == "yaml":
         return "buffer.yaml"
+    if fmt == "mmd":
+        return "buffer.mmd"
     return "buffer.md"
 
 
@@ -80,11 +82,16 @@ def save_session(meta: ScratchpadMeta, content: str) -> None:
     root = _session_dir(meta.session_id)
     root.mkdir(parents=True, exist_ok=True)
     meta.touch()
-    (root / "meta.json").write_text(
-        json.dumps(meta.to_dict(), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    (root / buffer_filename(meta.format)).write_text(content, encoding="utf-8")
+    buf_path = root / buffer_filename(meta.format)
+    meta_path = root / "meta.json"
+    meta_text = json.dumps(meta.to_dict(), indent=2, sort_keys=True) + "\n"
+    tmp_buf = root / f".{buf_path.name}.tmp"
+    tmp_meta = root / ".meta.json.tmp"
+    # Buffer first, meta last — readers that load meta.json see a consistent pair.
+    tmp_buf.write_text(content, encoding="utf-8")
+    os.replace(tmp_buf, buf_path)
+    tmp_meta.write_text(meta_text, encoding="utf-8")
+    os.replace(tmp_meta, meta_path)
 
 
 def load_session(session_id: str) -> tuple[ScratchpadMeta, str] | None:

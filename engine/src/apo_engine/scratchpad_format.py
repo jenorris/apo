@@ -61,6 +61,10 @@ def normalize_buffer(fmt: Format, content: str | Any) -> tuple[str, list[dict[st
             return "{}\n", diagnostics
         return yaml_rt.dump(data), diagnostics
 
+    if fmt == "mmd":
+        text = "" if content is None else str(content)
+        return text.replace("\r\n", "\n"), diagnostics
+
     # markdown
     text = "" if content is None else str(content)
     text = text.replace("\r\n", "\n")

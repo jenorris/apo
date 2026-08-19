@@ -429,6 +429,12 @@ def lint_note(
             flaws_out.extend(
                 f.as_dict() for f in detect_trailing_ws(text, path=path, vault=vault)
             )
+        from apo_engine.note_format import is_mmd_note
+
+        if is_mmd_note(path) or "```mermaid" in text:
+            from apo_engine.mermaid_validate import validate_mermaid_text
+
+            flaws_out.extend(f.as_dict() for f in validate_mermaid_text(text, path))
     if include_usage:
         flaws_out.extend(
             f.as_dict()

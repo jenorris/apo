@@ -30,6 +30,7 @@ from apo_engine.scratchpad_store import (
 from apo_engine.scratchpad_validate import (
     file_sha256,
     load_json_schema,
+    profile_allowlists,
     resolve_schema_file,
     validate_session,
 )
@@ -51,6 +52,8 @@ def _normalize_format(raw: str | None) -> Format | None:
         return "yaml"
     if v == "json":
         return "json"
+    if v == "mmd":
+        return "mmd"
     return None
 
 
@@ -80,6 +83,19 @@ def _vault_root(vault: str | None) -> tuple[Path | None, str | None, dict[str, A
     if b is None:
         return None, None, _bad("bad_vault", f"unknown vault {name!r}")
     return Path(b.root), b.name, None
+
+
+def _status_extras(meta: ScratchpadMeta) -> dict[str, Any]:
+    extras: dict[str, Any] = {}
+    if not meta.schema_type:
+        return extras
+    root, _, err = _vault_root(meta.vault or "")
+    if err or root is None:
+        return extras
+    allow = profile_allowlists(meta, root)
+    if allow:
+        extras["profile_allowlists"] = allow
+    return extras
 
 
 def scratchpad_op(
@@ -127,17 +143,17 @@ def scratchpad_op(
     if not session_id:
         return _bad("bad_request", "session_id is required for this action")
 
+    if act == "discard":
+        discard_session(session_id)
+        return {"ok": True, "discarded": session_id}
+
     loaded = _load_or_err(session_id)
     if isinstance(loaded, dict):
         return loaded
     meta, buf = loaded
 
     if act == "status":
-        return status_envelope(meta)
-
-    if act == "discard":
-        discard_session(session_id)
-        return {"ok": True, "discarded": session_id}
+        return status_envelope(meta, **_status_extras(meta))
 
     if act == "read":
         return _read(
@@ -447,7 +463,12 @@ def _validate(meta: ScratchpadMeta, content: str) -> dict[str, Any]:
     else:
         meta.state = "STAGED"
     save_session(meta, content)
-    out = status_envelope(meta, valid=result["valid"], diagnostics=result["diagnostics"])
+    out = status_envelope(
+        meta,
+        valid=result["valid"],
+        diagnostics=result["diagnostics"],
+        **_status_extras(meta),
+    )
     return out
 
 
@@ -579,7 +600,12 @@ def commit_session(
 
     from apo_engine import ops as apo_ops
 
-    written = apo_ops.write_note(destination_path, content=merged, vault=vname or "")
+    written = apo_ops.write_note(
+        destination_path,
+        content=merged,
+        vault=vname or "",
+        catalog_format=meta.format,
+    )
     if not written.get("ok"):
         return {
             **status_envelope(meta),

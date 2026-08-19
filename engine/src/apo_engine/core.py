@@ -248,9 +248,53 @@ def _markdown_chunk_rows(text: str, rel: str) -> list[tuple]:
                 )
             )
             ord_counter += 1
+    # Fenced ```mermaid blocks — parallel chunks (table analog).
+    from . import mermaid_markdown as mm
+    from . import mermaid_index as mi
+
+    fences = mm.find_mermaid_fences(body_lines)
+    for fence in fences:
+        abs_start = body_line + fence.start_line + 1  # first content line (1-based)
+        parent_breadcrumb = ""
+        parent_chunk_hash = ""
+        for s_start, s_end, bc, cid in section_spans:
+            if s_start <= abs_start <= s_end:
+                parent_breadcrumb = bc
+                parent_chunk_hash = cid
+        crumbs = [note_title] + [c for c in parent_breadcrumb.split(BREADCRUMB_SEP) if c]
+        mermaid_rows, ord_counter = mi.chunk_mermaid_rows(
+            fence.text,
+            rel,
+            breadcrumb=crumbs,
+            block_index=fence.block_index,
+            abs_start_line=abs_start,
+            parent_chunk_hash=parent_chunk_hash,
+            id_prefix=id_prefix,
+            model_name=model,
+            ord_start=ord_counter,
+        )
+        rows.extend(mermaid_rows)
     return rows
 
 
+def _mmd_chunk_rows(text: str, rel: str, mtime: float | None = None) -> list[tuple]:
+    """Index rows for a standalone ``.mmd`` diagram file."""
+    from . import mermaid_index as mi
+
+    id_prefix = f"mmd:{rel}"
+    model = config.MODEL_NAME
+    fm = mi.merge_frontmatter_for_mmd(text, rel, mtime=mtime)
+    title = str(fm.get("title") or rel.split("/")[-1].replace(".mmd", "").replace("-", " ").title())
+    rows, _ = mi.chunk_mermaid_rows(
+        text,
+        rel,
+        breadcrumb=[title],
+        abs_start_line=1,
+        id_prefix=id_prefix,
+        model_name=model,
+        ord_start=0,
+    )
+    return rows
 
 
 # --------------------------------------------------------------------------- #
@@ -451,10 +495,14 @@ def note_frontmatter(text: str, path: str | Path | None = None) -> dict | None:
     return _parse_frontmatter(text)
 
 
-def note_catalog_json(text: str, rel: str) -> str | None:
+def note_catalog_json(text: str, rel: str, mtime: float | None = None) -> str | None:
     """JSON for ``files.frontmatter``. Empty mapping stores ``{}`` (not NULL)."""
-    from apo_engine.note_format import is_yaml_note, parse_yaml_document
+    from apo_engine.note_format import is_mmd_note, is_yaml_note, parse_yaml_document
 
+    if is_mmd_note(rel):
+        from apo_engine.mermaid_index import merge_frontmatter_for_mmd
+
+        return json.dumps(merge_frontmatter_for_mmd(text, rel, mtime=mtime), default=str)
     if is_yaml_note(rel):
         fm = parse_yaml_document(text)
         if fm is None:
@@ -1228,7 +1276,7 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
             stats.changed += 1
         else:
             stats.added += 1
-        from apo_engine.note_format import chunk_yaml_note, is_yaml_note, parse_yaml_document
+        from apo_engine.note_format import chunk_yaml_note, is_mmd_note, is_yaml_note, parse_yaml_document
 
         if is_yaml_note(rel):
             fm = parse_yaml_document(text) or {}
@@ -1245,6 +1293,10 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
                     (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, chash,
                      len(ctext.encode("utf-8")), None)
                 )
+        elif is_mmd_note(rel):
+            fm_json = note_catalog_json(text, rel, mtime=st.st_mtime)
+            wikilinks = []
+            note_rows = _mmd_chunk_rows(text, rel, mtime=st.st_mtime)
         else:
             fm_json = note_catalog_json(text, rel)
             wikilinks = _extract_wikilinks(text)
@@ -1599,7 +1651,7 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
             file_bytes=file_bytes,
             text=text,
         )
-        from apo_engine.note_format import chunk_yaml_note, is_yaml_note, parse_yaml_document
+        from apo_engine.note_format import chunk_yaml_note, is_mmd_note, is_yaml_note, parse_yaml_document
 
         if is_yaml_note(rel):
             fm = parse_yaml_document(text) or {}
@@ -1615,6 +1667,10 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
                     (plan.rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id,
                      body_hash, len(ctext.encode("utf-8")), None)
                 )
+        elif is_mmd_note(rel):
+            plan.frontmatter_json = note_catalog_json(text, rel, mtime=st_mtime)
+            plan.wikilinks = []
+            plan.pending.extend(_mmd_chunk_rows(text, rel, mtime=st_mtime))
         else:
             plan.frontmatter_json = note_catalog_json(text, rel)
             plan.wikilinks = _extract_wikilinks(text)
@@ -1755,6 +1811,22 @@ def purge_source(full_path: Path) -> bool:
     db.commit()
     return True
 
+
+def _catalog_retrieval_boost(path: str, chunk_kind: str, folder_prefix: str) -> float:
+    """Post-fusion score multiplier for mermaid catalog diagram recall."""
+    if not folder_prefix or "mermaid-catalog" not in folder_prefix.replace("\\", "/"):
+        return 1.0
+    norm = path.replace("\\", "/")
+    boost = 1.0
+    if norm.endswith("/diagram.mmd") or norm.endswith("diagram.mmd"):
+        boost *= 1.18
+    if chunk_kind in ("mermaid_file", "mermaid_header", "mermaid_node", "mermaid_edge"):
+        boost *= 1.10
+    if "/pages/" in norm:
+        boost *= 0.82
+    if chunk_kind == "table_row" and "/pages/" in norm:
+        boost *= 0.75
+    return boost
 
 
 def _compile_excludes(exclude: list[str] | None) -> tuple[list[str], list[re.Pattern[str]]]:
@@ -1914,7 +1986,7 @@ def _build_snippet(
 ) -> str:
     if snippet_chars <= 0:
         return text
-    if chunk_kind in ("table_row", "table_header"):
+    if chunk_kind in ("table_row", "table_header", "mermaid_file", "mermaid_header", "mermaid_node", "mermaid_edge"):
         return text
     excerpt = None
     if db is not None and match and fts_rowids and rid in fts_rowids:
@@ -2069,7 +2141,9 @@ def search(
             continue
         if _path_excluded(path, excl_prefixes, excl_globs):
             continue
-        score = fused[rid] / top
+        score = (fused[rid] / top) * _catalog_retrieval_boost(
+            path, chunk_kind or "section", folder_prefix
+        )
         out_text = _build_snippet(
             text,
             snippet_chars,
@@ -2102,6 +2176,8 @@ def search(
         full_texts.append(text)
         if len(hits) >= collect_n:
             break
+    if folder_prefix and "mermaid-catalog" in folder_prefix.replace("\\", "/") and hits:
+        hits.sort(key=lambda h: h.score, reverse=True)
     if rerank_on and hits:
         hits, status = rerank.rerank_hits(query, hits, k, texts=full_texts)
         _search_rerank.set(status)

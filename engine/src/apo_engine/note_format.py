@@ -12,9 +12,11 @@ from typing import Any
 
 import yaml
 
-NOTE_SUFFIXES = frozenset({".md", ".yaml", ".yml"})
+NOTE_SUFFIXES = frozenset({".md", ".yaml", ".yml", ".mmd"})
 YAML_SUFFIXES = frozenset({".yaml", ".yml"})
+JSON_SUFFIXES = frozenset({".json"})
 MARKDOWN_SUFFIXES = frozenset({".md"})
+MMD_SUFFIXES = frozenset({".mmd"})
 
 # Default ignore extras so machine contracts are not catalog noise.
 DEFAULT_YAML_IGNORE = (
@@ -60,6 +62,28 @@ def is_yaml_note(path: str | Path) -> bool:
 
 def is_markdown_note(path: str | Path) -> bool:
     return suffix_of(path) in MARKDOWN_SUFFIXES
+
+
+def is_mmd_note(path: str | Path) -> bool:
+    return suffix_of(path) in MMD_SUFFIXES
+
+
+def is_json_catalog(path: str | Path) -> bool:
+    return suffix_of(path) in JSON_SUFFIXES
+
+
+def matches_scratchpad_catalog_path(path: str | Path, fmt: str) -> bool:
+    """True when a scratchpad buffer format matches the destination suffix."""
+    sfx = suffix_of(path)
+    if fmt == "json":
+        return sfx in JSON_SUFFIXES
+    if fmt == "yaml":
+        return sfx in YAML_SUFFIXES
+    if fmt == "markdown":
+        return sfx in MARKDOWN_SUFFIXES or sfx == ""
+    if fmt == "mmd":
+        return sfx in MMD_SUFFIXES
+    return False
 
 
 def ensure_indexed_path(rel_path: str) -> str:
