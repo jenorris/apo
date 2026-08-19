@@ -2177,7 +2177,9 @@ def search(
         if len(hits) >= collect_n:
             break
     if folder_prefix and "mermaid-catalog" in folder_prefix.replace("\\", "/") and hits:
-        hits.sort(key=lambda h: h.score, reverse=True)
+        paired = sorted(zip(hits, full_texts), key=lambda p: p[0].score, reverse=True)
+        hits = [p[0] for p in paired]
+        full_texts = [p[1] for p in paired]
     if rerank_on and hits:
         hits, status = rerank.rerank_hits(query, hits, k, texts=full_texts)
         _search_rerank.set(status)

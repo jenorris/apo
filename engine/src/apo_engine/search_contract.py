@@ -81,7 +81,7 @@ def _folder_exclude_globs(
         if not isinstance(rule, dict):
             continue
         when = str(rule.get("folder") or rule.get("when_folder") or "").strip("/")
-        if not when or not (folder == when or folder.startswith(when + "/")):
+        if not when or folder != when:
             continue
         unless = _normalize_exclude_list(rule.get("unless_query"))
         if unless and _query_has_any(query, unless):
