@@ -2,8 +2,7 @@
 # Copy to <vault>/system/contracts/search-contract.schema.yaml and edit.
 # Legacy path system/config/search-contract.schema.yaml still loaded.
 # Runtime: unscoped search_notes / CLI search / RPC /v1/search and history browse
-# when exclude= is omitted and folder= is empty. Never applied when folder= or
-# caller exclude= is set.
+# when exclude= is omitted and folder= is empty. Caller exclude= always wins.
 
 search_contract_version: "0.1"
 
@@ -15,3 +14,12 @@ default_exclude:
   - archives/*
   # - inbox/zettels/*
   # - system/agent-client/*
+
+# Folder-scoped excludes (applied when folder= matches; skipped if unless_query tokens appear).
+# folder_exclude:
+#   - folder: diagrams/mermaid-catalog
+#     exclude:
+#       - diagrams/mermaid-catalog/pages/**
+#     unless_query:
+#       - confluence
+#       - page body

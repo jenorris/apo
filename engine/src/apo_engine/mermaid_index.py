@@ -115,6 +115,58 @@ def mermaid_block_id(rel: str, abs_start: int, block_index: int) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def catalog_search_prefix(cat: dict[str, Any]) -> str:
+    """Slug/title/type tokens prepended to mermaid chunk embed text."""
+    if not cat:
+        return ""
+    parts: list[str] = []
+    slug = str(cat.get("diagram_id") or cat.get("slug") or "").strip()
+    if slug:
+        parts.append(slug)
+        parts.extend(p for p in slug.split("-") if p)
+    title = str(cat.get("title") or "").strip()
+    if title:
+        parts.append(title)
+    dtype = str(cat.get("type") or "").strip()
+    if dtype:
+        parts.append(dtype)
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in parts:
+        key = part.lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(part)
+    return " ".join(out)
+
+
+def _entity_search_tokens(node_id: str, label: str) -> str:
+    """Extra recall tokens for entity-style queries (RAPI, Tuition, …)."""
+    tokens: list[str] = []
+    if node_id:
+        tokens.append(node_id)
+    label = (label or "").strip()
+    if label:
+        tokens.append(label)
+        for word in re.findall(r"[A-Za-z]+", label):
+            if len(word) >= 4 or (word.isupper() and len(word) >= 2):
+                tokens.append(word)
+    seen: set[str] = set()
+    out: list[str] = []
+    for tok in tokens:
+        key = tok.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(tok)
+    return " ".join(out)
+
+
+def _with_search_prefix(prefix: str, text: str) -> str:
+    if prefix and text:
+        return f"{prefix} · {text}"
+    return prefix or text
+
+
 def chunk_mermaid_rows(
     text: str,
     rel: str,
@@ -148,6 +200,7 @@ def chunk_mermaid_rows(
 
     crumbs = list(breadcrumb or [])
     title = crumbs[0] if crumbs else Path(rel).stem.replace("-", " ").title()
+    cat: dict[str, Any] = {}
     if block_index is not None:
         did = diagram_id_for(rel, block_index)
     else:
@@ -155,6 +208,7 @@ def chunk_mermaid_rows(
         title = str(cat.get("title") or title)
         did = str(cat.get("diagram_id") or diagram_id_for(rel))
 
+    catalog_prefix = catalog_search_prefix(cat) if block_index is None else ""
     diagram = mp.parse_mermaid(text)
     rows: list[tuple] = []
     ord_counter = ord_start
@@ -203,13 +257,21 @@ def chunk_mermaid_rows(
         fallback = file_flatten_text(title, diagram) if title else text[:200]
         if not fallback.strip():
             fallback = rel
-        _append(fallback, abs_start_line, "mermaid_file")
+        _append(_with_search_prefix(catalog_prefix, fallback), abs_start_line, "mermaid_file")
         return rows, ord_counter
 
-    _append(file_flatten_text(title, diagram), abs_start_line, "mermaid_file")
+    _append(
+        _with_search_prefix(catalog_prefix, file_flatten_text(title, diagram)),
+        abs_start_line,
+        "mermaid_file",
+    )
 
     if strategy != "file_only":
-        _append(header_flatten_text(title, diagram), abs_start_line, "mermaid_header")
+        _append(
+            _with_search_prefix(catalog_prefix, header_flatten_text(title, diagram)),
+            abs_start_line,
+            "mermaid_header",
+        )
         for ni, node in enumerate(diagram.nodes):
             flat = node_flatten_text(
                 title,
@@ -218,6 +280,9 @@ def chunk_mermaid_rows(
                 node.label or node.node_id,
                 template=template,
             )
+            entity = _entity_search_tokens(node.node_id, node.label or node.node_id)
+            if entity:
+                flat = f"{flat} · {entity}"
             _append(
                 flat,
                 abs_start_line,

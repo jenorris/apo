@@ -1812,6 +1812,22 @@ def purge_source(full_path: Path) -> bool:
     return True
 
 
+def _catalog_retrieval_boost(path: str, chunk_kind: str, folder_prefix: str) -> float:
+    """Post-fusion score multiplier for mermaid catalog diagram recall."""
+    if not folder_prefix or "mermaid-catalog" not in folder_prefix.replace("\\", "/"):
+        return 1.0
+    norm = path.replace("\\", "/")
+    boost = 1.0
+    if norm.endswith("/diagram.mmd") or norm.endswith("diagram.mmd"):
+        boost *= 1.18
+    if chunk_kind in ("mermaid_file", "mermaid_header", "mermaid_node", "mermaid_edge"):
+        boost *= 1.10
+    if "/pages/" in norm:
+        boost *= 0.82
+    if chunk_kind == "table_row" and "/pages/" in norm:
+        boost *= 0.75
+    return boost
+
 
 def _compile_excludes(exclude: list[str] | None) -> tuple[list[str], list[re.Pattern[str]]]:
     """Split exclude globs into path-prefix checks vs compiled fullmatch patterns.
@@ -2125,7 +2141,9 @@ def search(
             continue
         if _path_excluded(path, excl_prefixes, excl_globs):
             continue
-        score = fused[rid] / top
+        score = (fused[rid] / top) * _catalog_retrieval_boost(
+            path, chunk_kind or "section", folder_prefix
+        )
         out_text = _build_snippet(
             text,
             snippet_chars,
@@ -2158,6 +2176,10 @@ def search(
         full_texts.append(text)
         if len(hits) >= collect_n:
             break
+    if folder_prefix and "mermaid-catalog" in folder_prefix.replace("\\", "/") and hits:
+        paired = sorted(zip(hits, full_texts), key=lambda p: p[0].score, reverse=True)
+        hits = [p[0] for p in paired]
+        full_texts = [p[1] for p in paired]
     if rerank_on and hits:
         hits, status = rerank.rerank_hits(query, hits, k, texts=full_texts)
         _search_rerank.set(status)

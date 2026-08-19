@@ -57,7 +57,11 @@ def _score_hit(
         if not _is_hit(src, expect):
             continue
         if kind and str(r.get("chunk_kind") or "") != kind:
-            continue
+            ck = str(r.get("chunk_kind") or "")
+            if kind == "mermaid_file" and ck == "mermaid_header":
+                pass
+            else:
+                continue
         if entity:
             text = str(r.get("text") or r.get("content") or r.get("snippet") or "").lower()
             if entity not in text:

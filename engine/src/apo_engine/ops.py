@@ -740,6 +740,7 @@ def _search_one_vault(
         root,
         caller_exclude=exclude,
         folder_clean=folder_clean,
+        query=query,
     )
     with vaults.bind(b):
         hits = core.search(
@@ -857,6 +858,7 @@ def _search_at_ref(
         root,
         caller_exclude=exclude,
         folder_clean=folder_clean,
+        query=query,
     )
     try:
         with vaults.bind(b):
@@ -2096,6 +2098,7 @@ def history(
         root,
         caller_exclude=exclude,
         folder_clean=folder_clean,
+        query="",
     )
 
     try:

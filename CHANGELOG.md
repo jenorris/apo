@@ -4,6 +4,12 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-08-19
+
+### Added
+
+- **Mermaid catalog search tuning** — `search-contract` `folder_exclude` for scoped catalog queries; catalog slug/title prefix + entity tokens on index chunks; post-fusion retrieval boosts for `diagram.mmd` / `mermaid_*` chunks (demote catalog `pages/` table rows). `search_eval` accepts `mermaid_header` for `expect_chunk_kind: mermaid_file`.
+
 ## [0.16.0] — 2026-08-19
 
 ### Added

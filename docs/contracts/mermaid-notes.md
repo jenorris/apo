@@ -72,12 +72,14 @@ Post-reindex benchmark (2026-08-19, k=3): compliance **54.5%** hit@3 (gate ≥80
 
 ### Tuning options (engine / contract / eval)
 
-1. **Search-contract `default_exclude` (compliance)** — when `folder=diagrams/mermaid-catalog`, exclude `diagrams/mermaid-catalog/pages/**` unless query mentions “confluence” / “page body”. Keeps companion markdown for publish workflow without polluting diagram recall.
-2. **Path suffix boost** — small FTS/embed rerank bump for `**/diagram.mmd` and `chunk_kind in (mermaid_node, mermaid_edge)` under catalog paths (mirror table_row habits).
-3. **Catalog join enrichment** — inject catalog `title`, `type`, and slug aliases into `mermaid_file` + `mermaid_header` chunk text so slug queries (“integrated-api-v2”) hit `.mmd` not only `pages/integrated-api-v2.md`.
-4. **Flatten template tokens** — add synonym tokens at index time (e.g. `Tuition` from `Tuition Program`, `RAPI` from node id) for entity-style queries without loosening eval.
-5. **Eval hygiene** — align `expect_entity` with flattened labels; treat `mermaid_header` as satisfying `mermaid_file` when path matches; optional `exclude: [diagrams/mermaid-catalog/pages/**]` in eval YAML to measure pure `.mmd` recall.
-6. **A/B rerank** — `APO_RERANK=1 just search-eval` after (1)+(2); gate remains ≥80% hit@3 on compliance file.
+**Shipped in Apo 0.16.1:** (1) `folder_exclude`, (2) path/chunk_kind boosts, (3) catalog prefix on file/header chunks, (4) entity tokens on nodes, (5) eval `mermaid_header` ↔ `mermaid_file`.
+
+1. **Search-contract `folder_exclude` (compliance)** — when `folder=diagrams/mermaid-catalog`, exclude `diagrams/mermaid-catalog/pages/**` unless query mentions “confluence” / “page body”. *(compliance PR + Apo 0.16.1)*
+2. **Path suffix boost** — post-fusion multiplier for `**/diagram.mmd` and `mermaid_*` chunks; demote `pages/` table rows. *(Apo 0.16.1)*
+3. **Catalog join enrichment** — slug/title/type prefix on `mermaid_file` / `mermaid_header` chunk text. *(Apo 0.16.1)*
+4. **Flatten template tokens** — entity tokens (`RAPI`, label words) appended to `mermaid_node` chunks. *(Apo 0.16.1)*
+5. **Eval hygiene** — `mermaid_header` satisfies `expect_chunk_kind: mermaid_file`; align `expect_entity` labels in YAML as needed. *(Apo 0.16.1)*
+6. **A/B rerank** — `APO_RERANK=1 just search-eval` if hit@3 still below gate after reindex.
 
 Re-run after each change:
 
