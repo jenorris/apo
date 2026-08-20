@@ -4,6 +4,16 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-08-20
+
+### Added
+
+- **`okf_dry_run` read-only validation** — `okf.okf_dry_run(vault_root, vault_name, contract_yaml)` simulates a proposed `okf-contract.schema.yaml` against the current corpus (reclassifications, new violations, shadowed path rules) without writing anything. Wired into `vault_op(action=okf_dry_run, vault=, contract=)`.
+
+### Changed
+
+- **`APO_VAULTS` env cleanup** — docs, README, contract templates, and source docstrings now describe `APO_COLLECTION_ROOT` / `APO_VAULT_PATHS` / `APO_DEFAULT_VAULT` as the primary multi-vault discovery mechanism; `APO_VAULTS` is consistently relegated to a legacy roots-only compat shim (unchanged behavior, still works). Prose-only — no functional shim code changed.
+
 ## [0.16.1] — 2026-08-19
 
 ### Added
