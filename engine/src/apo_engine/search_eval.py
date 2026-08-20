@@ -4,7 +4,7 @@ The eval file is YAML and lives *outside* the repo (it references your vault's
 paths). See ``docs/examples/search-eval.example.yaml``:
 
 ```yaml
-vault: ""            # optional vault name (APO_VAULTS registry)
+vault: ""            # optional vault name (registry vault_id)
 k: 5                 # cutoff (CLI -k overrides)
 queries:
   - query: "quarterly planning ritual"

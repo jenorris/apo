@@ -13,7 +13,7 @@ AdminHandler = Callable[..., dict[str, Any]]
 _ADMIN_CATALOG: dict[str, dict[str, Any]] = {
     "reload_config": {
         "description": (
-            "Reload APO_VAULTS + runtime JSON overrides into the MCP process and nudge "
+            "Reload the vault discovery registry (APO_COLLECTION_ROOT / APO_VAULT_PATHS / legacy APO_VAULTS) + runtime JSON overrides into the MCP process and nudge "
             "the watcher (wake-registry) to hot-add newly registered vaults. Removals "
             "or root/index path changes still require a watcher restart."
         ),

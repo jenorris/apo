@@ -5,12 +5,12 @@
 # Apo engine does NOT interpret these fields for search/write — harnesses and
 # desk projection consume them. Machine behavior stays in okf/git/… contracts.
 #
-# Determinism: same APO_VAULTS + same usage YAMLs → byte-identical projected
+# Determinism: same vault registry (APO_COLLECTION_ROOT / APO_VAULT_PATHS) + same usage YAMLs → byte-identical projected
 # skill for a given host (cursor | claude | hermes). No LLM in the compile path.
 
 usage_contract_version: "0.1"
 
-# Registry id this file belongs to (should match APO_VAULTS key).
+# Registry id this file belongs to (this is the vault_id the discovery registry uses).
 vault_id: myvault
 
 purpose: >

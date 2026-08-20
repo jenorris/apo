@@ -69,7 +69,7 @@ No separate issue tracker required for “show me open X in folder Y.” Prefer 
 
 **Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard and `apo-engine okf validate|fix|export|ingest`. Legacy `system/config/` still resolves. Templates: [docs/contracts/](docs/contracts/). Desk: `vault(action=merge|project)` + `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
 
-**Multi-vault:** set `APO_VAULTS` to a JSON registry (per-root `index` + `collection`). Tools take `vault=`; watch runs one thread per vault. Foreign OKF bundles can register as **read-only** vaults. See [docs/multi-vault.md](docs/multi-vault.md).
+**Multi-vault:** set `APO_COLLECTION_ROOT` (parent directory of vaults, autoconfigure) and/or `APO_VAULT_PATHS` (explicit roots) plus `APO_DEFAULT_VAULT`. Tools take `vault=`; watch runs one thread per vault. Foreign OKF bundles can register as **read-only** vaults. `APO_VAULTS` (JSON registry) still loads as a legacy roots-only compat shim. See [docs/multi-vault.md](docs/multi-vault.md).
 
 
 ## Features
@@ -239,7 +239,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/library-scribe.md](docs/library-scribe.md) | Library scribe: `flaws[]`, trailing-WS auto-fix, `vault(action=lint)` |
 | [docs/contracts/archival.md](docs/contracts/archival.md) | Archival contract (suggest shipped; auto deferred) |
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
-| [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_VAULTS`) |
+| [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_COLLECTION_ROOT` / `APO_VAULT_PATHS`) |
 | [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC for local gateways (out-of-repo clients) |
 | [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection (`body` + `guidance`) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
