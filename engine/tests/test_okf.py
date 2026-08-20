@@ -326,5 +326,151 @@ class OkfWriteNoteIntegration(unittest.TestCase):
         self.assertFalse((self.root / "projects/x/index.md").exists())
 
 
+class OkfDryRunTests(unittest.TestCase):
+    """okf_dry_run: read-only simulation of a proposed contract against the
+    current corpus. Never writes anything — every assertion here checks
+    output shape, not side effects (there are none)."""
+
+    def setUp(self):
+        okf.clear_contract_cache()
+        self._env = {}
+        for key in ("APO_OKF_CONTRACT", "APO_OKF_ENFORCEMENT"):
+            self._env[key] = os.environ.pop(key, None)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        contract_path = self.root / "system" / "contracts" / "okf-contract.schema.yaml"
+        contract_path.parent.mkdir(parents=True)
+        contract_path.write_text(_MINI_CONTRACT, encoding="utf-8")
+        # One conforming note, one already missing a soft-required field
+        # under the *live* contract (title is core_soft, not core_required,
+        # so this is deliberately not a live violation — see test below).
+        threads = self.root / "areas" / "threads"
+        threads.mkdir(parents=True)
+        # Deliberately no explicit okf_type frontmatter — an existing scalar
+        # always wins over rule inference (_infer_okf_type), so a note that
+        # already has okf_type: Thread stamped would never show up as
+        # "reclassified" no matter what a proposed rule says. Type here is
+        # purely rule-inferred, which is what these tests need to exercise.
+        (threads / "existing.md").write_text(
+            "---\ndescription: an existing thread\ntimestamp: \"2026-01-01T00:00:00Z\"\n---\n\n# Existing\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        okf.clear_contract_cache()
+        self.tmp.cleanup()
+        for key, val in self._env.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+
+    def test_unchanged_contract_has_zero_drift(self):
+        r = okf.okf_dry_run(self.root, "test", _MINI_CONTRACT)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["reclassified"], [])
+        self.assertEqual(r["newly_flawed"], [])
+        self.assertEqual(r["shadowed_rules"], [])
+        self.assertGreaterEqual(r["notes_scanned"], 1)
+
+    def test_reclassification_detected(self):
+        proposed = _MINI_CONTRACT.replace(
+            '  - match: "areas/threads/**/*.md"\n    enforcement: soft\n    okf_type: Thread',
+            '  - match: "areas/threads/**/*.md"\n    enforcement: soft\n    okf_type: Conversation',
+        )
+        self.assertNotEqual(proposed, _MINI_CONTRACT)  # guard against a silent no-op replace
+        r = okf.okf_dry_run(self.root, "test", proposed)
+        self.assertTrue(r["ok"], r)
+        paths = {row["path"] for row in r["reclassified"]}
+        self.assertIn("areas/threads/existing.md", paths)
+        row = next(row for row in r["reclassified"] if row["path"] == "areas/threads/existing.md")
+        self.assertEqual(row["old_okf_type"], "Thread")
+        self.assertEqual(row["new_okf_type"], "Conversation")
+
+    def test_new_required_field_is_newly_flawed_not_shadowed(self):
+        proposed = _MINI_CONTRACT.replace(
+            '  - match: "areas/threads/**/*.md"\n    enforcement: soft\n    okf_type: Thread',
+            '  - match: "areas/threads/**/*.md"\n    enforcement: soft\n    okf_type: Thread\n'
+            '    required_fields: ["priority"]',
+        )
+        r = okf.okf_dry_run(self.root, "test", proposed)
+        self.assertTrue(r["ok"], r)
+        flawed_paths = {row["path"] for row in r["newly_flawed"]}
+        self.assertIn("areas/threads/existing.md", flawed_paths)
+        row = next(row for row in r["newly_flawed"] if row["path"] == "areas/threads/existing.md")
+        fields = {v["field"] for v in row["violations"]}
+        self.assertEqual(fields, {"priority"})
+        self.assertFalse(row["violations"][0]["auto_fillable"])
+
+    def test_exact_duplicate_rule_is_shadowed(self):
+        # Insert right after the existing areas/threads rule (not a blind
+        # string-append — _MINI_CONTRACT ends inside legacy_type_map:, so
+        # appending there would land the new list item inside that mapping
+        # and produce invalid YAML).
+        proposed = _MINI_CONTRACT.replace(
+            '  - match: "areas/threads/**/*.md"\n    enforcement: soft\n    okf_type: Thread',
+            '  - match: "areas/threads/**/*.md"\n    enforcement: soft\n    okf_type: Thread\n'
+            '  - match: "areas/threads/**/*.md"\n    enforcement: soft\n    okf_type: Dead',
+        )
+        r = okf.okf_dry_run(self.root, "test", proposed)
+        self.assertTrue(r["ok"], r)
+        shadowed_matches = {row["match"] for row in r["shadowed_rules"]}
+        self.assertIn("areas/threads/**/*.md", shadowed_matches)
+        # The dead rule never changes real classification — first match still wins.
+        self.assertEqual(r["reclassified"], [])
+
+    def test_narrower_rule_after_broader_rule_is_shadowed(self):
+        proposed = _MINI_CONTRACT.replace(
+            '  - match: "areas/threads/**/*.md"\n    enforcement: soft\n    okf_type: Thread',
+            '  - match: "areas/**/*.md"\n    enforcement: soft\n    okf_type: Area\n'
+            '  - match: "areas/threads/**/*.md"\n    enforcement: soft\n    okf_type: Thread',
+        )
+        r = okf.okf_dry_run(self.root, "test", proposed)
+        self.assertTrue(r["ok"], r)
+        shadowed_matches = {row["match"] for row in r["shadowed_rules"]}
+        self.assertIn("areas/threads/**/*.md", shadowed_matches)
+
+    def test_invalid_yaml_returns_bad_request_not_crash(self):
+        r = okf.okf_dry_run(self.root, "test", "not: [valid: yaml: at all")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"], "bad_request")
+
+    def test_non_mapping_contract_returns_bad_request(self):
+        r = okf.okf_dry_run(self.root, "test", "just_a_plain_scalar_string")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"], "bad_request")
+
+    def test_never_writes_anything(self):
+        before = (self.root / "areas/threads/existing.md").read_text(encoding="utf-8")
+        proposed = _MINI_CONTRACT.replace("okf_type: Thread", "okf_type: Renamed")
+        okf.okf_dry_run(self.root, "test", proposed)
+        after = (self.root / "areas/threads/existing.md").read_text(encoding="utf-8")
+        self.assertEqual(before, after)
+        # And the live contract file on disk is untouched too.
+        live_after = (self.root / "system/contracts/okf-contract.schema.yaml").read_text(encoding="utf-8")
+        self.assertEqual(live_after, _MINI_CONTRACT)
+
+    def test_okf_off_vault_still_reports_new_contract_effects(self):
+        empty_root = Path(tempfile.mkdtemp())
+        try:
+            (empty_root / "areas" / "threads").mkdir(parents=True)
+            (empty_root / "areas/threads/foo.md").write_text(
+                "---\ndescription: x\ntimestamp: \"2026-01-01T00:00:00Z\"\n---\n\n# Foo\n",
+                encoding="utf-8",
+            )
+            r = okf.okf_dry_run(empty_root, "test", _MINI_CONTRACT)
+            self.assertTrue(r["ok"], r)
+            self.assertFalse(r["live_okf_enabled"])
+            paths = {row["path"] for row in r["reclassified"]}
+            self.assertIn("areas/threads/foo.md", paths)
+            row = next(row for row in r["reclassified"] if row["path"] == "areas/threads/foo.md")
+            self.assertIsNone(row["old_okf_type"])
+            self.assertEqual(row["new_okf_type"], "Thread")
+        finally:
+            import shutil
+
+            shutil.rmtree(empty_root, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

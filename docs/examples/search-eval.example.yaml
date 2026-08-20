@@ -7,7 +7,7 @@
 # Scoring: hit@k (any expected path in top k) and MRR@k, through the same
 # ops.search path MCP/RPC clients use. Aim for 20-30 queries you actually ask.
 
-vault: ""   # optional APO_VAULTS name; empty = default vault
+vault: ""   # optional vault_id from the registry; empty = default vault
 k: 5
 
 queries:

@@ -96,7 +96,8 @@ def _load_deferred(collection: str) -> set[str]:
 
 
 def _load_vaults() -> None:
-    """(Re)build the vault registry from APO_VAULTS or legacy single-root env.
+    """(Re)build the vault registry from the discovery env (APO_COLLECTION_ROOT /
+    APO_VAULT_PATHS, legacy APO_VAULTS, or single-root env).
 
     Each vault has its own NOTES_ROOT, INDEX_PATH, and deferred COLLECTION.
     Tool calls pass ``vault=`` (name); empty uses DEFAULT_VAULT.
@@ -112,7 +113,7 @@ def _load_vaults() -> None:
         raise VaultError(f"vault registry error: {e}") from e
 
     # Runtime JSON may still override collection for the *default* vault only
-    # (legacy single-vault desk). Multi-vault collections come from APO_VAULTS.
+    # (legacy single-vault desk). Multi-vault collections come from the discovery registry.
     VAULTS = {}
     for name, b in bindings.items():
         coll = b.collection
@@ -216,7 +217,7 @@ mcp.add_middleware(AgentValidationMiddleware())
 
 def _reload_config_sync() -> dict:
     _load_vaults()
-    # Nudge multi-vault watcher to hot-add any new vaults from APO_VAULTS.
+    # Nudge multi-vault watcher to hot-add any new vaults from the registry.
     try:
         from apo_engine import deferred as index_deferred
 
@@ -1103,7 +1104,7 @@ async def vault(
         str,
         Field(
             description=(
-                "Vault name from APO_VAULTS. Empty: list/merge/project=all; "
+                "Vault name from the discovery registry. Empty: list/merge/project=all; "
                 "contracts=all; describe/stats/lint=default vault."
             ),
         ),

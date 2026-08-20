@@ -4176,12 +4176,16 @@ def vault_op(
     limit: int | None = 50,
     offset: int = 0,
     fix: bool = False,
+    contract: str = "",
 ) -> dict[str, Any]:
-    """Vault management: list | contracts | describe | merge | project | stats | lint.
+    """Vault management: list | contracts | describe | merge | project | stats | lint | okf_dry_run.
 
     Read-only except ``stats`` (habit KPI rollups). ``project`` returns desk ``body`` + ``guidance``.
     ``lint`` emits corpus ``flaws[]`` (archival + note_lint detectors) for one vault.
     ``fix=true`` on lint applies mechanical auto remediations (trailing WS) only.
+    ``okf_dry_run`` (vault=, contract=<proposed okf-contract.schema.yaml text>) simulates
+    that contract against the current corpus and reports what it would reclassify or
+    newly flag — never writes anything, never touches the live contract on disk.
     """
     act = (action or "list").strip().lower()
     if act not in (
@@ -4192,11 +4196,29 @@ def vault_op(
         "project",
         "stats",
         "lint",
+        "okf_dry_run",
     ):
         return _err(
             error="bad_action",
-            message="action must be list|contracts|describe|merge|project|stats|lint",
+            message="action must be list|contracts|describe|merge|project|stats|lint|okf_dry_run",
         )
+
+    if act == "okf_dry_run":
+        if vaults:
+            return _err(
+                error="bad_request",
+                message="okf_dry_run accepts vault= (single vault), not vaults=",
+            )
+        key = (vault or "").strip()
+        try:
+            b = _binding(key) if key else _binding("")
+        except OpsError as e:
+            return _err(error=e.code, message=e.message)
+        if not (contract or "").strip():
+            return _err(error="bad_request", message="okf_dry_run requires contract=<proposed YAML text>")
+        from apo_engine import okf as okf_mod
+
+        return okf_mod.okf_dry_run(b.resolved().root, b.name, contract)
 
     if act == "stats":
         from apo_engine import telemetry_ops
