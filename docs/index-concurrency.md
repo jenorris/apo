@@ -42,6 +42,8 @@ Idle vault scans no longer commit when nothing changed.
 | `APO_WATCH_EVENTS` | `1` | fsevents via `watchdog` (`0` = poll-only) |
 | `APO_WATCH_DEBOUNCE` | `2` | Quiet-seconds before embedding a touched path (FS + deferred queue) |
 | `APO_SEARCH_CANDIDATES` | `24` | Floor for hybrid vec/FTS candidate pool (`max(k*4, this)`) |
+| `APO_EXCLUDE_CANDIDATE_FLOOR` | `500` | Unscoped+exclude: FTS pool floor only (not vec0 `k`) |
+| `APO_EXCLUDE_VEC_K` | `64` | Unscoped+exclude: hard cap on global vec0 KNN neighbors |
 | `APO_QUERY_EMBED_TTL` | `120` | Seconds to reuse identical query embeddings (`0` disables) |
 | `APO_QUERY_EMBED_CACHE` | `64` | Max cached query vectors |
 
@@ -70,6 +72,8 @@ TTL cache ~15ms. To go lower:
 - Repeat identical queries hit the embed TTL cache (near-instant)
 - FTS runs overlapped with the embed call
 - Candidate pool floor is 24 (was hard-coded 50)
+- Unscoped+exclude: FTS widens to ``APO_EXCLUDE_CANDIDATE_FLOOR`` (500); vec0 ``k``
+  stays under ``APO_EXCLUDE_VEC_K`` (64) — do not inherit the FTS floor
 - Optional ONNX (`fastembed`) can cut query embed to ~20ms but hurt ticket-ID ranking —
   switch backend/model ⇒ `just reindex`
 

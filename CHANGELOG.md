@@ -4,6 +4,17 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.17.1] — 2026-08-21
+
+### Fixed
+
+- **Unscoped+exclude search tail latency** — widen the FTS candidate pool (`APO_EXCLUDE_CANDIDATE_FLOOR`, default 500) without forcing global vec0 KNN to the same `k`. Dense neighbors now cap at `APO_EXCLUDE_VEC_K` (default 64), fixing multi-10k-chunk indexes where search p90 was dominated by k=500 vec0 scans.
+- **`__version__` sync** — align `apo_engine.__version__` with `pyproject.toml` (0.17.0 release bumped package metadata only).
+
+### Changed
+
+- **`WATCH_RECONCILE_INTERVAL` default** — 300 → 900 seconds in `config.env.example`.
+
 ## [0.17.0] — 2026-08-20
 
 ### Added

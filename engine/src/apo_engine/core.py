@@ -63,8 +63,28 @@ _FM_KEY_SAFE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # How many embeddings to commit per batch during vault index (matches Ollama batch).
 _EMBED_COMMIT_BATCH = 64
-# Exclude-only searches: widen KNN pool without scanning the whole corpus.
-_EXCLUDE_CANDIDATE_FLOOR = 500
+
+
+def _hybrid_candidate_pools(
+    k: int,
+    *,
+    exclude: bool,
+    folder_prefix: str,
+    total_chunks: int,
+) -> tuple[int, int]:
+    """Return ``(fts_n, vec_n)`` for hybrid retrieval.
+
+    Unscoped exclude widens the FTS pool (``EXCLUDE_CANDIDATE_FLOOR``) so globs can
+    drop noisy paths without under-filling lexical candidates. Dense ``vec0`` KNN
+    stays under ``EXCLUDE_VEC_K`` — it must not inherit the FTS floor (that used to
+    force ``k=500`` over multi-10k chunk indexes and dominated search p90).
+    """
+    base = max(k * 4, config.SEARCH_CANDIDATES)
+    if exclude and not folder_prefix:
+        fts_n = min(total_chunks, max(base, config.EXCLUDE_CANDIDATE_FLOOR))
+        vec_n = min(total_chunks, config.EXCLUDE_VEC_K)
+        return fts_n, vec_n
+    return base, base
 
 
 # --------------------------------------------------------------------------- #
@@ -1600,6 +1620,7 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
     db = writer_connect()
     candidates: list[tuple[str, Path, float]] = []  # rel, path, mtime
     purge_rels: list[str] = []
+    ignore_res = _compile_ignore(_load_ignore())
 
     for raw in sorted(paths, key=lambda p: str(p)):
         full_path = Path(raw).resolve()
@@ -1607,6 +1628,10 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
             rel = full_path.relative_to(root).as_posix()
         except ValueError as e:
             raise ValueError(f"path outside vault root: {full_path}") from e
+        if _is_ignored(rel, ignore_res):
+            # High-churn / vault .indexignore — drop any stale catalog rows.
+            purge_rels.append(rel)
+            continue
         if not full_path.is_file():
             purge_rels.append(rel)
             continue
@@ -2013,7 +2038,8 @@ def search(
     one result set, not across queries.
 
     Folder scopes use path-constrained FTS + exact distance over ``chunks.embedding``
-    (no global vec0 scan). Exclude-only widens the KNN pool modestly, not to corpus size.
+    (no global vec0 scan). Unscoped exclude widens the FTS pool only; dense KNN stays
+    under ``EXCLUDE_VEC_K`` (not the FTS exclude floor).
     """
     _search_degraded.set(None)
     _search_rerank.set(None)
@@ -2023,10 +2049,13 @@ def search(
 
     folder_prefix = folder.replace("\\", "/").strip("/")
     excl_prefixes, excl_globs = _compile_excludes(exclude)
-    n = max(k * 4, config.SEARCH_CANDIDATES)
-    if exclude and not folder_prefix:
-        total_chunks = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        n = min(total_chunks, max(n, _EXCLUDE_CANDIDATE_FLOOR))
+    total_chunks = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    fts_n, vec_n = _hybrid_candidate_pools(
+        k,
+        exclude=bool(exclude),
+        folder_prefix=folder_prefix,
+        total_chunks=int(total_chunks or 0),
+    )
 
     fused: dict[int, float] = {}
     frows: list[tuple] = []
@@ -2048,12 +2077,12 @@ def search(
                                WHERE chunks_fts MATCH ?
                                  AND c.path LIKE ? ESCAPE '\\'
                                ORDER BY rank LIMIT ?""",
-                            (match, _escape_like(folder_prefix) + "/%", n),
+                            (match, _escape_like(folder_prefix) + "/%", fts_n),
                         ).fetchall()
                     else:
                         frows = db.execute(
                             "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
-                            (match, n),
+                            (match, fts_n),
                         ).fetchall()
                 except sqlite3.OperationalError:
                     frows = []
@@ -2070,11 +2099,11 @@ def search(
             return []
     elif folder_prefix:
         prefer = [r[0] for r in frows] if frows else None
-        vrows = _scoped_vector_hits(db, qvec, folder_prefix, n, prefer_ids=prefer)
+        vrows = _scoped_vector_hits(db, qvec, folder_prefix, vec_n, prefer_ids=prefer)
     else:
         vrows = db.execute(
             "SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance",
-            (sqlite_vec.serialize_float32(qvec), n),
+            (sqlite_vec.serialize_float32(qvec), vec_n),
         ).fetchall()
 
     for rank, (rid, _) in enumerate(vrows):

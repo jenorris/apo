@@ -108,6 +108,14 @@ READER_PING_INTERVAL: float = float(os.environ.get("APO_READER_PING", "5"))
 # Hybrid search candidate pool floor (per retriever). Overridden via APO_SEARCH_CANDIDATES.
 SEARCH_CANDIDATES: int = int(os.environ.get("APO_SEARCH_CANDIDATES", "24"))
 
+# Unscoped + exclude: widen the FTS pool so glob excludes still leave enough lexical
+# candidates. Does NOT drive vec0 k — see EXCLUDE_VEC_K.
+EXCLUDE_CANDIDATE_FLOOR: int = int(os.environ.get("APO_EXCLUDE_CANDIDATE_FLOOR", "500"))
+
+# Unscoped + exclude: hard cap on global vec0 KNN neighbors. Keep well below the FTS
+# exclude floor — exact KNN over a large corpus dominates search p90.
+EXCLUDE_VEC_K: int = int(os.environ.get("APO_EXCLUDE_VEC_K", "64"))
+
 # Folder-scoped vector scan: above this chunk count, hybrid search scores FTS hits only
 # (avoids O(folder) Python L2 on huge folders). Override via APO_SCOPED_VECTOR_FULL_SCAN_MAX.
 SCOPED_VECTOR_FULL_SCAN_MAX: int = int(os.environ.get("APO_SCOPED_VECTOR_FULL_SCAN_MAX", "500"))
