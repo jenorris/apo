@@ -74,7 +74,7 @@ _WRITE_HABIT_LINES: dict[str, str] = {
     "filter_memory_type": (
         "- When a vault tags notes by `memory_type` instead of `okf_type`: stamp "
         "`memory_type` / `description` / `timestamp` on concept writes; prefer "
-        "`filter_notes({\"memory_type\": \"…\"}, folder=…)`."
+        "`filter_notes(where={\"memory_type\": \"…\"}, folder=…)`."
     ),
 }
 

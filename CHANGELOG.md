@@ -4,6 +4,12 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.17.3] — 2026-08-21
+
+### Fixed
+
+- **`filter_notes` wire example missing `where=` — third occurrence** — 0.17.2 fixed the `filter_okf_type` habit line and doc examples but missed the sibling `filter_memory_type` habit line (rendered for vaults whose `write_habits` list the `filter_memory_type` id, e.g. Lyra's), which had the identical `filter_notes({"memory_type": "…"}, folder=…)` shape. Now reads `filter_notes(where={"memory_type": "…"}, folder=…)`.
+
 ## [0.17.2] — 2026-08-21
 
 ### Fixed
