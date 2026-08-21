@@ -4,6 +4,12 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.17.2] — 2026-08-21
+
+### Fixed
+
+- **`filter_notes` wire example was missing `where=`** — the desk-projection habit line and every doc example (`README.md`, `docs/agent-throughput.md`, `docs/contracts/okf-bundle.md`, `docs/contracts/mermaid-notes.md`) showed `filter_notes({"okf_type": "…"}, folder=…)`, which reads as a flat top-level kwarg. The tool's actual schema only accepts a `where=` predicate (`additionalProperties: false`), so an agent following the doc literally gets a hard schema-validation error. Traced from a live incident where three identical malformed calls tripped a client-side "MCP server unreachable" circuit breaker, misreported as an Apo outage. All examples now read `filter_notes(where={...}, folder=…)`.
+
 ## [0.17.1] — 2026-08-21
 
 ### Fixed

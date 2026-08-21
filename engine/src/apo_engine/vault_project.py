@@ -27,7 +27,7 @@ _WRITE_HABIT_LINES: dict[str, str] = {
     ),
     "filter_okf_type": (
         "- When a vault has an OKF contract: stamp `okf_type` / `description` / `timestamp` on "
-        "concept writes; prefer `filter_notes({\"okf_type\": \"…\"}, folder=…)`."
+        "concept writes; prefer `filter_notes(where={\"okf_type\": \"…\"}, folder=…)`."
     ),
     "patch_note_wire": (
         "- **`patch_note` wire:** every op needs `\"op\"`; `set_field` uses `field=` not `path`; "
@@ -827,7 +827,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
             lines.append("- Prefer `append_note` / `patch_note` over full-file rewrites; archive via `patch_note` place op.")
         if habits.get("filter_okf_type", True):
             lines.append(
-                "- When a vault has an OKF contract: stamp `okf_type` / `description` / `timestamp` on concept writes; prefer `filter_notes({\"okf_type\": \"…\"}, folder=…)`."
+                "- When a vault has an OKF contract: stamp `okf_type` / `description` / `timestamp` on concept writes; prefer `filter_notes(where={\"okf_type\": \"…\"}, folder=…)`."
             )
         lines.append("")
 

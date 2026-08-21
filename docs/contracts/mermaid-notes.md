@@ -15,7 +15,7 @@ Flattened text is stored in `chunks.text` (not raw Mermaid syntax) — same patt
 
 ## Search habits
 
-1. `filter_notes({"okf_type": "Diagram"}, folder="diagrams/mermaid-catalog")` for catalog browse
+1. `filter_notes(where={"okf_type": "Diagram"}, folder="diagrams/mermaid-catalog")` for catalog browse
 2. `search_notes(query, folder="diagrams/mermaid-catalog")` for semantic node hits
 3. On `mermaid_node` hit: `read_note(chunk_hash=…)` or `read_note(chunk_hash=…, format=node)`
 

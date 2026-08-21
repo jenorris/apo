@@ -73,7 +73,7 @@ Offline twin in Meta: `just okf lint` / `just okf fix`. Corpus lint on MCP: `vau
 ## Agent behaviors
 
 1. On concept `write_note` / meaningful `patch_note`: set `okf_type`, `description`, `timestamp`.
-2. Prefer `filter_notes({"okf_type": "…"}, folder=…)` for typed corpora before opening dashboard/tracker notes.
+2. Prefer `filter_notes(where={"okf_type": "…"}, folder=…)` for typed corpora before opening dashboard/tracker notes.
 3. Non-root `index.md`: **no** concept frontmatter (OKF reserved listing).
 4. MCP tool names stay `*_note` — “concept” is the vocabulary; “note” is the file/tool colloquialism.
 5. After writes: inspect `flaws[]` — `remediation: llm` → one `suggested_op` pass; do not treat `tip` as corpus quality.

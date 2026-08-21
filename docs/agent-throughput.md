@@ -88,7 +88,7 @@ read_note(chunk_hash=row, format=row) → expected_row_hash    → patch_note(ro
 Standalone `.mmd` files and fenced ` ```mermaid ` blocks in markdown index as **`mermaid_*`** chunks (table analog — flattened embed text, not raw syntax):
 
 ```
-filter_notes({"okf_type":"Diagram"}, folder="diagrams/mermaid-catalog")
+filter_notes(where={"okf_type":"Diagram"}, folder="diagrams/mermaid-catalog")
 search_notes(query, folder="diagrams/mermaid-catalog") → mermaid_node hit
 read_note(chunk_hash=…, format=node)   # structured node payload
 ```

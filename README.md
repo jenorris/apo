@@ -57,10 +57,10 @@ Apo indexes **arbitrary YAML frontmatter** (Markdown) and **standalone YAML cata
 
 ```bash
 # examples — any key you put in frontmatter / YAML notes is fair game
-filter_notes({"okf_type": "EvidenceRequest", "status": "open"}, folder="projects/…")
-filter_notes({"status": {"$in": ["blocked", "in-progress"]}}, folder="projects/")
-filter_notes({"okf_type": "Project"}, limit=50)
-filter_notes({"todos": {"$elemMatch": {"status": "pending"}}}, folder="projects/")
+filter_notes(where={"okf_type": "EvidenceRequest", "status": "open"}, folder="projects/…")
+filter_notes(where={"status": {"$in": ["blocked", "in-progress"]}}, folder="projects/")
+filter_notes(where={"okf_type": "Project"}, limit=50)
+filter_notes(where={"todos": {"$elemMatch": {"status": "pending"}}}, folder="projects/")
 ```
 
 **Substrate split:** use **Markdown** for prose, History, session logs, wiki (`append_note`, headings). Use **`.yaml` / `.yml`** for structure-first atoms (queues, inventories, thin typed records) — whole file is the catalog row; patch with `set_field` / `delete_field` (dotted paths, list indices, `[id=…]` selectors). Machine contracts under `system/config/*-contract.schema.yaml` stay out of the catalog by default.
