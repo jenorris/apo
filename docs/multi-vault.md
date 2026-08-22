@@ -84,3 +84,31 @@ Successful reads/writes/search hits also return **`qualified_path`** (`vault:rel
 v1 `patch_note` batches (`items[]`): all prefixed paths must resolve to the **same** vault_id.
 
 Each vault may ship contracts under `system/contracts/` (see [contracts/](./contracts/)).
+
+## Cloning across vaults
+
+Two vault-relative paths in different vaults are rejected by default
+(`patch_note(ops=[{op:place, src, dst}])` → `bad_request: src vault X conflicts with dst vault Y`) —
+`place` moves/copies within one vault only unless you opt in.
+
+**Clone a single note across vaults:** pass `allow_cross_vault=true` on the `place` op, with
+**both** `src` and `dst` carrying an explicit `vault_id:` prefix (leave `vault=` empty — a prefix
+that disagrees with `vault=` is always rejected, prefix vs. prefix is how the two sides differ).
+This is always a **copy** (src is left untouched — never a cross-vault move), OKF-validated
+against the **destination** vault's own contract, with the usual `overwrite=` / `expected_mtime=`
+guards applied to the destination and an optional `fields=` frontmatter merge on the way in (e.g.
+retarget `vault_id`-scoped fields on the clone):
+
+```
+patch_note(ops=[{op: place, src: "lyra:areas/comfyui/set-design/foo.md",
+                 dst: "peni:areas/comfyui/set-design/foo.md",
+                 allow_cross_vault: true}])
+```
+
+**Clone a vault's scaffold** (contracts, config, schemas — not vault content — from one existing
+vault into another, e.g. bootstrapping a new persona vault from a template): `vault(action=clone,
+vault=<from>, to=<to>)`. Copies every file under `from`'s `system/` into `to`'s `system/`,
+preserving relative paths; existing destination files are always skipped (never overwritten —
+remove/rename first to replace one). `dry_run=true` previews the copy/skip list without writing.
+Both `vault=` and `to=` must already be registered vaults — `clone` does not create or register a
+new vault (mkdir the root and add it to the discovery registry first).

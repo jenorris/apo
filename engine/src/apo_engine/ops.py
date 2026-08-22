@@ -3465,6 +3465,7 @@ def _dispatch_place_op(
         fields=fields if isinstance(fields, dict) else None,
         expected_mtime=expected_mtime,
         vault=vault,
+        allow_cross_vault=bool(op.get("allow_cross_vault")),
     )
 
 
@@ -3793,6 +3794,7 @@ def place_note(
     expected_mtime: float | None = None,
     vault: str = "",
     ref: str = "",
+    allow_cross_vault: bool = False,
 ) -> dict[str, Any]:
     """Place a note at ``dst``: move if ``src`` is in the vault, else copy from host.
 
@@ -3800,6 +3802,9 @@ def place_note(
       (same as former ``move_note``; ``fields`` not allowed).
     - Absolute host ``.md`` outside the vault (allow-roots) → ``copied`` / promote
       (same as former ``send_note``; leaves src; optional ``fields`` merge).
+    - ``src``/``dst`` in different vaults → rejected unless ``allow_cross_vault=True``,
+      in which case always ``copied`` (never moved) — src is left untouched, dst is
+      OKF-validated against the *destination* vault's contract, optional ``fields`` merge.
     """
     bad = _reject_if_ref(ref, tool="place_note")
     if bad:
@@ -3815,10 +3820,35 @@ def place_note(
             b_src, raw = _resolve_binding_and_rel(raw, vault)
             b_dst, dst = _resolve_binding_and_rel(dst, vault)
             if b_src.name != b_dst.name:
-                raise OpsError(
-                    "bad_request",
-                    f"src vault {b_src.name!r} conflicts with dst vault {b_dst.name!r}",
+                if not allow_cross_vault:
+                    raise OpsError(
+                        "bad_request",
+                        f"src vault {b_src.name!r} conflicts with dst vault {b_dst.name!r} "
+                        "(pass allow_cross_vault=true to copy across vaults)",
+                    )
+                if fields is not None and not isinstance(fields, dict):
+                    raise OpsError("bad_request", "fields must be an object")
+                src_root = b_src.resolved().root
+                try:
+                    src_full = _safe_resolve(src_root, raw)
+                except ValueError as e:
+                    raise OpsError("bad_path", str(e)) from e
+                if not src_full.is_file():
+                    raise OpsError("not_found", f"source not found: {b_src.name}:{raw}")
+                out = _copy_into_vault(
+                    src_full,
+                    f"{b_src.name}:{raw}",
+                    dst,
+                    b_dst,
+                    overwrite=overwrite,
+                    fields=fields,
+                    expected_mtime=expected_mtime,
                 )
+                if out.get("ok"):
+                    out = dict(out)
+                    out["mode"] = "copy"
+                    out["cross_vault"] = True
+                return out
             b = b_src
         else:
             b, dst = _resolve_binding_and_rel(dst, vault)
@@ -3954,31 +3984,29 @@ def move_note(
     )
 
 
-def send_note(
-    src: str,
+def _copy_into_vault(
+    src_full: Path,
+    src_display: str,
     dst: str,
+    b: "vaults.VaultBinding",
     *,
     overwrite: bool = False,
     fields: dict[str, Any] | None = None,
     expected_mtime: float | None = None,
-    vault: str = "",
 ) -> dict[str, Any]:
-    """Copy a host .md file into the vault (optional frontmatter merge). Leaves src in place."""
+    """Shared body for host->vault and vault->vault copy: read src_full, OKF-validate
+    and write into vault ``b`` at ``dst``. ``src_full`` must already exist and be readable."""
+    root = b.resolved().root
     try:
-        b, dst = _resolve_binding_and_rel(dst, vault)
-        root = b.resolved().root
-        src_full = _resolve_send_src(src, root)
         dst_full = _safe_resolve(root, dst)
-    except OpsError as e:
-        return _err(src=src, dst=dst, error=e.code, message=e.message)
     except ValueError as e:
-        return _err(src=src, dst=dst, error="bad_path", message=str(e))
+        return _err(src=src_display, dst=dst, error="bad_path", message=str(e))
 
     if (guard := _check_mtime(dst_full, expected_mtime, dst)):
-        return {**guard, "src": src, "dst": dst}
+        return {**guard, "src": src_display, "dst": dst}
     if dst_full.exists() and not overwrite:
         return _err(
-            src=src,
+            src=src_display,
             dst=dst,
             error="destination_exists",
             message="pass overwrite=true to replace",
@@ -3987,15 +4015,15 @@ def send_note(
     try:
         content = src_full.read_text(encoding="utf-8")
     except OSError as e:
-        return _err(src=src, dst=dst, error="bad_path", message=f"cannot read src: {e}")
+        return _err(src=src_display, dst=dst, error="bad_path", message=f"cannot read src: {e}")
     except UnicodeDecodeError as e:
-        return _err(src=src, dst=dst, error="bad_path", message=f"src is not utf-8 text: {e}")
+        return _err(src=src_display, dst=dst, error="bad_path", message=f"src is not utf-8 text: {e}")
 
     fields_applied: list[str] = []
     if fields:
         if not isinstance(fields, dict):
             return _err(
-                src=src,
+                src=src_display,
                 dst=dst,
                 error="bad_request",
                 message="fields must be an object of frontmatter key→value",
@@ -4007,7 +4035,7 @@ def send_note(
         result = apply_patch(content, patch_ops, strict=False)
         if not result.ok and result.applied == 0:
             return _err(
-                src=src,
+                src=src_display,
                 dst=dst,
                 applied=result.applied,
                 results=result.results,
@@ -4026,7 +4054,7 @@ def send_note(
     okf_meta = okf.as_response_fields()
     if not okf.ok:
         return _err(
-            src=src,
+            src=src_display,
             dst=dst,
             error=okf.error or "okf_validation",
             message=okf.message or "OKF validation failed",
@@ -4044,7 +4072,7 @@ def send_note(
 
     out: dict[str, Any] = {
         "ok": True,
-        "src": str(src_full),
+        "src": src_display,
         "dst": dst,
         "action": "overwrote" if existed else "created",
         "bytes": dst_full.stat().st_size,
@@ -4061,6 +4089,36 @@ def send_note(
         )
     return _finalize_write(
         out, vault=b.name, path=dst, expected_mtime=expected_mtime, content=to_write
+    )
+
+
+def send_note(
+    src: str,
+    dst: str,
+    *,
+    overwrite: bool = False,
+    fields: dict[str, Any] | None = None,
+    expected_mtime: float | None = None,
+    vault: str = "",
+) -> dict[str, Any]:
+    """Copy a host .md file into the vault (optional frontmatter merge). Leaves src in place."""
+    try:
+        b, dst = _resolve_binding_and_rel(dst, vault)
+        root = b.resolved().root
+        src_full = _resolve_send_src(src, root)
+    except OpsError as e:
+        return _err(src=src, dst=dst, error=e.code, message=e.message)
+    except ValueError as e:
+        return _err(src=src, dst=dst, error="bad_path", message=str(e))
+
+    return _copy_into_vault(
+        src_full,
+        str(src_full),
+        dst,
+        b,
+        overwrite=overwrite,
+        fields=fields,
+        expected_mtime=expected_mtime,
     )
 
 
@@ -4177,15 +4235,23 @@ def vault_op(
     offset: int = 0,
     fix: bool = False,
     contract: str = "",
+    to: str = "",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Vault management: list | contracts | describe | merge | project | stats | lint | okf_dry_run.
+    """Vault management: list | contracts | describe | merge | project | stats | lint | okf_dry_run | clone.
 
-    Read-only except ``stats`` (habit KPI rollups). ``project`` returns desk ``body`` + ``guidance``.
-    ``lint`` emits corpus ``flaws[]`` (archival + note_lint detectors) for one vault.
-    ``fix=true`` on lint applies mechanical auto remediations (trailing WS) only.
+    Read-only except ``stats`` (habit KPI rollups) and ``clone`` (file copy). ``project`` returns
+    desk ``body`` + ``guidance``. ``lint`` emits corpus ``flaws[]`` (archival + note_lint detectors)
+    for one vault. ``fix=true`` on lint applies mechanical auto remediations (trailing WS) only.
     ``okf_dry_run`` (vault=, contract=<proposed okf-contract.schema.yaml text>) simulates
     that contract against the current corpus and reports what it would reclassify or
     newly flag — never writes anything, never touches the live contract on disk.
+    ``clone`` (vault=<from>, to=<to>) copies every file under ``system/`` (contracts, config,
+    schemas — not vault content) from an already-registered vault into another already-registered
+    vault, for scaffolding a new persona/template vault from an existing one. ``dry_run=true``
+    previews the file list without writing. Existing destination files are always skipped (never
+    overwritten) — remove/rename first to replace one. Does not create or register vaults — both
+    ``vault=`` and ``to=`` must already exist in the discovery registry.
     """
     act = (action or "list").strip().lower()
     if act not in (
@@ -4197,10 +4263,11 @@ def vault_op(
         "stats",
         "lint",
         "okf_dry_run",
+        "clone",
     ):
         return _err(
             error="bad_action",
-            message="action must be list|contracts|describe|merge|project|stats|lint|okf_dry_run",
+            message="action must be list|contracts|describe|merge|project|stats|lint|okf_dry_run|clone",
         )
 
     if act == "okf_dry_run":
@@ -4313,6 +4380,58 @@ def vault_op(
         if tips:
             out["tip"] = "; ".join(dict.fromkeys(tips))
         return out
+
+    if act == "clone":
+        if vaults:
+            return _err(
+                error="bad_request",
+                message="clone accepts vault= (single source), not vaults=",
+            )
+        to_key = (to or "").strip()
+        if not to_key:
+            return _err(error="bad_request", message="clone requires to=<destination vault id>")
+        key = (vault or "").strip()
+        try:
+            src_b = _binding(key) if key else _binding("")
+            dst_b = _binding(to_key)
+        except OpsError as e:
+            return _err(error=e.code, message=e.message)
+        if src_b.name == dst_b.name:
+            return _err(error="bad_request", message="clone requires two different vaults")
+        src_root = src_b.resolved().root
+        dst_root = dst_b.resolved().root
+        src_system = src_root / "system"
+        if not src_system.is_dir():
+            return _err(
+                error="not_found",
+                message=f"source vault {src_b.name!r} has no system/ directory",
+            )
+        copied: list[str] = []
+        skipped: list[str] = []
+        for f in sorted(src_system.rglob("*")):
+            if not f.is_file():
+                continue
+            rel = f.relative_to(src_root).as_posix()
+            dst_file = dst_root / rel
+            if dst_file.exists():
+                skipped.append(rel)
+                continue
+            copied.append(rel)
+            if not dry_run:
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                dst_file.write_bytes(f.read_bytes())
+        if not dry_run:
+            for rel in copied:
+                _enqueue_index(dst_b, dst_root / rel)
+        return {
+            "ok": True,
+            "action": "clone",
+            "from": src_b.name,
+            "to": dst_b.name,
+            "dry_run": bool(dry_run),
+            "copied": copied,
+            "skipped_existing": skipped,
+        }
 
     try:
         default_name, bindings = _load_bindings()

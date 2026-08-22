@@ -966,13 +966,18 @@ async def scratchpad(
         Field(
             description=(
                 "create | checkout | read | patch | validate | bind_schema | "
-                "commit | discard | status"
+                "commit | discard | status | duplicate"
             ),
         ),
     ],
     session_id: Annotated[
         str | None,
-        Field(description="Spill session id (required except create/checkout)."),
+        Field(
+            description=(
+                "Spill session id (required except create/checkout). duplicate: the "
+                "source session to fork — the response's session_id is the new clone."
+            ),
+        ),
     ] = None,
     format: Annotated[
         str | None,
@@ -1096,7 +1101,7 @@ async def vault(
         str,
         Field(
             description=(
-                "list | contracts | describe | merge | project | stats | lint"
+                "list | contracts | describe | merge | project | stats | lint | clone"
             ),
         ),
     ] = "list",
@@ -1156,8 +1161,21 @@ async def vault(
             ),
         ),
     ] = False,
+    to: Annotated[
+        str,
+        Field(
+            description=(
+                "clone only: destination vault id (must already exist in the registry — "
+                "clone does not create/register vaults). Required for clone."
+            ),
+        ),
+    ] = "",
+    dry_run: Annotated[
+        bool,
+        Field(description="clone only: preview the file list without writing. Default false."),
+    ] = False,
 ) -> dict:
-    """Vault registry, contracts, desk projection, habit KPIs, and corpus lint."""
+    """Vault registry, contracts, desk projection, habit KPIs, corpus lint, and system/ scaffold clone."""
     return await asyncio.to_thread(
         apo_ops.vault_op,
         action,
@@ -1169,6 +1187,8 @@ async def vault(
         limit=limit,
         offset=offset,
         fix=fix,
+        to=to,
+        dry_run=dry_run,
     )
 
 

@@ -635,6 +635,81 @@ class ScratchpadCommitTests(unittest.TestCase):
         self.assertFalse(denied["ok"])
         self.assertEqual(denied["error"], "promoted")
 
+        # duplicate is the escape hatch this message points to — works from PROMOTED.
+        cloned = scratchpad.scratchpad_op("duplicate", session_id=sid)
+        self.assertTrue(cloned["ok"], cloned)
+        self.assertEqual(cloned["state"], "ACTIVE")
+        self.assertEqual(cloned["cloned_from"], sid)
+        self.assertNotEqual(cloned["session_id"], sid)
+        clone_id = cloned["session_id"]
+
+        # The clone is independently mutable and carries the template's content forward.
+        allowed = scratchpad.scratchpad_op(
+            "patch",
+            session_id=clone_id,
+            ops=[{"op": "set_field", "field": "status", "value": "done"}],
+        )
+        self.assertTrue(allowed["ok"], allowed)
+
+        # Committing the clone to a different path never touches the original trunk file.
+        variant_committed = scratchpad.scratchpad_op(
+            "commit",
+            session_id=clone_id,
+            destination_path="areas/variant.md",
+            vault="work",
+        )
+        self.assertTrue(variant_committed["ok"], variant_committed)
+        variant_text = (self.vault / "areas" / "variant.md").read_text(encoding="utf-8")
+        self.assertIn("status: done", variant_text)
+        self.assertIn("patched-a", variant_text)
+        # Original trunk (from the earlier commit) is untouched by the clone's edits.
+        self.assertNotIn("status: done", trunk.read_text(encoding="utf-8"))
+
+        # Original session is still the same denied/PROMOTED state — duplicate didn't mutate it.
+        still_denied = scratchpad.scratchpad_op(
+            "patch",
+            session_id=sid,
+            ops=[{"op": "set_field", "field": "status", "value": "nope"}],
+        )
+        self.assertFalse(still_denied["ok"])
+        self.assertEqual(still_denied["error"], "promoted")
+
+    def test_duplicate_active_session_forks_independently(self):
+        co = scratchpad.scratchpad_op("checkout", vault="work", vault_path="areas/thread.md")
+        sid = co["session_id"]
+        scratchpad.scratchpad_op(
+            "patch",
+            session_id=sid,
+            ops=[{"op": "replace_section", "heading": "Alpha", "text": "from-original\n"}],
+        )
+        cloned = scratchpad.scratchpad_op("duplicate", session_id=sid)
+        self.assertTrue(cloned["ok"], cloned)
+        clone_id = cloned["session_id"]
+        self.assertNotEqual(clone_id, sid)
+
+        clone_buf = scratchpad.scratchpad_op("read", session_id=clone_id, include=["buffer"])
+        self.assertIn("from-original", clone_buf["buffer"])
+
+        # Patching the clone must not leak back into the source session's buffer.
+        scratchpad.scratchpad_op(
+            "patch",
+            session_id=clone_id,
+            ops=[{"op": "replace_section", "heading": "Alpha", "text": "from-clone\n"}],
+        )
+        original_buf = scratchpad.scratchpad_op("read", session_id=sid, include=["buffer"])
+        self.assertIn("from-original", original_buf["buffer"])
+        self.assertNotIn("from-clone", original_buf["buffer"])
+
+    def test_duplicate_missing_session_not_found(self):
+        out = scratchpad.scratchpad_op("duplicate", session_id="does-not-exist")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "not_found")
+
+    def test_duplicate_requires_session_id(self):
+        out = scratchpad.scratchpad_op("duplicate")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_request")
+
     def test_checkout_rejects_path_escape(self):
         outside = self.root / "secret.txt"
         outside.write_text("nope\n", encoding="utf-8")

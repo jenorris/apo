@@ -9,6 +9,7 @@ import tempfile
 import threading
 import unittest
 import unittest.mock
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -433,6 +434,66 @@ class VaultOpTest(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"], "bad_action")
 
+    def test_clone_copies_system_files_not_content(self):
+        # alpha already has system/contracts/usage-contract.schema.yaml; give it a
+        # second system/ file plus real vault content that must NOT be cloned.
+        (self.a / "system" / "config").mkdir(parents=True)
+        (self.a / "system" / "config" / "notes.md").write_text("hi\n", encoding="utf-8")
+        (self.a / "areas").mkdir(exist_ok=True)
+        (self.a / "areas" / "secret.md").write_text("do not clone\n", encoding="utf-8")
+
+        out = ops.vault_op("clone", vault="alpha", to="beta")
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["from"], "alpha")
+        self.assertEqual(out["to"], "beta")
+        self.assertFalse(out["dry_run"])
+        self.assertIn("system/config/notes.md", out["copied"])
+        self.assertTrue(
+            (self.b / "system" / "config" / "notes.md").is_file()
+        )
+        self.assertFalse((self.b / "areas" / "secret.md").exists())
+        self.assertFalse((self.b / "areas").exists())
+
+    def test_clone_skips_existing_destination_files(self):
+        (self.b / "system" / "contracts").mkdir(parents=True, exist_ok=True)
+        existing = self.b / "system" / "contracts" / "usage-contract.schema.yaml"
+        existing.write_text("vault_id: beta\nuntouched: true\n", encoding="utf-8")
+
+        out = ops.vault_op("clone", vault="alpha", to="beta")
+        self.assertTrue(out["ok"], out)
+        self.assertIn("system/contracts/usage-contract.schema.yaml", out["skipped_existing"])
+        self.assertNotIn("system/contracts/usage-contract.schema.yaml", out["copied"])
+        self.assertIn("untouched: true", existing.read_text(encoding="utf-8"))
+
+    def test_clone_dry_run_writes_nothing(self):
+        # beta already has its own usage-contract.schema.yaml (setUp), so that one
+        # is a skip either way; add a file that's genuinely new to prove dry_run
+        # reports it as "would copy" without actually writing it.
+        (self.a / "system" / "config").mkdir(parents=True)
+        (self.a / "system" / "config" / "notes.md").write_text("hi\n", encoding="utf-8")
+
+        out = ops.vault_op("clone", vault="alpha", to="beta", dry_run=True)
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["dry_run"])
+        self.assertIn("system/config/notes.md", out["copied"])
+        self.assertIn("system/contracts/usage-contract.schema.yaml", out["skipped_existing"])
+        self.assertFalse((self.b / "system" / "config" / "notes.md").exists())
+
+    def test_clone_requires_to(self):
+        out = ops.vault_op("clone", vault="alpha")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_request")
+
+    def test_clone_rejects_same_vault(self):
+        out = ops.vault_op("clone", vault="alpha", to="alpha")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_request")
+
+    def test_clone_unknown_destination(self):
+        out = ops.vault_op("clone", vault="alpha", to="nope")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_vault")
+
     def test_vaults_filter_scopes_list(self):
         out = ops.vault_op("list", vaults=["alpha"])
         self.assertTrue(out["ok"])
@@ -694,6 +755,20 @@ class VaultRpcTest(unittest.TestCase):
         out = self._post("/v1/vault", {"action": "list"})
         self.assertTrue(out["ok"])
         self.assertIn("default", out["vaults"])
+
+    def test_rpc_clone_to_and_dry_run_reach_ops(self):
+        # No second vault registered here — proves `to=`/`dry_run=` are actually
+        # forwarded over the wire (unknown `to=` surfaces ops.vault_op's own
+        # bad_vault, not a body-parsing failure).
+        try:
+            self._post(
+                "/v1/vault", {"action": "clone", "to": "does-not-exist", "dry_run": True}
+            )
+            self.fail("expected an error response")
+        except urllib.error.HTTPError as e:
+            out = json.loads(e.read().decode("utf-8"))
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_vault")
 
 
 if __name__ == "__main__":

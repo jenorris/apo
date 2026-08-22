@@ -3,7 +3,7 @@
 Staging lifecycle for JSON / YAML / Markdown **before** a vault write. One MCP/RPC tool:
 
 ```text
-scratchpad(action=create|checkout|read|patch|validate|bind_schema|commit|discard|status, …)
+scratchpad(action=create|checkout|read|patch|validate|bind_schema|commit|discard|status|duplicate, …)
 ```
 
 Spill lives under `~/.apo/scratchpads/<session_id>/` (override with `APO_SCRATCHPADS_ROOT`). Default TTL is 24h.
@@ -60,6 +60,28 @@ Secondary: `schema_type=` → that vault’s okf-contract `type_profiles` (e.g. 
 
 1. Agent A: create / patch / validate; hand off **`session_id`** (spill survives process restart)
 2. Agent B: `status` + `read(view=handoff)` → patch → optional `commit`
+
+## Scenario C — variants from a known-good template
+
+Adjusting a series of notes off one validated template without re-emitting the body each time, or
+mutating the shared template itself:
+
+1. `checkout(vault=…, vault_path=…)` (or `create`/`commit` to first establish the template) →
+   `session_id` is the template.
+2. Per variant: `duplicate(session_id=<template>)` → a brand-new, independent `session_id` with
+   the same buffer content and **no pinned merge-base** — unlike `checkout`, its first `commit`
+   behaves like a plain create-then-write rather than a 3-way merge against the template's
+   original vault note, so committing each variant to its own brand-new `destination_path` just
+   works (a pinned base would misread "destination doesn't exist yet" as "deleted since base"
+   and raise `MERGE_CONFLICT`). Works even after the template session was `commit`-ed (`PROMOTED`
+   is a legitimate, validated template source — mutation is blocked on the *original* session,
+   not on clones of it).
+3. `patch` the clone's adjustments, then `commit(destination_path=…)` to wherever that variant
+   belongs. Repeat step 2 for the next variant — the template session is never mutated.
+
+`duplicate` only needs `session_id=` (the source to fork); the response's own `session_id` is the
+new clone's. Compare to `checkout`, which forks from a **vault** note — `duplicate` forks from an
+**existing scratchpad buffer**, so no round-trip through the vault is needed between variants.
 
 ## Commit / merge
 

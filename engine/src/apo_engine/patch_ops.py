@@ -210,6 +210,7 @@ class PlaceOp(_OpBase):
     dst: str
     overwrite: bool = False
     fields: dict[str, Any] | None = None
+    allow_cross_vault: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -294,7 +295,8 @@ OPS_FIELD_DESC = (
     "replace_text(find,replace,scope.heading|heading|chunk_hash); "
     "replace_section(heading|target|chunk_hash,text); "
     "append/prepend(text,heading|target|chunk_hash); append_eof(text); "
-    "place(src,dst,overwrite?,fields?) — move/copy (replaces place_note). "
+    "place(src,dst,overwrite?,fields?,allow_cross_vault?) — move/copy (replaces place_note); "
+    "src/dst in different vaults requires allow_cross_vault=true (always copy, never move). "
     "Standalone add → append_note. "
     "Aliases frozen: target≡heading; replace_text heading≡scope.heading; "
     "set_field path≡field; replace_text old_text/new_text≡find/replace; "

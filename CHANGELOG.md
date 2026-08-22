@@ -4,6 +4,32 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-08-21
+
+### Added
+
+- **Cross-vault note copy** — `patch_note(ops=[{op:place, src, dst, allow_cross_vault:true}])` /
+  `place_note(allow_cross_vault=True)` copies a note from one registered vault into another
+  (both `src`/`dst` need an explicit `vault_id:` prefix; `vault=` must stay empty or it conflicts
+  with the prefix). Always a copy — src is left untouched, cross-vault move stays rejected.
+  OKF-validated against the *destination* vault's contract; usual `overwrite=`/`expected_mtime=`
+  guards on the destination; optional `fields=` frontmatter merge on the way in. Same-vault
+  `place` is unchanged and still rejects a src/dst vault mismatch unless this flag is set.
+- **`vault(action=clone, vault=<from>, to=<to>)`** — scaffolds a vault from another already-registered
+  vault by copying every file under `system/` (contracts, config, schemas — never vault content)
+  into the destination. Existing destination files are always skipped, never overwritten.
+  `dry_run=true` previews the copy/skip list without writing. Does not create or register vaults.
+  Formalizes the ad-hoc "clone the contracts by hand" bootstrap previously used for e.g. `peni`
+  from `lyra`.
+- **`scratchpad(action=duplicate, session_id=<source>)`** — forks a scratchpad buffer (any state,
+  including a `commit`-ed `PROMOTED` session — a validated, known-good template is a legitimate
+  source) into a brand-new independent session, for adjusting a series of variants off one
+  template without mutating it or round-tripping the vault between each. Unlike `checkout`, the
+  clone has no pinned merge-base, so committing each variant to its own new `destination_path`
+  behaves like a plain create rather than raising a spurious `MERGE_CONFLICT` on "trunk doesn't
+  exist yet." The prior `PROMOTED`-mutation-denied error message now points here instead of
+  `checkout|create`.
+
 ## [0.17.3] — 2026-08-21
 
 ### Fixed

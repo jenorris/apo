@@ -405,6 +405,7 @@ def _place_body(body: dict[str, Any]) -> dict[str, Any]:
         "src": src.strip(),
         "dst": dst.strip(),
         "overwrite": bool(body.get("overwrite")),
+        "allow_cross_vault": bool(body.get("allow_cross_vault")),
     }
     if isinstance(fields, dict):
         place_op["fields"] = fields
@@ -491,6 +492,8 @@ def _vault(body: dict[str, Any]) -> dict[str, Any]:
         limit=int(body["limit"]) if body.get("limit") is not None else 50,
         offset=int(body["offset"]) if body.get("offset") is not None else 0,
         fix=bool(body.get("fix")),
+        to=str(body.get("to") or ""),
+        dry_run=bool(body.get("dry_run")),
     )
 
 

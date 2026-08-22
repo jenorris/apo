@@ -152,6 +152,9 @@ def scratchpad_op(
         return loaded
     meta, buf = loaded
 
+    if act == "duplicate":
+        return _duplicate(meta, buf)
+
     if act == "status":
         return status_envelope(meta, **_status_extras(meta))
 
@@ -171,7 +174,8 @@ def scratchpad_op(
         return _bad(
             "promoted",
             f"Session {meta.session_id} promoted to {meta.promoted_path!r}. "
-            "Mutation denied. Issue scratchpad(action=checkout|create) to fork.",
+            "Mutation denied. Issue scratchpad(action=duplicate) to fork this buffer, "
+            "or checkout|create to start from the vault/fresh.",
         )
 
     if act == "patch":
@@ -320,6 +324,40 @@ def persist_base_snapshot(session_id: str, content: str) -> None:
     path = _session_base_path(session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _duplicate(meta: ScratchpadMeta, content: str) -> dict[str, Any]:
+    """Fork a session's current buffer into a brand-new, independent session.
+
+    Works from any state (ACTIVE/STAGED/VALID/PROMOTED) — a PROMOTED session is a
+    validated, known-good buffer and a legitimate template source. Unlike ``checkout``,
+    the clone starts with **no pinned merge-base** (``base_content_hash=None``): its
+    first ``commit`` behaves like a plain create-then-write (whatever is currently at
+    ``destination_path``, including nothing, becomes the new base) rather than a 3-way
+    merge against the *source* session's original vault note. That's deliberate — the
+    template case is "adjust and commit each variant to its own new destination_path,"
+    where pinning the old base would misread "destination doesn't exist yet" as
+    "deleted since base" and raise a spurious MERGE_CONFLICT. Source/destination path
+    and schema pins still carry over as defaults; nothing here re-validates until the
+    caller patches/commits.
+    """
+    new_id = new_session_id()
+    new_meta = ScratchpadMeta(
+        session_id=new_id,
+        format=meta.format,
+        state="ACTIVE",
+        vault=meta.vault,
+        schema_path=meta.schema_path,
+        schema_type=meta.schema_type,
+        schema_vault=meta.schema_vault,
+        schema_hash=meta.schema_hash,
+        destination_path=meta.destination_path,
+        source_path=meta.source_path,
+        allow_foreign_schema=meta.allow_foreign_schema,
+        allow_cross_vault_schema=meta.allow_cross_vault_schema,
+    )
+    save_session(new_meta, content)
+    return status_envelope(new_meta, cloned_from=meta.session_id)
 
 
 def _include_payload(
