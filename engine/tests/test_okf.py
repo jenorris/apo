@@ -246,6 +246,136 @@ class OkfStampTests(unittest.TestCase):
         self.assertIn("resource", r.stamped)
         self.assertRegex(r.content, r'resource:\s*"?https://example\.com/a"?')
 
+    def test_stamps_spec_type_alongside_okf_type(self):
+        """SPEC §11 requires a non-empty ``type``; Apo emits it next to okf_type."""
+        r = okf.process_concept(
+            vault_root=self.root,
+            rel_path="areas/threads/foo.md",
+            content="# Foo thread\n\nbody\n",
+        )
+        self.assertTrue(r.ok)
+        self.assertIn("okf_type", r.stamped)
+        self.assertIn("type", r.stamped)
+        self.assertIn("okf_type: Thread", r.content)
+        self.assertRegex(r.content, r"(?m)^type:\s*\"?Thread\"?$")
+
+    def test_spec_type_fill_preserves_legacy_type_value(self):
+        """``fill`` never clobbers a vault's legacy ``type`` taxonomy."""
+        content = (
+            "---\ntype: project\ntitle: X\ndescription: kept\n"
+            "timestamp: 2026-01-01T00:00:00Z\n---\n\n# X\n"
+        )
+        r = okf.process_concept(
+            vault_root=self.root,
+            rel_path="areas/threads/foo.md",
+            content=content,
+        )
+        self.assertTrue(r.ok)
+        self.assertNotIn("type", r.stamped)
+        self.assertRegex(r.content, r"(?m)^type:\s*project$")
+        # okf_type still resolves from the path rule
+        self.assertEqual(r.okf_type, "Thread")
+
+    def test_spec_type_mirror_overwrites_legacy(self):
+        contract = self.root / "system" / "config" / "okf-contract.schema.yaml"
+        contract.write_text(
+            _MINI_CONTRACT + '\nspec_type_policy: "mirror"\n', encoding="utf-8"
+        )
+        okf.clear_contract_cache()
+        content = (
+            "---\ntype: project\ntitle: X\ndescription: kept\n"
+            "timestamp: 2026-01-01T00:00:00Z\n---\n\n# X\n"
+        )
+        r = okf.process_concept(
+            vault_root=self.root,
+            rel_path="areas/threads/foo.md",
+            content=content,
+        )
+        self.assertTrue(r.ok)
+        self.assertIn("type", r.stamped)
+        self.assertRegex(r.content, r"(?m)^type:\s*\"?Thread\"?$")
+
+    def test_spec_type_policy_off_env(self):
+        os.environ["APO_OKF_SPEC_TYPE"] = "off"
+        try:
+            r = okf.process_concept(
+                vault_root=self.root,
+                rel_path="areas/threads/foo.md",
+                content="# Foo thread\n\nbody\n",
+            )
+            self.assertNotIn("type", r.stamped)
+            self.assertNotRegex(r.content, r"(?m)^type:")
+        finally:
+            os.environ.pop("APO_OKF_SPEC_TYPE", None)
+
+    def test_stamped_output_passes_okf_profile_validation(self):
+        """Round-trip: what Apo stamps must satisfy SPEC §11."""
+        r = okf.process_concept(
+            vault_root=self.root,
+            rel_path="areas/threads/foo.md",
+            content="# Foo thread\n\nbody\n",
+        )
+        report = okf.validate_concept(
+            vault_root=self.root,
+            rel_path="areas/threads/foo.md",
+            content=r.content,
+            profile="okf",
+        )
+        self.assertTrue(report.ok, report.violations)
+
+    def test_okf_profile_is_weaker_than_apo_profile(self):
+        """Missing description/timestamp fails the producer profile, not the spec."""
+        content = "---\ntype: Thread\nokf_type: Thread\n---\n\n# Foo\n"
+        spec = okf.validate_concept(
+            vault_root=self.root,
+            rel_path="areas/threads/foo.md",
+            content=content,
+            profile="okf",
+        )
+        self.assertTrue(spec.ok, spec.violations)
+
+        strict = okf.validate_concept(
+            vault_root=self.root,
+            rel_path="areas/threads/foo.md",
+            content=content,
+            profile="apo",
+        )
+        self.assertFalse(strict.ok)
+        fields = {v["field"] for v in strict.violations}
+        self.assertIn("description", fields)
+        self.assertIn("timestamp", fields)
+
+    def test_okf_profile_flags_missing_type(self):
+        content = "---\nokf_type: Thread\ndescription: d\ntimestamp: 2026-01-01T00:00:00Z\n---\n\n# Foo\n"
+        report = okf.validate_concept(
+            vault_root=self.root,
+            rel_path="areas/threads/foo.md",
+            content=content,
+            profile="okf",
+        )
+        self.assertFalse(report.ok)
+        self.assertEqual(report.violations[0]["field"], "type")
+
+    def test_okf_profile_flags_missing_frontmatter(self):
+        report = okf.validate_concept(
+            vault_root=self.root,
+            rel_path="areas/threads/foo.md",
+            content="# Foo\n\nbody\n",
+            profile="okf",
+        )
+        self.assertFalse(report.ok)
+        self.assertEqual(report.violations[0]["field"], "frontmatter")
+
+    def test_okf_profile_flags_reserved_frontmatter(self):
+        report = okf.validate_concept(
+            vault_root=self.root,
+            rel_path="projects/foo/index.md",
+            content="---\ntitle: nope\n---\n\n# Index\n",
+            profile="okf",
+        )
+        self.assertFalse(report.ok)
+        self.assertEqual(report.violations[0]["expected"], "absent")
+
     def test_as_response_fields(self):
         r = okf.OkfResult(
             content="x",

@@ -5,7 +5,9 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 ## [Unreleased]
 
 Tool-call telemetry can now be exported as OpenTelemetry spans, so per-session
-analysis is possible for the first time.
+analysis is possible for the first time. Apo also now produces conformant
+OKF bundles and reads both v0.1 and v0.2 — see `docs/contracts/okf-bundle.md`
+for the field-by-field compatibility table.
 
 ### Added
 
@@ -14,11 +16,21 @@ analysis is possible for the first time.
 - **`both` fan-out backend** for the DuckDB→OTLP cutover: spans start flowing before the read path moves, so there is never a window with no telemetry surface. A failing sink cannot take down another, or the tool call.
 - **Process-scoped session id fallback.** `conversation_id` was NULL on 100% of recorded calls, because clients are expected to supply one via MCP `_meta` or an `_apo` arg block and Claude Code sends neither (the only shipped injector is a Cursor hook). Under stdio, Apo is spawned as one subprocess per client session — so the process *is* the session, making a process-scoped id correct rather than merely convenient. Explicit `_meta`/`_apo` ids still win; `APO_SESSION_ID` overrides. Does **not** hold for a long-lived HTTP/SSE server shared by several clients.
 - **Cross-vault link lint, skill-reference check, two-tier desk projection.** `note_lint.detect_broken_links` resolves a `vault_id:rel`-prefixed wikilink against that vault's own index (`link.unknown_vault` flaw for an unregistered id); `note_lint.detect_skill_references` flags a prose skill mention not in a caller-supplied `known_skills` list (`link.unknown_skill`), wired into `vault(action=lint)` and `scratchpad(action=validate)`; `vault(action=project, mode=index)` renders a compact always-loaded pointer surface (vault table + a directive to call `project` again per vault) for baking into static files without inflating them as per-vault detail grows.
+- **`apo-engine okf validate | fix | init | export | ingest`** — one OKF implementation. `vault-tools/tools/okf/` previously carried a second copy with its own frontmatter parser and its own type map; those scripts are now shims over the engine. Only `--regenerate-indexes` is still implemented there (§6 listings, no type logic to drift).
+- **Two validation profiles.** `--profile okf` is SPEC §11 conformance exactly and deliberately does *not* require `description` / `timestamp`, since §11 forbids a consumer rejecting a bundle for missing optional fields. `--profile apo` (default) keeps the stricter house producer profile.
+- **`spec_type_policy: fill | mirror | off`** (env `APO_OKF_SPEC_TYPE`). Default `fill` writes `type` only when absent, so vaults using `type` as a legacy taxonomy keep their own values and stay conformant on them.
+- **OKF v0.2 read support.** `okf.py` became a package with `v0_1` / `v0_2` readers behind `okf.read_concept()`, which runs both so the §13.1 fallbacks work: `generated.at` else `timestamp`, `sources` else a `# Citations` body list. Also the §11 bare-`verified`-mapping rule, the §7 actor convention, `status` / `stale_after` lifecycle, and the shared `usage_window` framing sources beneath it.
+- **`generated_policy: off | forward`** (env `APO_OKF_GENERATED`) — forward-only `generated: {by, at}` emission. Existing notes are never backfilled: the engine does not know who generated content it did not write, and `generated.by` is what the trust family keys on.
+- **Read-only vaults.** `"read_only": true` in an `APO_VAULTS` entry makes a vault searchable but rejects every write op with `read_only_vault`. This is what backs `okf ingest`, which registers an external bundle as its own read-only vault rather than copying foreign notes into your vault root.
+- **A documented read-after-write visibility bound.** MCP never writes `index.db`, so a write is durable immediately but searchable only after the watcher runs — previously with no bound written down anywhere. `ops.index_visibility()` computes it from live config and `memory_status` reports it. It is a *scheduling* bound; `embed()` is extra, and callers needing certainty must poll rather than sleep.
 
 ### Fixed
 
 - **Unknown `store.backend` values were coerced to `embedded` in silence.** That is how the shipped contract's `backend: duckdb` — never a valid value — went unnoticed. Unrecognised values now warn; `duckdb` and `local` are accepted aliases for `embedded`.
 - **Spans queued at shutdown were lost.** MCP clients terminate stdio servers with a signal, and `atexit` does not run on one, so the final (frequently the only) spans of a session never left the process. Flush is now also driven from a SIGTERM/SIGINT handler that chains to the previous one; the batch delay dropped 5s → 1s.
+- **No Apo-stamped vault was a conformant OKF bundle.** SPEC §11 requires a non-empty `type` on every concept frontmatter block, but the contract set `type_field: okf_type` and demoted `type` to `legacy_type_field`. `okf_export` never emitted `type` either, so exports were non-conformant too, and `okf_lint` accepted `okf_type or type` — a check *weaker* than the spec, passing bundles the spec rejects. Apo now emits `type` alongside `okf_type`; §11 explicitly forbids consumers rejecting a bundle for unknown additional keys, so carrying both is spec-legal and needs no vault migration.
+- **The bundle-root `index.md` was asked for a concept `type`.** §11.1/§11.2 scope to *non-reserved* files; reserved filenames are governed by §11.3 and the root index legitimately carries only `okf_version`.
+- **`okf validate` reported a vault with no contract as clean.** Without a contract every check is a no-op, so a newcomer running `validate --profile okf` before `okf init` got `0 violations` and exit 0 — a false clean bill of health on something that is not an OKF bundle at all. `--profile okf` now fails with a `contract` violation pointing at `okf init`; `--profile apo` warns and passes, since OKF-off is a legitimate state for a vault that never opted in.
 
 ## [0.18.1] — 2026-08-24
 

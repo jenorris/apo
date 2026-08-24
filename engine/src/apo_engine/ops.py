@@ -82,13 +82,19 @@ def _err(**kw: Any) -> dict[str, Any]:
     return {"ok": False, **kw}
 
 
-def _binding(vault: str = "") -> vaults.VaultBinding:
+def _binding(vault: str = "", *, write: bool = False) -> vaults.VaultBinding:
     """Resolve vault by name — must be in this process registry (write/read gate)."""
     default, bindings = vaults.load_bindings()
     key = (vault or "").strip() or default
     if key not in bindings:
         raise OpsError("bad_vault", f"unknown vault {key!r}; available: {sorted(bindings)}")
-    return bindings[key]
+    binding = bindings[key]
+    if write and binding.read_only:
+        raise OpsError(
+            "read_only_vault",
+            f"vault {key!r} is mounted read-only; searchable but not writable",
+        )
+    return binding
 
 
 def _load_bindings():
@@ -97,11 +103,14 @@ def _load_bindings():
     return vaults.load_bindings()
 
 
-def _resolve_binding_and_rel(path: str, vault: str = "") -> tuple[vaults.VaultBinding, str]:
+def _resolve_binding_and_rel(
+    path: str, vault: str = "", *, write: bool = False
+) -> tuple[vaults.VaultBinding, str]:
     """Peel optional ``vault_id:rel`` prefix; gate vault_id to process registry.
 
     Mutating and path-bearing ops use this so writes cannot target vaults outside
-    the MCP/RPC process bindings.
+    the MCP/RPC process bindings. ``write=True`` additionally rejects a vault
+    mounted read-only, same gate as ``_binding(..., write=True)``.
     """
     default, bindings = vaults.load_bindings()
     known = set(bindings)
@@ -112,7 +121,13 @@ def _resolve_binding_and_rel(path: str, vault: str = "") -> tuple[vaults.VaultBi
         raise OpsError(e.code, e.message) from e
     if key not in bindings:
         raise OpsError("bad_vault", f"unknown vault {key!r}; available: {sorted(bindings)}")
-    return bindings[key], rel
+    binding = bindings[key]
+    if write and binding.read_only:
+        raise OpsError(
+            "read_only_vault",
+            f"vault {key!r} is mounted read-only; searchable but not writable",
+        )
+    return binding, rel
 
 
 def _stamp_qualified(out: dict[str, Any], *, vault: str, path: str) -> dict[str, Any]:
@@ -526,6 +541,51 @@ def watcher_status() -> dict[str, Any]:
             return status
     status["running"] = True
     return status
+
+
+def index_visibility(*, woken: bool = True, running: bool | None = None) -> dict[str, Any]:
+    """Documented bound on how long a completed write stays invisible to search.
+
+    MCP never writes ``index.db``; the watcher is the sole writer. That means a
+    successful write is durable on disk immediately but is not searchable until
+    the watcher indexes it, and until now no bound on that delay was written
+    down anywhere.
+
+    The bound is **scheduling latency only**:
+
+    * watcher running, write enqueued with ``wake`` (the default on every write
+      op) — ``APO_WATCH_DEBOUNCE`` seconds, since the wake file makes the
+      watcher drain queues immediately and the per-path debounce timer is the
+      only thing left in the way.
+    * watcher running, wake missed / fs-event-only — add ``WATCH_INTERVAL``,
+      the periodic hash scan.
+    * watcher not running — unbounded. Nothing consumes the queue.
+
+    Embedding time is **not** included: ``embed()`` is a network call to Ollama
+    and its duration depends on batch size and model load. Callers that need
+    read-after-write certainty must poll for the content rather than sleep for
+    ``bound_seconds``.
+    """
+    alive = watcher_status().get("running") if running is None else running
+    debounce = float(config.WATCH_DEBOUNCE)
+    poll = float(config.WATCH_POLL_INTERVAL)
+
+    if not alive:
+        return {
+            "watcher_running": False,
+            "bound_seconds": None,
+            "path": "blocked",
+            "note": _WATCHER_TIP,
+        }
+    bound = debounce if woken else debounce + poll
+    return {
+        "watcher_running": True,
+        "bound_seconds": round(bound, 1),
+        "path": "wake" if woken else "poll",
+        "debounce_seconds": debounce,
+        "poll_interval_seconds": poll,
+        "note": "scheduling bound only; embed() time is additional",
+    }
 
 
 def _attach_watcher_tip(out: dict[str, Any]) -> dict[str, Any]:
@@ -2359,7 +2419,7 @@ def write_note(
     content = body
 
     try:
-        b, path = _resolve_binding_and_rel(path, vault)
+        b, path = _resolve_binding_and_rel(path, vault, write=True)
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -2603,9 +2663,9 @@ def append_note(
 
     try:
         if path:
-            b, path = _resolve_binding_and_rel(path, vault)
+            b, path = _resolve_binding_and_rel(path, vault, write=True)
         else:
-            b = _binding(vault)
+            b = _binding(vault, write=True)
     except OpsError as e:
         return _err(path=path or None, error=e.code, message=e.message)
 
@@ -3272,7 +3332,7 @@ def patch_note(
     if bad:
         return bad
     try:
-        b, path = _resolve_binding_and_rel(path, vault)
+        b, path = _resolve_binding_and_rel(path, vault, write=True)
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -3660,7 +3720,7 @@ def patch_notes(
                 message=f"items[{i}].path string required",
             )
         try:
-            bi, path_rel = _resolve_binding_and_rel(path, vault)
+            bi, path_rel = _resolve_binding_and_rel(path, vault, write=True)
         except OpsError as e:
             return _err(path=path, error=e.code, message=e.message)
         vault_ids.add(bi.name)
@@ -3677,9 +3737,9 @@ def patch_notes(
 
     try:
         if vault_ids:
-            b = _binding(next(iter(vault_ids)))
+            b = _binding(next(iter(vault_ids)), write=True)
         else:
-            b = _binding(vault)
+            b = _binding(vault, write=True)
     except OpsError as e:
         return _err(error=e.code, message=e.message)
 
@@ -3834,7 +3894,7 @@ def place_note(
         # Prefer dst prefix (always vault-relative) for binding; peel vault-relative src too.
         if not expanded.is_absolute():
             b_src, raw = _resolve_binding_and_rel(raw, vault)
-            b_dst, dst = _resolve_binding_and_rel(dst, vault)
+            b_dst, dst = _resolve_binding_and_rel(dst, vault, write=True)
             if b_src.name != b_dst.name:
                 if not allow_cross_vault:
                     raise OpsError(
@@ -3867,7 +3927,7 @@ def place_note(
                 return out
             b = b_src
         else:
-            b, dst = _resolve_binding_and_rel(dst, vault)
+            b, dst = _resolve_binding_and_rel(dst, vault, write=True)
         root = b.resolved().root.resolve()
     except OpsError as e:
         return _err(src=src, dst=dst, error=e.code, message=e.message)
@@ -3951,7 +4011,7 @@ def move_note(
 ) -> dict[str, Any]:
     try:
         b_src, src = _resolve_binding_and_rel(src, vault)
-        b_dst, dst = _resolve_binding_and_rel(dst, vault)
+        b_dst, dst = _resolve_binding_and_rel(dst, vault, write=True)
         if b_src.name != b_dst.name:
             raise OpsError(
                 "bad_request",
@@ -4119,7 +4179,7 @@ def send_note(
 ) -> dict[str, Any]:
     """Copy a host .md file into the vault (optional frontmatter merge). Leaves src in place."""
     try:
-        b, dst = _resolve_binding_and_rel(dst, vault)
+        b, dst = _resolve_binding_and_rel(dst, vault, write=True)
         root = b.resolved().root
         src_full = _resolve_send_src(src, root)
     except OpsError as e:
@@ -4143,7 +4203,7 @@ def delete_note(path: str, *, vault: str = "", ref: str = "") -> dict[str, Any]:
     if bad:
         return bad
     try:
-        b, path = _resolve_binding_and_rel(path, vault)
+        b, path = _resolve_binding_and_rel(path, vault, write=True)
         root = b.resolved().root
         full = _safe_resolve(root, path)
     except OpsError as e:
@@ -4184,7 +4244,7 @@ def git_sync_op(
     ``pull`` (ff-only) has blocked.
     """
     try:
-        b = _binding(vault)
+        b = _binding(vault, write=True)
         root = b.resolved().root
     except OpsError as e:
         return _err(error=e.code, message=e.message)
