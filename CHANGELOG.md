@@ -4,6 +4,8 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-08-24
+
 Tool-call telemetry can now be exported as OpenTelemetry spans, so per-session
 analysis is possible for the first time. Apo also now produces conformant
 OKF bundles and reads both v0.1 and v0.2 — see `docs/contracts/okf-bundle.md`
