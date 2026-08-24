@@ -45,7 +45,15 @@ from apo_engine.markdown_patch import (
     normalize_lines,
     section_from_chunk,
 )
-from apo_engine.note_format import ensure_indexed_path, is_mmd_note, is_markdown_note, is_yaml_note, matches_scratchpad_catalog_path
+from apo_engine.note_format import (
+    NOTE_SUFFIXES,
+    ensure_indexed_path,
+    is_mmd_note,
+    is_markdown_note,
+    is_note_path,
+    is_yaml_note,
+    matches_scratchpad_catalog_path,
+)
 from apo_engine.yaml_patch import apply_yaml_patch
 from apo_engine.chunk_anchor import materialize_ops_chunk_hashes, resolve_chunk_anchor
 from apo_engine.mcp_backend import shape_search_hits
@@ -141,6 +149,19 @@ def _safe_resolve(root: Path, relative_path: str) -> Path:
     full = (root / relative_path).resolve()
     full.relative_to(root)  # raises ValueError on traversal
     return full
+
+
+def _require_note_path(path: str) -> None:
+    """Reject mutator I/O on non-note suffixes (scripts, dotfiles, etc.)."""
+    if is_note_path(path):
+        return
+    allowed = ", ".join(sorted(NOTE_SUFFIXES))
+    suffix = Path(path.replace("\\", "/")).suffix or "(none)"
+    raise OpsError(
+        "unsupported_format",
+        f"Apo mutators accept note paths only ({allowed}); "
+        f"got suffix {suffix!r} — use host filesystem for scripts and other files",
+    )
 
 
 def _mtime(full: Path) -> float:
@@ -2427,6 +2448,17 @@ def write_note(
     except ValueError as e:
         return _err(path=path, error="bad_path", message=str(e))
 
+    raw_fmt_early = catalog_format or (promote_scratchpad.format if promote_scratchpad else None)
+    scratchpad_catalog = (
+        raw_fmt_early in ("json", "yaml", "mmd")
+        and matches_scratchpad_catalog_path(path, raw_fmt_early)
+    )
+    if not scratchpad_catalog:
+        try:
+            _require_note_path(path)
+        except OpsError as e:
+            return _err(path=path, error=e.code, message=e.message)
+
     if is_mmd_note(path) or (is_markdown_note(path) and "```mermaid" in content):
         from apo_engine.mermaid_validate import should_block_write
 
@@ -2696,6 +2728,11 @@ def append_note(
         return _err(path=path, error=e.code, message=e.message)
     except ValueError as e:
         return _err(path=path, error="bad_path", message=str(e))
+
+    try:
+        _require_note_path(path)
+    except OpsError as e:
+        return _err(path=path, error=e.code, message=e.message)
 
     if is_yaml_note(path):
         return _err(
@@ -3340,6 +3377,11 @@ def patch_note(
     except ValueError as e:
         return _err(path=path, error="bad_path", message=str(e))
 
+    try:
+        _require_note_path(path)
+    except OpsError as e:
+        return _err(path=path, error=e.code, message=e.message)
+
     if not full.exists():
         return _err(path=path, error="not_found", message="note not found")
 
@@ -3777,6 +3819,35 @@ def patch_notes(
             fail_n += 1
             continue
 
+        paths_to_gate: list[str] = []
+        if place_only and ops_list:
+            place_op = _op_to_dict(ops_list[0])
+            for key in ("src", "dst"):
+                val = place_op.get(key)
+                if isinstance(val, str) and val.strip():
+                    paths_to_gate.append(val.strip())
+        elif path:
+            paths_to_gate.append(path)
+        gate_err: OpsError | None = None
+        for gate_path in paths_to_gate:
+            try:
+                _require_note_path(gate_path)
+            except OpsError as e:
+                gate_err = e
+                break
+        if gate_err:
+            entry = {
+                "ok": False,
+                "path": path or (paths_to_gate[0] if paths_to_gate else None),
+                "error": gate_err.code,
+                "message": gate_err.message,
+                "index": i,
+                "vault": b.name,
+            }
+            results.append(entry)
+            fail_n += 1
+            continue
+
         em = raw.get("expected_mtime")
         expected: float | None
         if em is None:
@@ -4026,6 +4097,12 @@ def move_note(
     except ValueError as e:
         return _err(src=src, dst=dst, error="bad_path", message=str(e))
 
+    try:
+        _require_note_path(src)
+        _require_note_path(dst)
+    except OpsError as e:
+        return _err(src=src, dst=dst, error=e.code, message=e.message)
+
     if not src_full.exists():
         return _err(src=src, dst=dst, error="not_found", message=f"source note not found: {src}")
     if (guard := _check_mtime(src_full, expected_mtime, src)):
@@ -4077,6 +4154,11 @@ def _copy_into_vault(
         dst_full = _safe_resolve(root, dst)
     except ValueError as e:
         return _err(src=src_display, dst=dst, error="bad_path", message=str(e))
+
+    try:
+        _require_note_path(dst)
+    except OpsError as e:
+        return _err(src=src_display, dst=dst, error=e.code, message=e.message)
 
     if (guard := _check_mtime(dst_full, expected_mtime, dst)):
         return {**guard, "src": src_display, "dst": dst}
@@ -4210,6 +4292,12 @@ def delete_note(path: str, *, vault: str = "", ref: str = "") -> dict[str, Any]:
         return _err(path=path, error=e.code, message=e.message)
     except ValueError as e:
         return _err(path=path, error="bad_path", message=str(e))
+
+    try:
+        _require_note_path(path)
+    except OpsError as e:
+        return _err(path=path, error=e.code, message=e.message)
+
     if not full.exists():
         return _err(path=path, error="not_found", message="note not found")
     abs_path = str(full.resolve())
@@ -4594,6 +4682,7 @@ def vault_op(
                 "collection": b.collection,
                 "ingest_dir": config.INGEST_DIR,
                 "default": name == default_name,
+                "read_only": b.read_only,
                 "top_level_dirs": _top_level_dirs(root),
                 "contract_ids": vault_contracts.contract_ids(root),
                 "contracts": vault_contracts.present_contracts(found, full=bodies),

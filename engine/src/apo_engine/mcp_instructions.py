@@ -30,6 +30,8 @@ MCP_INSTRUCTIONS = (
     "append_note=session log / post-search add (text=); "
     "patch_note=frontmatter/section mutate or place op (move/copy; allow_cross_vault=true to copy "
     "— never move — a note into a different vault, rejected otherwise); "
+    "mutators accept `.md` / `.yaml` / `.yml` / `.mmd` paths only — scripts and other files use "
+    "host filesystem (read-only vaults reject writes with read_only_vault); "
     "search_notes(limit=, folder= or folders=[]); filter_notes(where=); "
     "read_note(path= or chunk_hash= from search hits); "
     "ref= on filter_notes/read_note/search_notes = read-only git tip (catalog / blob / FTS); "

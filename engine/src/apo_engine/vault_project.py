@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from apo_engine.note_format import NOTE_SUFFIXES
+
 # Deterministic lines for usage-contract ``write_habits`` ids (projected into apo-desk).
 _WRITE_HABIT_LINES: dict[str, str] = {
     "prefer_append_patch": (
@@ -75,6 +77,11 @@ _WRITE_HABIT_LINES: dict[str, str] = {
         "- When a vault tags notes by `memory_type` instead of `okf_type`: stamp "
         "`memory_type` / `description` / `timestamp` on concept writes; prefer "
         "`filter_notes(where={\"memory_type\": \"…\"}, folder=…)`."
+    ),
+    "mutator_note_types_only": (
+        "- Mutators (`write_note` / `patch_note` / `append_note` / `delete_note` / place copy) "
+        "accept only note suffixes listed in Contribution `note_types` (engine floor "
+        "`.md` / `.yaml` / `.yml` / `.mmd`). Scripts and config files → host filesystem, not Apo."
     ),
 }
 
@@ -460,6 +467,34 @@ def format_mcp_proxy_lines(name: str, integ: dict[str, Any]) -> list[str]:
     return lines
 
 
+def normalize_note_types(
+    declared: Any,
+    floor: frozenset[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Intersect vault-declared note suffixes with the engine floor for projection."""
+    floor_set = floor or NOTE_SUFFIXES
+    floor_list = sorted(floor_set)
+    if declared is None:
+        return floor_list, []
+    if not isinstance(declared, list):
+        return floor_list, ["note_types must be a list; using engine floor"]
+    normalized: list[str] = []
+    warnings: list[str] = []
+    for item in declared:
+        raw = str(item).strip().lower()
+        if not raw:
+            continue
+        suffix = raw if raw.startswith(".") else f".{raw.lstrip('.')}"
+        if suffix in floor_set:
+            if suffix not in normalized:
+                normalized.append(suffix)
+        else:
+            warnings.append(f"dropped note_types entry {suffix!r} (not in engine floor)")
+    if not normalized:
+        return floor_list, warnings
+    return sorted(normalized), warnings
+
+
 def format_contribution_line(name: str, contrib: dict[str, Any]) -> str:
     """One-liner for apo-desk Contribution section (deterministic)."""
     dialect = str(contrib.get("dialect") or "gfm").strip() or "gfm"
@@ -492,8 +527,17 @@ def format_contribution_line(name: str, contrib: dict[str, Any]) -> str:
             extras.append(f"render `{profile}`")
 
     if extras:
-        return f"- `{name}`: `{dialect}` ({'; '.join(extras)})"
-    return f"- `{name}`: `{dialect}`"
+        base = f"- `{name}`: `{dialect}` ({'; '.join(extras)})"
+    else:
+        base = f"- `{name}`: `{dialect}`"
+
+    note_types, _ = normalize_note_types(contrib.get("note_types"))
+    if note_types:
+        nt_s = ", ".join(note_types)
+        if extras:
+            return f"{base[:-1]}; note_types={nt_s})"
+        return f"{base} (note_types={nt_s})"
+    return base
 
 def _usage_write_habits(row: dict[str, Any]) -> list[tuple[str, str | None]]:
     """Return ``write_habits`` (id, inline_text) pairs from usage-contract ``data``.
@@ -578,17 +622,18 @@ def render_desk_index(merge: dict[str, Any]) -> str:
 
     lines.append("## Desk vaults")
     lines.append("")
-    lines.append("| Vault | Role | Default | Root | Contracts |")
-    lines.append("|-------|------|---------|------|-----------|")
+    lines.append("| Vault | Role | Default | Read-only | Root | Contracts |")
+    lines.append("|-------|------|---------|-----------|------|-----------|")
     for name, row in sorted(vaults.items()):
         if not isinstance(row, dict):
             continue
         role = row.get("role") or "—"
         is_def = "yes" if row.get("default") or name == default else ""
+        read_only = "yes" if row.get("read_only") else ""
         root = row.get("root") or ""
         ids = row.get("contract_ids") or []
         id_s = ", ".join(ids) if ids else "—"
-        lines.append(f"| `{name}` | {role} | {is_def} | `{root}` | {id_s} |")
+        lines.append(f"| `{name}` | {role} | {is_def} | {read_only} | `{root}` | {id_s} |")
     lines.append("")
     lines.append("Pass `vault=` for non-default. Never cross-pollinate OKF/layout between vaults.")
     lines.append("")
@@ -643,17 +688,18 @@ def render_desk_body(merge: dict[str, Any]) -> str:
 
     lines.append("## Desk vaults")
     lines.append("")
-    lines.append("| Vault | Role | Default | Root | Contracts |")
-    lines.append("|-------|------|---------|------|-----------|")
+    lines.append("| Vault | Role | Default | Read-only | Root | Contracts |")
+    lines.append("|-------|------|---------|-----------|------|-----------|")
     for name, row in sorted(vaults.items()):
         if not isinstance(row, dict):
             continue
         role = row.get("role") or "—"
         is_def = "yes" if row.get("default") or name == default else ""
+        read_only = "yes" if row.get("read_only") else ""
         root = row.get("root") or ""
         ids = row.get("contract_ids") or []
         id_s = ", ".join(ids) if ids else "—"
-        lines.append(f"| `{name}` | {role} | {is_def} | `{root}` | {id_s} |")
+        lines.append(f"| `{name}` | {role} | {is_def} | {read_only} | `{root}` | {id_s} |")
     lines.append("")
     lines.append("Pass `vault=` for non-default. Never cross-pollinate OKF/layout between vaults.")
     lines.append("")
@@ -747,7 +793,10 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.append(
             "Per-vault authoring dialect from usage-contract "
             "(`plain-md` | `gfm` | `obsidian-ofm`). "
-            "Render profiles (`htmlize`) are export-only — not body syntax."
+            "Render profiles (`htmlize`) are export-only — not body syntax. "
+            "Mutators accept note suffixes in Contribution `note_types` only "
+            "(engine floor `.md` / `.yaml` / `.yml` / `.mmd`). "
+            "Read-only vaults reject all mutators with `read_only_vault`."
         )
         lines.append("")
         lines.extend(contrib_lines)

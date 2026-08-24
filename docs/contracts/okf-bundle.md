@@ -184,6 +184,10 @@ generated_by: "apo/engine"       # SPEC §7 actor: <producer>/<version>, human:<
 
 OKF Bundle + [PARA](./para.md) is the Meta shape. Document which `APO_NOTES_ROOT` / `folder=` applies when combining roots.
 
+## Non-note paths
+
+OKF `process_concept` is a no-op when the relative path is not a note suffix (`.md`, `.yaml`, `.yml`, `.mmd`). Apo mutators (`write_note`, `patch_note`, `append_note`, `delete_note`, place copy/move) reject other paths with `unsupported_format` before stamp — scripts, dotfiles, and config belong on the host filesystem, not via Apo MCP.
+
 ## Out of scope
 
 - Renaming MCP tools or sqlite entity names

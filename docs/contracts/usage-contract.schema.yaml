@@ -47,6 +47,7 @@ frontmatter_floor:
 #   - id: my_custom_habit
 #     text: "One-line imperative guidance, same voice as the built-in lines."
 write_habits:
+  - mutator_note_types_only
   - prefer_append_patch
   - folder_on_search
   - expected_mtime_on_followup
@@ -70,6 +71,7 @@ write_habits:
 # contribution.pointers (not inlined — respect token_budget).
 contribution:
   dialect: gfm   # plain-md | gfm | obsidian-ofm
+  note_types: [.md, .yaml, .yml, .mmd]   # projected subset of engine floor; JSON/JSONL excluded
   # features:     # never | sparse | preferred | required | ok | rare
   #   wikilinks: required
   #   callouts: preferred

@@ -4,6 +4,32 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-08-24
+
+Apo mutators now reject non-note paths (`.py`, scripts, dotfiles) before OKF
+stamp — fixing incidents where `patch_note` prepended frontmatter to Python files.
+Desk projection surfaces `note_types`, read-only vaults, and a `mutator_note_types_only`
+write habit.
+
+### Added
+
+- **`_require_note_path()` mutator gate** — `write_note`, `patch_note`, `patch_notes`
+  (per item), `append_note`, `delete_note`, `move_note` (src + dst), and `_copy_into_vault`
+  dst reject paths outside `NOTE_SUFFIXES` with `unsupported_format`. Scratchpad raw
+  catalog promote (json/yaml/mmd) unchanged.
+- **`contribution.note_types`** on usage-contract template — projected as a normalized
+  subset of the engine floor; vaults may document a narrower intent.
+- **`normalize_note_types()`** — projection intersects declared suffixes with the floor;
+  warns when clamping unknown entries.
+- **`mutator_note_types_only` write habit** — projected into apo-desk Apo throughput.
+- **Desk vault table Read-only column** — merge IR includes `read_only` from registry bindings.
+- **`MCP_INSTRUCTIONS` suffix line** — mutators accept `.md` / `.yaml` / `.yml` / `.mmd` only.
+
+### Fixed
+
+- **`process_concept` no-op on non-note paths** — OKF soft stamp no longer fences `.py`
+  and other host files when a mutator bug would have allowed a write.
+
 ## [0.19.0] — 2026-08-24
 
 Tool-call telemetry can now be exported as OpenTelemetry spans, so per-session

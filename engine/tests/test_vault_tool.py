@@ -47,6 +47,62 @@ class IntegrationsFormatTest(unittest.TestCase):
 
 
 class WriteHabitsProjectTest(unittest.TestCase):
+    def test_normalize_note_types_empty_uses_floor(self):
+        listed, warnings = vault_project.normalize_note_types(None)
+        self.assertEqual(listed, [".md", ".mmd", ".yaml", ".yml"])
+        self.assertEqual(warnings, [])
+
+    def test_normalize_note_types_clamps_superset(self):
+        listed, warnings = vault_project.normalize_note_types([".md", ".json", ".py"])
+        self.assertEqual(listed, [".md"])
+        self.assertTrue(any(".json" in w for w in warnings))
+        self.assertTrue(any(".py" in w for w in warnings))
+
+    def test_format_contribution_line_includes_note_types(self):
+        line = vault_project.format_contribution_line(
+            "work",
+            {"dialect": "obsidian-ofm", "note_types": [".md", ".yaml"]},
+        )
+        self.assertIn("note_types=", line)
+        self.assertIn(".md", line)
+        self.assertIn(".yaml", line)
+
+    def test_render_desk_body_read_only_column_and_note_types(self):
+        merge = {
+            "default_vault": "work",
+            "vaults": {
+                "work": {
+                    "root": "/vault/work",
+                    "default": True,
+                    "read_only": False,
+                    "contracts": {
+                        "usage-contract": {
+                            "ok": True,
+                            "data": {
+                                "contribution": {
+                                    "dialect": "gfm",
+                                    "note_types": [".md"],
+                                },
+                                "write_habits": ["mutator_note_types_only"],
+                            },
+                        },
+                    },
+                },
+                "compliance": {
+                    "root": "/vault/compliance",
+                    "read_only": True,
+                    "contracts": {},
+                },
+            },
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertIn("Read-only", body)
+        self.assertIn("| `compliance`", body)
+        self.assertIn("| yes |", body)
+        self.assertIn("note_types=", body)
+        self.assertIn("Mutators (`write_note`", body)
+
     def test_render_write_habit_lines_known_ids(self):
         lines = vault_project._render_write_habit_lines(
             [

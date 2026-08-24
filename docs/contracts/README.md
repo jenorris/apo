@@ -39,7 +39,7 @@ Templates may ship:
 2. **Behaviors** — when/how the agent must write (prose for Cursor/Claude rules), including **flaw-correction language** (`flaws[]` / `remediation` / loop budget — see [library-scribe.md](../library-scribe.md))
 3. **Machine contract** — YAML Apo loads at write time (OKF stamp/validate; archival suggest; note lint detectors)
 
-**Usage `contribution`:** optional authoring dialect (`plain-md` \| `gfm` \| `obsidian-ofm`) plus feature/surface overrides and an orthogonal `render` profile (`none` \| `htmlize`). Desk projection loads usage bodies only and emits a one-liner per vault into apo-desk; deep OFM/htmlize docs stay in `contribution.pointers`. Not a machine contract — engine does not validate body syntax.
+**Usage `contribution`:** optional authoring dialect (`plain-md` \| `gfm` \| `obsidian-ofm`), optional `note_types` suffix list (projected as a subset of the engine floor `.md` / `.yaml` / `.yml` / `.mmd`; JSON/JSONL excluded), plus feature/surface overrides and an orthogonal `render` profile (`none` \| `htmlize`). Desk projection loads usage bodies only and emits a one-liner per vault into apo-desk; deep OFM/htmlize docs stay in `contribution.pointers`. Not a machine contract — engine does not validate body syntax. Apo mutators reject paths outside the engine floor regardless of vault declaration.
 
 **Usage `integrations`:** optional per-vault expected MCP host keys / CLI names (`mcp.required|expected|optional|never`, `cli` / `cli.expected`). Desk projection emits an **Expected integrations** section into apo-desk. Advisory for agents only — not a machine contract; Cursor still uses a global `mcp.json`.
 
