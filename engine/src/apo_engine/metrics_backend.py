@@ -1,7 +1,8 @@
-"""Pluggable metrics storage — embedded DuckDB (default)."""
+"""Pluggable metrics storage — OTLP spans, embedded DuckDB, or both."""
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,17 +10,30 @@ from typing import Any, Protocol
 
 from apo_engine import telemetry_contract as tc
 
+log = logging.getLogger(__name__)
+
 DEFAULT_EMBEDDED_PATH = Path.home() / ".apo" / "metrics.duckdb"
+
+VALID_BACKENDS = ("embedded", "otlp", "both", "none")
 
 
 @dataclass(frozen=True)
 class StoreConfig:
-    backend: str  # embedded | none
+    backend: str  # embedded | otlp | both | none
     path: Path
+    endpoint: str = ""
 
     @property
     def enabled(self) -> bool:
         return self.backend != "none"
+
+    @property
+    def writes_duckdb(self) -> bool:
+        return self.backend in ("embedded", "both")
+
+    @property
+    def writes_otlp(self) -> bool:
+        return self.backend in ("otlp", "both")
 
 
 def _runtime_dir() -> Path:
@@ -35,18 +49,29 @@ def _store_from_contract(vault_root: Path | None) -> dict[str, Any]:
     return store if isinstance(store, dict) else {}
 
 
+# Historical spellings that mean "embedded DuckDB".
+_BACKEND_ALIASES = {"local": "embedded", "duckdb": "embedded"}
+
+
 def resolve_store_config(vault_root: Path | None = None) -> StoreConfig:
     """Resolve metrics backend from env, then vault contract, then defaults."""
     store = _store_from_contract(vault_root)
     env_backend = os.environ.get("APO_METRICS_BACKEND", "").strip().lower()
     backend = env_backend or str(store.get("backend") or "embedded").strip().lower()
-    if backend in ("local",):
-        backend = "embedded"
-    if backend not in ("embedded", "none"):
+    backend = _BACKEND_ALIASES.get(backend, backend)
+    if backend not in VALID_BACKENDS:
+        # Previously this coerced silently, which is how the shipped contract's
+        # invalid `backend: duckdb` went unnoticed. Say something.
+        log.warning(
+            "unknown metrics store.backend %r; falling back to 'embedded' (valid: %s)",
+            backend,
+            ", ".join(VALID_BACKENDS),
+        )
         backend = "embedded"
     raw_path = str(store.get("path") or "").strip()
     path = Path(raw_path).expanduser() if raw_path else _runtime_dir() / "metrics.duckdb"
-    return StoreConfig(backend=backend, path=path)
+    endpoint = str(store.get("endpoint") or "").strip()
+    return StoreConfig(backend=backend, path=path, endpoint=endpoint)
 
 
 class MetricsBackend(Protocol):
@@ -113,14 +138,25 @@ _backend_cache: MetricsBackend | None = None
 _backend_config: StoreConfig | None = None
 
 
+def _build_backend(cfg: StoreConfig) -> MetricsBackend:
+    from apo_engine.otlp_backend import FanoutBackend, OtlpBackend
+
+    if cfg.backend == "otlp":
+        return OtlpBackend(cfg.endpoint)
+    if cfg.backend == "both":
+        # Cutover mode: spans flow before the read path moves off DuckDB, so
+        # there is never a window with no telemetry surface. Reads resolve to
+        # DuckDB (OtlpBackend.read_events is empty by design).
+        return FanoutBackend([EmbeddedDuckDBBackend(cfg.path), OtlpBackend(cfg.endpoint)])
+    return EmbeddedDuckDBBackend(cfg.path if cfg.backend == "embedded" else None)
+
+
 def get_backend(vault_root: Path | None = None, *, force: bool = False) -> MetricsBackend:
     global _backend_cache, _backend_config
     cfg = resolve_store_config(vault_root)
     if not force and _backend_cache is not None and _backend_config == cfg:
         return _backend_cache
-    backend: MetricsBackend = EmbeddedDuckDBBackend(
-        cfg.path if cfg.backend == "embedded" else None
-    )
+    backend: MetricsBackend = _build_backend(cfg)
     _backend_cache = backend
     _backend_config = cfg
     return backend
