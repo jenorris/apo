@@ -4,6 +4,8 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-08-24
+
 ### Changed
 
 - **Vault-wide mermaid retrieval boost** — on unscoped searches whose query matches architecture vocabulary (CDE, cardholder, Stripe, ECS, data flow, …), apply stronger post-fusion multipliers for `diagram.mmd` / `mermaid_*` chunks and demote catalog `pages/`; widen the fused candidate pool then re-sort. Catalog-scoped boosts unchanged. Policy-relay vault-wide hit@3: 50% → 60% (gate ≥60%).
