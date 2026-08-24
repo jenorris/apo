@@ -67,6 +67,60 @@ class NoteLintUnitTests(unittest.TestCase):
             self.assertIn("link.broken", codes)
             self.assertIn("link.ambiguous", codes)
 
+    def test_cross_vault_links(self):
+        with tempfile.TemporaryDirectory() as tmp_a, tempfile.TemporaryDirectory() as tmp_b:
+            root_a = Path(tmp_a)
+            root_b = Path(tmp_b)
+            (root_b / "areas").mkdir()
+            (root_b / "areas" / "target.md").write_text("# Target\n", encoding="utf-8")
+            (root_a / "src.md").write_text(
+                "See [[other:areas/target]] and [[other:areas/missing]] "
+                "and [[ghost:areas/x]].\n",
+                encoding="utf-8",
+            )
+            content = (root_a / "src.md").read_text(encoding="utf-8")
+            flaws = note_lint.detect_broken_links(
+                content,
+                path="src.md",
+                vault_root=root_a,
+                vault_roots={"other": root_b},
+            )
+            by_code = {}
+            for f in flaws:
+                by_code.setdefault(f.code, []).append(f)
+            # target resolves cleanly -> no flaw for it
+            targets = {f.evidence["target"] for f in flaws}
+            self.assertNotIn("other:areas/target", targets)
+            self.assertIn("other:areas/missing", targets)
+            self.assertEqual(by_code.get("link.broken", [None])[0].evidence["target"], "other:areas/missing")
+            self.assertIn("link.unknown_vault", by_code)
+            self.assertEqual(by_code["link.unknown_vault"][0].evidence["unknown_vault"], "ghost")
+
+    def test_skill_reference_detection(self):
+        content = (
+            "Hand off to Cato via a card. Memory ops: see the `lyra-memory-ops` skill. "
+            "Vault reads go through the `vault-note-maintenance` skill.\n"
+        )
+        # No known_skills supplied -> opt-out, no flaws at all.
+        self.assertEqual(
+            note_lint.detect_skill_references(content, path="a.md", known_skills=None),
+            [],
+        )
+        flaws = note_lint.detect_skill_references(
+            content, path="a.md", known_skills=["vault-note-maintenance"]
+        )
+        self.assertEqual(len(flaws), 1)
+        self.assertEqual(flaws[0].code, "link.unknown_skill")
+        self.assertEqual(flaws[0].evidence["name"], "lyra-memory-ops")
+
+    def test_skill_reference_bare_the_form(self):
+        content = "See the phantom-skill skill for details.\n"
+        flaws = note_lint.detect_skill_references(
+            content, path="a.md", known_skills=["real-skill"]
+        )
+        self.assertEqual(len(flaws), 1)
+        self.assertEqual(flaws[0].evidence["name"], "phantom-skill")
+
 
 class FlawsWriteIntegration(unittest.TestCase):
     def setUp(self):

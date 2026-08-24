@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
+from apo_engine import note_lint
+from apo_engine import vaults as vault_reg
 from apo_engine.okf import resolve_contract_path
 from apo_engine.scratchpad_format import _diag, buffer_as_dict, normalize_buffer
 from apo_engine.scratchpad_store import Format, ScratchpadMeta
@@ -240,13 +242,61 @@ def handoff_paths_from_schema(schema: dict[str, Any] | None) -> list[str] | None
     return None
 
 
+def _link_check_flaws(
+    meta: ScratchpadMeta,
+    content: str,
+    *,
+    vault_root: Path | None,
+    known_skills: Iterable[str] | None,
+) -> list[dict[str, Any]]:
+    """Corpus-quality flaws[] for a scratchpad buffer — same detectors as
+    vault(action=lint), run pre-commit so a piped skill/note gets the same
+    dangling-pointer check as one already written to the vault.
+    """
+    if vault_root is None:
+        return []
+    link_path = meta.destination_path or meta.source_path or "<scratchpad>"
+    vault_roots: dict[str, Path] | None = None
+    try:
+        _, bindings = vault_reg.load_bindings()
+        vault_roots = {name: b.resolved().root for name, b in bindings.items()}
+    except Exception:
+        vault_roots = None
+    flaws: list[dict[str, Any]] = []
+    flaws.extend(
+        f.as_dict()
+        for f in note_lint.detect_broken_links(
+            content,
+            path=link_path,
+            vault_root=vault_root,
+            vault=meta.vault or "",
+            vault_roots=vault_roots,
+        )
+    )
+    flaws.extend(
+        f.as_dict()
+        for f in note_lint.detect_skill_references(
+            content,
+            path=link_path,
+            vault=meta.vault or "",
+            known_skills=known_skills,
+        )
+    )
+    return flaws
+
+
 def validate_session(
     meta: ScratchpadMeta,
     content: str,
     *,
     vault_root: Path | None,
+    known_skills: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    """Return envelope with valid + diagnostics (format + bound schemas)."""
+    """Return envelope with valid + diagnostics (format + bound schemas) plus
+    flaws[] (link-checking — broken/ambiguous/cross-vault wikilinks, unknown
+    skill references when known_skills is supplied). flaws[] never affects
+    ``valid``: it's corpus-quality signal, not a hard validation gate.
+    """
     diagnostics: list[dict[str, Any]] = []
     _, format_diags = normalize_buffer(meta.format, content)
     diagnostics.extend(format_diags)
@@ -318,4 +368,7 @@ def validate_session(
         "valid": len(errors) == 0,
         "diagnostics": diagnostics,
         "handoff_paths": handoff_paths_from_schema(schema_obj),
+        "flaws": _link_check_flaws(
+            meta, content, vault_root=vault_root, known_skills=known_skills
+        ),
     }

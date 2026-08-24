@@ -1580,6 +1580,13 @@ def read_note(
         b.name, path_s, float(out["mtime"]), text, heading=heading
     )
     if lint:
+        from apo_engine import vaults as _vaults
+
+        try:
+            _, _bindings = _vaults.load_bindings()
+            _vault_roots = {n: bb.resolved().root for n, bb in _bindings.items()}
+        except Exception:
+            _vault_roots = None
         _, lint_flaws = note_lint.lint_note(
             text,
             path=path_s,
@@ -1588,6 +1595,7 @@ def read_note(
             include_links=True,
             include_usage=True,
             include_format=True,
+            vault_roots=_vault_roots,
             auto_fix=False,
         )
         out = _attach_flaws(out, lint_flaws)
@@ -1718,6 +1726,13 @@ def _read_note_at_ref(
     # No attach_region_hashes / mtime — blob hashes and tip time are not WT CAS tokens.
     # Deliberately do NOT call _record_path_touch.
     if lint:
+        from apo_engine import vaults as _vaults
+
+        try:
+            _, _bindings = _vaults.load_bindings()
+            _vault_roots = {n: bb.resolved().root for n, bb in _bindings.items()}
+        except Exception:
+            _vault_roots = None
         _, lint_flaws = note_lint.lint_note(
             text,
             path=path_s,
@@ -1726,6 +1741,7 @@ def _read_note_at_ref(
             include_links=True,
             include_usage=True,
             include_format=True,
+            vault_roots=_vault_roots,
             auto_fix=False,
         )
         out = _attach_flaws(out, lint_flaws)
@@ -4234,14 +4250,19 @@ def vault_op(
     limit: int | None = 50,
     offset: int = 0,
     fix: bool = False,
+    known_skills: list[str] | None = None,
     contract: str = "",
     to: str = "",
     dry_run: bool = False,
+    mode: str = "full",
 ) -> dict[str, Any]:
     """Vault management: list | contracts | describe | merge | project | stats | lint | okf_dry_run | clone.
 
     Read-only except ``stats`` (habit KPI rollups) and ``clone`` (file copy). ``project`` returns
-    desk ``body`` + ``guidance``. ``lint`` emits corpus ``flaws[]`` (archival + note_lint detectors)
+    desk ``body`` + ``guidance``; ``mode="full"`` (default) is the complete body, ``mode="index"``
+    is a compact always-loaded pointer surface that tells the agent to call ``project`` again
+    scoped to one vault (``vaults=[<id>]``) for that vault's full detail — see
+    ``vault_project.render_desk_index`` / ``render_desk_body``. ``lint`` emits corpus ``flaws[]`` (archival + note_lint detectors)
     for one vault. ``fix=true`` on lint applies mechanical auto remediations (trailing WS) only.
     ``okf_dry_run`` (vault=, contract=<proposed okf-contract.schema.yaml text>) simulates
     that contract against the current corpus and reports what it would reclassify or
@@ -4341,6 +4362,7 @@ def vault_op(
             offset=0,
             vault_name=b.name,
             include_links=True,
+            known_skills=known_skills,
             fix=bool(fix),
         )
         merged_flaws: list[dict[str, Any]] = []
@@ -4560,7 +4582,10 @@ def vault_op(
         merge = _merge_payload(bodies=True)
         if not merge.get("ok"):
             return merge
-        projected = vault_project.project(merge)
+        proj_mode = (mode or "full").strip().lower()
+        if proj_mode not in ("full", "index"):
+            return _err(error="bad_request", message="mode must be full|index")
+        projected = vault_project.project(merge, mode=proj_mode)
         if not projected.get("ok"):
             return projected
         projected["default_vault"] = merge.get("default_vault")

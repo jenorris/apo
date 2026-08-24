@@ -230,6 +230,170 @@ class WriteHabitsProjectTest(unittest.TestCase):
         self.assertIn("## Local web browser", body)
         self.assertIn("127.0.0.1:7432", body)
 
+    def test_render_desk_index_is_compact_and_carries_tool_call_directive(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {
+                "atlas": {
+                    "root": "/vault/atlas",
+                    "default": True,
+                    "role": "personal PARA",
+                    "contract_ids": ["usage-contract", "okf-contract"],
+                    "contracts": {
+                        "usage-contract": {
+                            "ok": True,
+                            "data": {
+                                "purpose": "Personal PKB.",
+                                "frontmatter_floor": ["title", "okf_type"],
+                            },
+                        },
+                    },
+                },
+            },
+            "desk": {"habits": {}},
+        }
+        index_body = vault_project.render_desk_index(merge)
+        full_body = vault_project.render_desk_body(merge)
+        self.assertLess(len(index_body.encode("utf-8")), 2000)
+        self.assertLess(len(index_body), len(full_body))
+        # The tool-call directive is the load-bearing line — must be present
+        # and front-loaded (before the vault table), not buried.
+        directive_pos = index_body.find('vault(action=project, vaults=["<id>"])')
+        table_pos = index_body.find("## Desk vaults")
+        self.assertGreater(directive_pos, -1)
+        self.assertGreater(table_pos, -1)
+        self.assertLess(directive_pos, table_pos)
+        self.assertIn("`atlas`", index_body)
+        self.assertIn("personal PARA", index_body)
+        # Sections that belong to Tier 2 only, not the compact index.
+        self.assertNotIn("## Frontmatter floor", index_body)
+        self.assertNotIn("## Vault purpose & scope", index_body)
+        self.assertNotIn("## Type routing (OKF)", index_body)
+        self.assertNotIn("## Write workflow", index_body)
+        self.assertNotIn("## Examples", index_body)
+
+    def test_project_mode_index_vs_full(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": {}}},
+            "desk": {"habits": {}},
+        }
+        full = vault_project.project(merge)
+        indexed = vault_project.project(merge, mode="index")
+        self.assertEqual(full["mode"], "full")
+        self.assertEqual(indexed["mode"], "index")
+        self.assertLess(indexed["bytes"], full["bytes"])
+        self.assertEqual(full["body"], vault_project.render_desk_body(merge))
+        self.assertEqual(indexed["body"], vault_project.render_desk_index(merge))
+
+    def test_render_desk_body_includes_write_workflow_section(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": {}}},
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertIn("## Write workflow", body)
+        self.assertIn("search_notes", body)
+        self.assertIn("expected_mtime", body)
+        # Sequential, not just enumerable — steps are numbered in order.
+        self.assertLess(body.index("1. `search_notes`"), body.index("4. On any follow-up"))
+
+    def test_render_desk_body_includes_delimited_examples(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": {}}},
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertIn("## Examples", body)
+        self.assertEqual(body.count("<example>"), 2)
+        self.assertEqual(body.count("</example>"), 2)
+        self.assertIn("patch_note(path=", body)
+
+    def test_render_desk_body_front_loads_purpose_scope_and_floor(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {
+                "atlas": {
+                    "root": "/vault/atlas",
+                    "default": True,
+                    "contracts": {
+                        "usage-contract": {
+                            "ok": True,
+                            "data": {
+                                "purpose": "Personal PKB.",
+                                "frontmatter_floor": ["title", "okf_type"],
+                                "contribution": {"dialect": "obsidian-ofm"},
+                            },
+                        },
+                    },
+                },
+            },
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        desk_pos = body.index("## Desk vaults")
+        scope_pos = body.index("## Vault purpose & scope")
+        floor_pos = body.index("## Frontmatter floor")
+        contrib_pos = body.index("## Contribution")
+        self.assertLess(desk_pos, scope_pos)
+        self.assertLess(scope_pos, floor_pos)
+        self.assertLess(floor_pos, contrib_pos)
+
+    def test_render_desk_body_wraps_directives_and_workflow_in_delimiters(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {
+                "atlas": {
+                    "root": "/vault/atlas",
+                    "default": True,
+                    "contracts": {
+                        "usage-contract": {
+                            "ok": True,
+                            "data": {"consult_vault_first": "Search first."},
+                        },
+                    },
+                },
+            },
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        open_pos = body.index("<vault-directives>")
+        close_pos = body.index("</vault-directives>")
+        directives_pos = body.index("## Vault directives")
+        workflow_pos = body.index("## Write workflow")
+        self.assertLess(open_pos, directives_pos)
+        self.assertLess(directives_pos, workflow_pos)
+        self.assertLess(workflow_pos, close_pos)
+
+    def test_render_desk_body_ends_with_recap_before_safety(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {
+                "atlas": {
+                    "root": "/vault/atlas",
+                    "default": True,
+                    "contracts": {
+                        "usage-contract": {
+                            "ok": True,
+                            "data": {
+                                "consult_vault_first": "Search first.",
+                                "task_routing": "Route via threads.",
+                            },
+                        },
+                    },
+                },
+            },
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertIn("## Key directives (recap)", body)
+        self.assertIn("Search first.", body.split("## Key directives (recap)")[1])
+        recap_pos = body.index("## Key directives (recap)")
+        safety_pos = body.index("## Safety")
+        self.assertLess(recap_pos, safety_pos)
+
     def test_format_okf_path_rules_lines_truncates_to_token_budget(self):
         okf = {
             "path_rules": [
@@ -556,6 +720,26 @@ class VaultOpTest(unittest.TestCase):
             self.assertNotIn("Should never appear", body)
             self.assertNotIn("work-environment", body)
             self.assertIn("policy", body)
+
+    def test_project_mode_index_returns_compact_body(self):
+        full = ops.vault_op("project", vaults=["alpha"])
+        indexed = ops.vault_op("project", vaults=["alpha"], mode="index")
+        self.assertTrue(full["ok"])
+        self.assertTrue(indexed["ok"])
+        self.assertEqual(full["mode"], "full")
+        self.assertEqual(indexed["mode"], "index")
+        self.assertLess(indexed["bytes"], full["bytes"])
+        self.assertIn("`alpha`", indexed["body"])
+        self.assertIn('vault(action=project, vaults=["<id>"])', indexed["body"])
+        # default_vault/desk_meta are attached the same way regardless of mode.
+        self.assertEqual(indexed["default_vault"], full["default_vault"])
+
+    def test_project_mode_defaults_to_full_and_rejects_bad_value(self):
+        default_mode = ops.vault_op("project", vaults=["alpha"])
+        self.assertEqual(default_mode["mode"], "full")
+        bad = ops.vault_op("project", vaults=["alpha"], mode="bogus")
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"], "bad_request")
 
     def test_vaults_filter_reassigns_default_when_dropped(self):
         # beta is never the registry default (alpha is) — filtering to just

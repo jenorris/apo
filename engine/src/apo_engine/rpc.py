@@ -482,6 +482,9 @@ def _vault(body: dict[str, Any]) -> dict[str, Any]:
         isinstance(vaults_raw, list) and all(isinstance(v, str) for v in vaults_raw)
     ):
         return {"ok": False, "error": "bad_request", "message": "`vaults` must be a list of strings"}
+    mode = body.get("mode", "full")
+    if not isinstance(mode, str):
+        return {"ok": False, "error": "bad_request", "message": "`mode` must be a string"}
     return ops.vault_op(
         action.strip(),
         vault=str(body.get("vault") or ""),
@@ -494,6 +497,7 @@ def _vault(body: dict[str, Any]) -> dict[str, Any]:
         fix=bool(body.get("fix")),
         to=str(body.get("to") or ""),
         dry_run=bool(body.get("dry_run")),
+        mode=mode.strip() or "full",
     )
 
 

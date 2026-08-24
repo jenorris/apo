@@ -1062,6 +1062,18 @@ async def scratchpad(
             ),
         ),
     ] = False,
+    known_skills: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "validate: skill names that actually exist in the caller's environment. "
+                "When set, flags any `foo` skill / \"the foo skill\" prose mention in the "
+                "buffer that isn't in this list (flaws[], code link.unknown_skill) — catches "
+                "a skill/note pointing at a renamed or removed sibling skill. Omit to skip "
+                "the check (no guessing at what skills exist)."
+            ),
+        ),
+    ] = None,
 ) -> dict:
     """Ephemeral workshop buffer: create/checkout → patch → validate → commit (or write_note scratchpad=)."""
     return await asyncio.to_thread(
@@ -1085,6 +1097,7 @@ async def scratchpad(
         validate=validate,
         allow_foreign_schema=allow_foreign_schema,
         allow_cross_vault_schema=allow_cross_vault_schema,
+        known_skills=known_skills,
     )
 
 
@@ -1161,6 +1174,17 @@ async def vault(
             ),
         ),
     ] = False,
+    known_skills: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "lint only: skill names that actually exist in the caller's environment. "
+                "When set, flags any `foo` skill / \"the foo skill\" prose mention in the "
+                "swept corpus that isn't in this list (flaws[], code link.unknown_skill). "
+                "Omit to skip the check."
+            ),
+        ),
+    ] = None,
     to: Annotated[
         str,
         Field(
@@ -1174,6 +1198,17 @@ async def vault(
         bool,
         Field(description="clone only: preview the file list without writing. Default false."),
     ] = False,
+    mode: Annotated[
+        str,
+        Field(
+            description=(
+                "project only: full (default) = complete desk body; index = compact "
+                "always-loaded pointer surface — tells the agent to call project again "
+                "scoped to one vault (vaults=[<id>]) for that vault's full detail. "
+                "Bake index into a static always-loaded file; call full on demand."
+            ),
+        ),
+    ] = "full",
 ) -> dict:
     """Vault registry, contracts, desk projection, habit KPIs, corpus lint, and system/ scaffold clone."""
     return await asyncio.to_thread(
@@ -1187,8 +1222,10 @@ async def vault(
         limit=limit,
         offset=offset,
         fix=fix,
+        known_skills=known_skills,
         to=to,
         dry_run=dry_run,
+        mode=mode,
     )
 
 

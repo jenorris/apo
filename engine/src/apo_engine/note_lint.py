@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from . import vaults as vault_reg
 
@@ -18,6 +18,15 @@ Severity = Literal["info", "warn", "error"]
 
 _CALLOUT_RE = re.compile(r"^>\s*\[!", re.M)
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+?)\]\]")
+_VAULT_PREFIX_RE = re.compile(r"^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63}):(?!/)(.+)$")
+# Prose mentions of a skill by name — either backticked ("`foo` skill") or bare
+# ("the foo skill") — the two shapes actually used across this vault's skills
+# and Hermes skill docs. Deliberately narrow to avoid false positives on
+# ordinary sentences containing the word "skill".
+_SKILL_MENTION_RE = re.compile(
+    r"`([a-z0-9][a-z0-9._-]{1,63})`\s+skill\b"
+    r"|\bthe\s+([A-Za-z][A-Za-z0-9._-]{1,63})\s+skill\b",
+)
 
 
 @dataclass
@@ -353,25 +362,65 @@ def detect_broken_links(
     vault_root: Path,
     vault: str = "",
     wiki_index: dict[str, list[str]] | None = None,
+    vault_roots: dict[str, Path] | None = None,
 ) -> list[Flaw]:
+    """Broken/ambiguous [[wikilink]] detection.
+
+    A target may carry a ``vault_id:rel`` prefix (the qualified_path form used
+    throughout search/read/write hits). When ``vault_roots`` is supplied
+    (vault_id -> root), a prefixed target resolves against *that* vault's own
+    index instead of the local one; an unknown vault_id is its own flaw
+    (``link.unknown_vault``) rather than a silent no-match.
+    """
     idx = wiki_index if wiki_index is not None else _build_wiki_index(vault_root)
+    foreign_idx_cache: dict[str, dict[str, list[str]]] = {}
     flaws: list[Flaw] = []
     seen: set[str] = set()
-    for target, lineno in _wiki_targets(content):
-        key = target.replace("\\", "/").strip().lower()
-        if key in seen:
+    for raw_target, lineno in _wiki_targets(content):
+        dedupe_key = raw_target.replace("\\", "/").strip().lower()
+        if dedupe_key in seen:
             continue
-        seen.add(key)
-        candidates = idx.get(key) or idx.get(key.rsplit("/", 1)[-1]) or []
+        seen.add(dedupe_key)
+
+        target_vault: str | None = None
+        target = raw_target
+        m = _VAULT_PREFIX_RE.match(raw_target)
+        if m:
+            target_vault, target = m.group(1), m.group(2)
+
+        if target_vault is not None:
+            if not vault_roots or target_vault not in vault_roots:
+                flaws.append(
+                    Flaw(
+                        code="link.unknown_vault",
+                        severity="warn",
+                        path=path,
+                        vault=vault or None,
+                        evidence={"target": raw_target, "line": lineno, "unknown_vault": target_vault},
+                        remediation="llm",
+                        message=f"wikilink [[{raw_target}]] references unknown vault {target_vault!r}",
+                    )
+                )
+                continue
+            foreign_root = vault_roots[target_vault]
+            if target_vault not in foreign_idx_cache:
+                foreign_idx_cache[target_vault] = _build_wiki_index(foreign_root)
+            use_idx = foreign_idx_cache[target_vault]
+            use_root = foreign_root
+        else:
+            use_idx = idx
+            use_root = vault_root
+
+        key = target.replace("\\", "/").strip().lower()
+        candidates = use_idx.get(key) or use_idx.get(key.rsplit("/", 1)[-1]) or []
         # unique paths
         uniq = sorted(set(candidates))
-        # exclude self
-        uniq = [c for c in uniq if c != path]
+        # exclude self (only meaningful for same-vault links)
+        if target_vault is None:
+            uniq = [c for c in uniq if c != path]
         if not uniq:
             # also try exact file
-            if (vault_root / f"{target}.md").is_file() or (
-                vault_root / target
-            ).is_file():
+            if (use_root / f"{target}.md").is_file() or (use_root / target).is_file():
                 continue
             flaws.append(
                 Flaw(
@@ -379,9 +428,14 @@ def detect_broken_links(
                     severity="warn",
                     path=path,
                     vault=vault or None,
-                    evidence={"target": target, "line": lineno, "candidates": []},
+                    evidence={
+                        "target": raw_target,
+                        "line": lineno,
+                        "candidates": [],
+                        **({"resolved_vault": target_vault} if target_vault else {}),
+                    },
                     remediation="llm",
-                    message=f"broken wikilink [[{target}]]",
+                    message=f"broken wikilink [[{raw_target}]]",
                 )
             )
         elif len(uniq) > 1:
@@ -392,12 +446,56 @@ def detect_broken_links(
                     path=path,
                     vault=vault or None,
                     evidence={
-                        "target": target,
+                        "target": raw_target,
                         "line": lineno,
                         "candidates": uniq[:10],
+                        **({"resolved_vault": target_vault} if target_vault else {}),
                     },
                     remediation="llm",
-                    message=f"ambiguous wikilink [[{target}]] ({len(uniq)} targets)",
+                    message=f"ambiguous wikilink [[{raw_target}]] ({len(uniq)} targets)",
+                )
+            )
+    return flaws
+
+
+def detect_skill_references(
+    content: str,
+    *,
+    path: str,
+    vault: str = "",
+    known_skills: Iterable[str] | None = None,
+) -> list[Flaw]:
+    """Flag prose that names a skill (`` `foo` skill `` / "the foo skill") not
+    present in ``known_skills``.
+
+    Opt-in: when ``known_skills`` is None (caller has no skill inventory to
+    check against), this is a no-op — never guesses at what skills exist.
+    Catches the class of bug where a skill/note tells the agent to "see the X
+    skill" after X was renamed or removed, and nothing ever re-checks it.
+    """
+    if known_skills is None:
+        return []
+    known = {str(s).strip().lower() for s in known_skills if str(s).strip()}
+    flaws: list[Flaw] = []
+    seen: set[str] = set()
+    for lineno, line in enumerate(content.splitlines(), 1):
+        for m in _SKILL_MENTION_RE.finditer(line):
+            name = (m.group(1) or m.group(2) or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in known or key in seen:
+                continue
+            seen.add(key)
+            flaws.append(
+                Flaw(
+                    code="link.unknown_skill",
+                    severity="warn",
+                    path=path,
+                    vault=vault or None,
+                    evidence={"name": name, "line": lineno},
+                    remediation="llm",
+                    message=f"references {name!r} skill, not found in known_skills",
                 )
             )
     return flaws
@@ -413,6 +511,8 @@ def lint_note(
     include_usage: bool = True,
     include_format: bool = True,
     wiki_index: dict[str, list[str]] | None = None,
+    vault_roots: dict[str, Path] | None = None,
+    known_skills: Iterable[str] | None = None,
     auto_fix: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Run detectors for one note. Optionally auto-fix trailing WS.
@@ -463,6 +563,16 @@ def lint_note(
                 vault_root=vault_root,
                 vault=vault,
                 wiki_index=wiki_index,
+                vault_roots=vault_roots,
+            )
+        )
+        flaws_out.extend(
+            f.as_dict()
+            for f in detect_skill_references(
+                text,
+                path=path,
+                vault=vault,
+                known_skills=known_skills,
             )
         )
     return text, flaws_out
@@ -476,6 +586,7 @@ def lint_folder(
     offset: int = 0,
     vault_name: str = "",
     include_links: bool = True,
+    known_skills: Iterable[str] | None = None,
     fix: bool = False,
 ) -> dict[str, Any]:
     """Paginated corpus lint sweep (non-archival detectors)."""
@@ -496,6 +607,13 @@ def lint_folder(
         }
 
     wiki_index = _build_wiki_index(vault_root) if include_links else None
+    vault_roots: dict[str, Path] | None = None
+    if include_links:
+        try:
+            _, bindings = vault_reg.load_bindings()
+            vault_roots = {name: b.resolved().root for name, b in bindings.items()}
+        except Exception:
+            vault_roots = None
     all_flaws: list[dict[str, Any]] = []
     paths: list[Path] = []
     for pat in ("*.md", "*.yaml", "*.yml"):
@@ -524,6 +642,8 @@ def lint_folder(
             include_usage=True,
             include_format=True,
             wiki_index=wiki_index,
+            vault_roots=vault_roots,
+            known_skills=known_skills,
             auto_fix=fix,
         )
         if fix and new_content != content:

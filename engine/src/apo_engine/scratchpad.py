@@ -119,6 +119,7 @@ def scratchpad_op(
     validate: bool | None = None,
     allow_foreign_schema: bool = False,
     allow_cross_vault_schema: bool = False,
+    known_skills: list[str] | None = None,
 ) -> dict[str, Any]:
     act = (action or "").strip().lower()
     if act == "create":
@@ -181,7 +182,7 @@ def scratchpad_op(
     if act == "patch":
         return _patch(meta, buf, ops=ops or [], validate=validate)
     if act == "validate":
-        return _validate(meta, buf)
+        return _validate(meta, buf, known_skills=known_skills)
     if act == "bind_schema":
         return _bind_schema(
             meta,
@@ -489,13 +490,15 @@ def _patch(
     return out
 
 
-def _validate(meta: ScratchpadMeta, content: str) -> dict[str, Any]:
+def _validate(
+    meta: ScratchpadMeta, content: str, *, known_skills: list[str] | None = None
+) -> dict[str, Any]:
     root = None
     if meta.vault:
         root, _, err = _vault_root(meta.vault)
         if err:
             return err
-    result = validate_session(meta, content, vault_root=root)
+    result = validate_session(meta, content, vault_root=root, known_skills=known_skills)
     if result["valid"]:
         meta.state = "VALID"
     else:
@@ -505,6 +508,7 @@ def _validate(meta: ScratchpadMeta, content: str) -> dict[str, Any]:
         meta,
         valid=result["valid"],
         diagnostics=result["diagnostics"],
+        flaws=result.get("flaws", []),
         **_status_extras(meta),
     )
     return out

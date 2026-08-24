@@ -378,6 +378,48 @@ class ScratchpadValidateTests(unittest.TestCase):
         diags = bad.get("diagnostics") or []
         self.assertTrue(any(d.get("code") == "SCHEMA_ERROR" for d in diags))
 
+    def test_validate_emits_link_flaws(self):
+        (self.vault_a / "areas").mkdir(exist_ok=True)
+        (self.vault_a / "areas" / "real.md").write_text("# Real\n", encoding="utf-8")
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="markdown",
+            content=(
+                "See [[areas/real]] and [[areas/ghost]]. "
+                "Also see the `phantom-skill` skill.\n"
+            ),
+            vault="alpha",
+        )
+        sid = created["session_id"]
+        validated = scratchpad.scratchpad_op(
+            "validate",
+            session_id=sid,
+            vault="alpha",
+            known_skills=["real-skill"],
+        )
+        self.assertTrue(validated["ok"])
+        flaws = validated.get("flaws") or []
+        codes = {f.get("code") for f in flaws}
+        self.assertIn("link.broken", codes)
+        self.assertIn("link.unknown_skill", codes)
+        # a resolvable wikilink must not itself be flagged
+        broken_targets = {
+            f["evidence"]["target"] for f in flaws if f.get("code") == "link.broken"
+        }
+        self.assertNotIn("areas/real", broken_targets)
+
+    def test_validate_skips_skill_check_without_known_skills(self):
+        created = scratchpad.scratchpad_op(
+            "create",
+            format="markdown",
+            content="See the `phantom-skill` skill.\n",
+            vault="alpha",
+        )
+        sid = created["session_id"]
+        validated = scratchpad.scratchpad_op("validate", session_id=sid, vault="alpha")
+        codes = {f.get("code") for f in (validated.get("flaws") or [])}
+        self.assertNotIn("link.unknown_skill", codes)
+
     def test_schema_hash_drift_warning(self):
         created = scratchpad.scratchpad_op(
             "create",

@@ -545,6 +545,68 @@ def _render_write_habit_lines(habits: list[tuple[str, str | None]]) -> list[str]
     return lines
 
 
+def render_desk_index(merge: dict[str, Any]) -> str:
+    """Compact always-loaded index — Tier 1 of the two-tier desk projection.
+
+    Meant to be baked into a static, always-loaded surface (AGENTS.md,
+    .claude/rules/apo-desk.md). Carries only the vault table (live merge
+    data, so it can't drift the way hand-written text can) plus one
+    directive telling the agent to call ``vault(action=project,
+    vaults=[<id>])`` (``render_desk_body``, Tier 2) for a given vault's
+    frontmatter floor, write directives, OKF routing, and git safety before
+    writing there. Keeps the always-loaded surface small regardless of how
+    large Tier 2 grows for any one vault.
+    """
+    vaults = merge.get("vaults") if isinstance(merge.get("vaults"), dict) else {}
+    default = str(merge.get("default_vault") or "")
+
+    lines: list[str] = []
+    lines.append("# Apo desk (generated, compact index)")
+    lines.append("")
+    lines.append(
+        "Before writing to a vault for the first time this session, call "
+        '`vault(action=project, vaults=["<id>"])` to load its current '
+        "frontmatter floor, write directives, OKF type routing, and git "
+        "safety, and write from that."
+    )
+    lines.append("")
+    lines.append(
+        "Full policy / engine API: skill **`mcp-apo`**. Return-only — "
+        "re-run after `~/.apo/desk.yaml` or vault `system/contracts/` changes."
+    )
+    lines.append("")
+
+    lines.append("## Desk vaults")
+    lines.append("")
+    lines.append("| Vault | Role | Default | Root | Contracts |")
+    lines.append("|-------|------|---------|------|-----------|")
+    for name, row in sorted(vaults.items()):
+        if not isinstance(row, dict):
+            continue
+        role = row.get("role") or "—"
+        is_def = "yes" if row.get("default") or name == default else ""
+        root = row.get("root") or ""
+        ids = row.get("contract_ids") or []
+        id_s = ", ".join(ids) if ids else "—"
+        lines.append(f"| `{name}` | {role} | {is_def} | `{root}` | {id_s} |")
+    lines.append("")
+    lines.append("Pass `vault=` for non-default. Never cross-pollinate OKF/layout between vaults.")
+    lines.append("")
+
+    lines.append("## Safety essentials")
+    lines.append("")
+    lines.append(
+        "- Keep `.env`, `*.db`/`*.db-*`, and `.apo/` out of commits — full "
+        "per-vault globs via the tool call above."
+    )
+    lines.append(
+        "- `delete_note` via `apo_admin(action=invoke, name=delete_note, confirm=true)` only."
+    )
+    lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def render_desk_body(merge: dict[str, Any]) -> str:
     """Shared markdown body (no host frontmatter)."""
     desk = merge.get("desk") if isinstance(merge.get("desk"), dict) else {}
@@ -665,6 +727,20 @@ def render_desk_body(merge: dict[str, Any]) -> str:
             lw_line = format_local_web_line(name, local_web)
             if lw_line:
                 local_web_lines.append(lw_line)
+    if scope_lines:
+        lines.append("## Vault purpose & scope")
+        lines.append("")
+        lines.extend(scope_lines)
+        lines.append("")
+
+    if frontmatter_lines:
+        lines.append("## Frontmatter floor")
+        lines.append("")
+        lines.append("Minimum frontmatter keys agents should stamp on concept notes, per vault.")
+        lines.append("")
+        lines.extend(frontmatter_lines)
+        lines.append("")
+
     if contrib_lines:
         lines.append("## Contribution")
         lines.append("")
@@ -701,31 +777,42 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.extend(proxy_lines)
         lines.append("")
 
-    if scope_lines:
-        lines.append("## Vault purpose & scope")
-        lines.append("")
-        lines.extend(scope_lines)
-        lines.append("")
-
     if layout_lines:
         lines.append("## Folder layout")
         lines.append("")
         lines.extend(layout_lines)
         lines.append("")
 
-    if frontmatter_lines:
-        lines.append("## Frontmatter floor")
-        lines.append("")
-        lines.append("Minimum frontmatter keys agents should stamp on concept notes, per vault.")
-        lines.append("")
-        lines.extend(frontmatter_lines)
-        lines.append("")
-
+    lines.append("<vault-directives>")
     if directive_lines:
         lines.append("## Vault directives")
         lines.append("")
         lines.extend(directive_lines)
         lines.append("")
+
+    lines.append("## Write workflow")
+    lines.append("")
+    lines.append(
+        "1. `search_notes` / `filter_notes`, scoped with `folder=` set to "
+        "one of the exact folder names in the layout table above (not a "
+        "guessed name), for an existing note before creating a new one."
+    )
+    lines.append(
+        "2. `write_note` (new) or `append_note`/`patch_note` (existing), "
+        "preserving prior content."
+    )
+    lines.append(
+        "3. Stamp `okf_type` / `description` / `timestamp` per this vault's "
+        "frontmatter floor (above, if set)."
+    )
+    lines.append(
+        "4. On any follow-up edit to a note you already read this session, pass "
+        "`expected_mtime` from the last read/write response to avoid clobbering "
+        "concurrent changes."
+    )
+    lines.append("")
+    lines.append("</vault-directives>")
+    lines.append("")
 
     if okf_lines:
         lines.append("## Type routing (OKF)")
@@ -737,6 +824,34 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         )
         lines.append("")
         lines.extend(okf_lines)
+
+    lines.append("## Examples")
+    lines.append("")
+    lines.append("<example>")
+    lines.append("Creating a new concept note (frontmatter matches the floor and type above):")
+    lines.append("")
+    lines.append("    ---")
+    lines.append("    title: <short-name>")
+    lines.append("    okf_type: <from Type routing above, or this vault's default_okf_type>")
+    lines.append("    description: <one sentence>")
+    lines.append('    timestamp: "<ISO 8601>"')
+    lines.append("    status: active")
+    lines.append("    ---")
+    lines.append("")
+    lines.append("    # <short-name>")
+    lines.append("")
+    lines.append("    <one paragraph — the fact/decision/reference itself>")
+    lines.append("</example>")
+    lines.append("")
+    lines.append("<example>")
+    lines.append("Patching an existing note instead of rewriting it:")
+    lines.append("")
+    lines.append("    patch_note(path=\"areas/threads/example.md\", ops=[")
+    lines.append('      {"op": "set_field", "field": "status", "value": "done"},')
+    lines.append('      {"op": "replace_text", "find": "old text", "replace": "new text"}')
+    lines.append("    ])")
+    lines.append("</example>")
+    lines.append("")
 
     if git_safety_lines:
         lines.append("## Git safety")
@@ -914,6 +1029,19 @@ def render_desk_body(merge: dict[str, Any]) -> str:
             lines.append(f"- {_md_link(label, path)}")
         lines.append("")
 
+    lines.append("## Key directives (recap)")
+    lines.append("")
+    lines.append(
+        "Write workflow: search first, scoped with `folder=` → write/append/"
+        "patch, preserving prior content → stamp the frontmatter floor → "
+        "pass `expected_mtime` on follow-up edits to a note already read "
+        "this session."
+    )
+    if directive_lines:
+        lines.append("")
+        lines.extend(directive_lines[:3])
+    lines.append("")
+
     lines.append("## Safety")
     lines.append("")
     lines.append("- `delete_note` via `apo_admin(action=invoke, name=delete_note, confirm=true)` only.")
@@ -923,12 +1051,18 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def project(merge: dict[str, Any]) -> dict[str, Any]:
-    """Render desk policy from merge IR (return-only — agent places)."""
-    body = render_desk_body(merge)
+def project(merge: dict[str, Any], *, mode: str = "full") -> dict[str, Any]:
+    """Render desk policy from merge IR (return-only — agent places).
+
+    ``mode="full"`` (default, Tier 2): the complete body, ``render_desk_body``.
+    ``mode="index"`` (Tier 1): the compact pointer surface, ``render_desk_index``,
+    meant for static always-loaded files — see that function's docstring.
+    """
+    body = render_desk_index(merge) if mode == "index" else render_desk_body(merge)
     return {
         "ok": True,
         "action": "project",
+        "mode": mode,
         "body": body,
         "bytes": len(body.encode("utf-8")),
         "guidance": project_guidance(),
@@ -983,15 +1117,16 @@ def is_contracts_rel(rel: str) -> bool:
     return r == "system/contracts" or r.startswith("system/contracts/")
 
 
-def project_live(vaults: list[str] | None = None) -> dict[str, Any]:
+def project_live(vaults: list[str] | None = None, *, mode: str = "full") -> dict[str, Any]:
     """Build merge IR from the live registry/desk and project (CLI).
 
     ``vaults`` scopes to a named subset of the registry — see
-    ``vault_op``'s docstring.
+    ``vault_op``'s docstring. ``mode`` selects Tier 1 (``"index"``) vs.
+    Tier 2 (``"full"``, default) — see ``project``.
     """
     from . import ops
 
-    return ops.vault_op("project", vaults=vaults)
+    return ops.vault_op("project", vaults=vaults, mode=mode)
 
 
 def maybe_reproject(

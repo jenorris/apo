@@ -102,7 +102,11 @@ def _cmd_desk_project(args) -> int:
     """Render desk policy body + guidance from live desk + vault contracts."""
     from . import vault_project
 
-    out = vault_project.project_live(vaults=args.vaults or None)
+    mode = (getattr(args, "mode", None) or "full").strip().lower()
+    if mode not in ("full", "index"):
+        print(f"error: --mode must be full|index, got {mode!r}", file=sys.stderr)
+        return 1
+    out = vault_project.project_live(vaults=args.vaults or None, mode=mode)
     print(json.dumps(out, indent=2))
     return 0 if out.get("ok") else 1
 
@@ -191,6 +195,15 @@ def main(argv: list[str] | None = None) -> int:
         nargs="*",
         default=[],
         help="scope projection to these vault names (default: all registered)",
+    )
+    pd.add_argument(
+        "--mode",
+        choices=["full", "index"],
+        default="full",
+        help=(
+            "full (default): complete desk body. index: compact always-loaded "
+            "pointer surface — bake into a static file, call full on demand per vault."
+        ),
     )
     pd.set_defaults(func=_cmd_desk_project)
 
