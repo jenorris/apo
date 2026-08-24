@@ -501,6 +501,100 @@ def detect_skill_references(
     return flaws
 
 
+def detect_read_contract_type_mismatches(
+    vault_root: Path,
+    *,
+    vault: str = "",
+) -> list[Flaw]:
+    """Cross-check ``okf_type`` references between okf-contract and read-contract.
+
+    Vault-level (not per-note): flags read-contract ``type_authority`` /
+    ``lifecycle_read`` / ``purposes`` / ``traversals`` entries that name an
+    ``okf_type`` absent from okf-contract ``path_rules`` (``warn`` — a dangling
+    reference), and the reverse — a ``path_rules`` okf_type with no
+    read-contract ``type_authority``/``lifecycle_read`` entry (``info`` — an
+    onboarding gap, not a defect). No-op when either contract is missing or
+    unparsed, so a vault without a read-contract lints byte-identical to today.
+    """
+    from . import vault_contracts
+
+    found = vault_contracts.discover_contracts(vault_root)
+    read_entry = found.get("read-contract")
+    if not read_entry or not read_entry.get("ok", True):
+        return []
+    read_data = read_entry.get("data") if isinstance(read_entry.get("data"), dict) else {}
+    if not read_data:
+        return []
+    okf_entry = found.get("okf-contract")
+    if not okf_entry or not okf_entry.get("ok", True):
+        return []
+    okf_data = okf_entry.get("data") if isinstance(okf_entry.get("data"), dict) else {}
+
+    okf_types: set[str] = set()
+    for rule in okf_data.get("path_rules") or []:
+        if isinstance(rule, dict):
+            t = str(rule.get("okf_type") or "").strip()
+            if t:
+                okf_types.add(t)
+
+    read_types: set[str] = set()
+    authority = read_data.get("type_authority")
+    if isinstance(authority, dict):
+        read_types.update(str(k).strip() for k in authority if str(k).strip())
+    lifecycle = read_data.get("lifecycle_read")
+    if isinstance(lifecycle, dict):
+        read_types.update(str(k).strip() for k in lifecycle if str(k).strip())
+    purposes = read_data.get("purposes")
+    if isinstance(purposes, dict):
+        for prow in purposes.values():
+            if not isinstance(prow, dict):
+                continue
+            entry = prow.get("entry")
+            if isinstance(entry, dict):
+                t = str(entry.get("okf_type") or "").strip()
+                if t:
+                    read_types.add(t)
+            for t in prow.get("read_order") or []:
+                if isinstance(t, str) and t.strip():
+                    read_types.add(t.strip())
+    for edge in read_data.get("traversals") or []:
+        if isinstance(edge, dict):
+            for key in ("from", "to"):
+                t = str(edge.get(key) or "").strip()
+                if t:
+                    read_types.add(t)
+
+    rc_path = str(read_entry.get("path") or "system/contracts/read-contract.schema.yaml")
+    okf_path = str(okf_entry.get("path") or "system/contracts/okf-contract.schema.yaml")
+
+    flaws: list[Flaw] = []
+    for t in sorted(read_types - okf_types):
+        flaws.append(
+            Flaw(
+                code="read_contract.unknown_okf_type",
+                severity="warn",
+                path=rc_path,
+                vault=vault or None,
+                evidence={"okf_type": t},
+                remediation="human",
+                message=f"read-contract references okf_type {t!r}, absent from okf-contract path_rules",
+            )
+        )
+    for t in sorted(okf_types - read_types):
+        flaws.append(
+            Flaw(
+                code="read_contract.missing_type_authority",
+                severity="info",
+                path=okf_path,
+                vault=vault or None,
+                evidence={"okf_type": t},
+                remediation="human",
+                message=f"okf_type {t!r} in path_rules has no read-contract type_authority/lifecycle_read entry",
+            )
+        )
+    return flaws
+
+
 def lint_note(
     content: str,
     *,

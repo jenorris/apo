@@ -4,6 +4,36 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-08-24
+
+New **read-contract** — a machine YAML alongside okf/usage-contract that tells a
+consumer agent what to read for a given question, in what order, how much to
+trust it, and what a status value means when reading (not writing) a note.
+Additive: discovery/merge/project are already generic over contract filenames
+(no engine changes needed there); vaults without a read-contract are
+unaffected.
+
+### Added
+
+- **`read-contract.schema.yaml`** template (`docs/contracts/`) — `type_authority`
+  (fixed vocabulary: `authoritative | source_of_truth | operational | reference |
+  speculative | diary | record`), `purposes` (entry `okf_type` + `where=`-dialect
+  filter + cross-type `read_order`), `traversals` (directed join edges), and
+  `lifecycle_read` (consumer-side status semantics — single-owner split from okf
+  `type_profiles.<Type>.note_status`, which keeps the status *vocabulary*).
+- **Live IR on atlas** (`system/contracts/read-contract.schema.yaml`) — five
+  purpose clusters (`compliance`, `project_status`, `financial`,
+  `personal_knowledge`, `system_config`) and `type_authority` for all 21
+  okf_types in atlas's `path_rules`.
+- **`vault_project.format_read_routing_lines()`** — projects a new **Read
+  routing** desk section beside Type routing (OKF), gated on `_contract_data(row,
+  "read-contract")` so vaults without one never render it.
+- **`note_lint.detect_read_contract_type_mismatches()`** — vault-level lint
+  cross-check wired into `vault(action=lint)`: `read_contract.unknown_okf_type`
+  (warn — a read-contract reference absent from okf path_rules) and
+  `read_contract.missing_type_authority` (info — a path_rules okf_type with no
+  read-contract entry yet).
+
 ## [0.20.0] — 2026-08-24
 
 Apo mutators now reject non-note paths (`.py`, scripts, dotfiles) before OKF
