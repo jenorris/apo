@@ -5,6 +5,7 @@ Deterministic — no LLM. Returns shared ``body`` + optional ``guidance`` for pl
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -330,6 +331,81 @@ def format_okf_path_rules_lines(
             kept.append(row)
         rows = kept
     return header + rows + [""]
+
+
+def format_read_routing_lines(
+    name: str, read: dict[str, Any], *, token_budget: int | None
+) -> list[str]:
+    """Table rows for apo-desk Read routing section from read-contract ``purposes``.
+
+    Mirrors ``format_okf_path_rules_lines`` layout/truncation — the two routing
+    tables read the same way. okf Type routing answers "what type + fields for
+    this note"; this answers "what to read for this question, in what order,
+    and how much to trust it" (read-contract is additive, keyed by the same
+    ``okf_type``). Vaults without a read-contract never call this.
+    """
+    purposes = read.get("purposes")
+    rows: list[str] = []
+    if isinstance(purposes, dict):
+        for pname in sorted(purposes):
+            prow = purposes[pname]
+            if not isinstance(prow, dict):
+                continue
+            entry = prow.get("entry") if isinstance(prow.get("entry"), dict) else {}
+            okf_type = str(entry.get("okf_type") or "").strip() or "—"
+            where = entry.get("where")
+            where_s = (
+                json.dumps(where, sort_keys=True) if isinstance(where, dict) and where else ""
+            )
+            order_by = str(entry.get("order_by") or "").strip()
+            if order_by:
+                where_s = f"{where_s}; order_by {order_by}" if where_s else f"order_by {order_by}"
+            filter_s = where_s or "—"
+            read_order = _str_list(prow.get("read_order"))
+            order_s = " → ".join(f"`{t}`" for t in read_order) if read_order else "—"
+            rows.append(f"| `{pname}` | `{okf_type}` | {filter_s} | {order_s} |")
+    if not rows:
+        return []
+    header = [
+        f"### `{name}`",
+        "",
+        "| Purpose | Entry type | Filter | Read order |",
+        "|---|---|---|---|",
+    ]
+    if token_budget:
+        budget_chars = token_budget * 4
+        kept: list[str] = []
+        used = sum(len(line) for line in header)
+        for row in rows:
+            used += len(row) + 1
+            if used > budget_chars and kept:
+                remaining = len(rows) - len(kept)
+                kept.append(f"| … | | | +{remaining} more — see read-contract |")
+                break
+            kept.append(row)
+        rows = kept
+
+    lines = header + rows + [""]
+
+    authority = read.get("type_authority")
+    if isinstance(authority, dict) and authority:
+        bits: list[str] = []
+        for tname in sorted(authority):
+            arow = authority[tname]
+            if not isinstance(arow, dict):
+                continue
+            auth = str(arow.get("authority") or "").strip()
+            if not auth:
+                continue
+            hint = str(arow.get("verify_hint") or "").strip()
+            verify = f" (verify: {hint})" if arow.get("verify") and hint else (
+                "; verify" if arow.get("verify") else ""
+            )
+            bits.append(f"`{tname}`={auth}{verify}")
+        if bits:
+            lines.append(f"Type authority: {'; '.join(bits)}")
+            lines.append("")
+    return lines
 
 
 def format_git_safety_lines(name: str, git: dict[str, Any]) -> list[str]:
@@ -713,6 +789,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     frontmatter_lines: list[str] = []
     directive_lines: list[str] = []
     okf_lines: list[str] = []
+    read_lines: list[str] = []
     git_safety_lines: list[str] = []
     telemetry_lines: list[str] = []
     local_web_lines: list[str] = []
@@ -759,6 +836,12 @@ def render_desk_body(merge: dict[str, Any]) -> str:
             token_budget = usage.get("token_budget") if usage else None
             token_budget = token_budget if isinstance(token_budget, int) else None
             okf_lines.extend(format_okf_path_rules_lines(name, okf, token_budget=token_budget))
+
+        read = _contract_data(row, "read-contract")
+        if read:
+            token_budget = usage.get("token_budget") if usage else None
+            token_budget = token_budget if isinstance(token_budget, int) else None
+            read_lines.extend(format_read_routing_lines(name, read, token_budget=token_budget))
 
         git = _contract_data(row, "git-contract")
         if git:
@@ -873,6 +956,19 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         )
         lines.append("")
         lines.extend(okf_lines)
+
+    if read_lines:
+        lines.append("## Read routing")
+        lines.append("")
+        lines.append(
+            "Purpose → entry `okf_type` + filter + cross-type read order, from each "
+            "vault's read-contract `purposes` (additive over Type routing above — okf "
+            "says what a note is; read-contract says what to read for a given "
+            "question, and how much to trust it). Vaults without a read-contract are "
+            "unaffected."
+        )
+        lines.append("")
+        lines.extend(read_lines)
 
     lines.append("## Examples")
     lines.append("")

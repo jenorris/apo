@@ -1,0 +1,96 @@
+# Apo read-contract — template / example
+# Copy to <vault>/system/contracts/read-contract.schema.yaml
+# Discovered by vault(action=contracts|describe|merge|project) exactly like
+# okf-contract / usage-contract — same plumbing, no engine changes needed.
+# Prose twin: docs/apo-pkb read-contract-consumer-side.md (design rationale)
+#
+# Machine YAML only — no prose, no LLM in the compile path. Extends, does not
+# replace, okf-contract: okf says "what a note is + required fields"; this
+# says "what to read for a given question, in what order, how much to trust
+# it, and what a status value means when reading (not writing) a note of
+# that type."
+#
+# Additive: a vault with no read-contract file behaves byte-identical to
+# today (no "## Read routing" section, no lint cross-check). Same vault +
+# same read-contract YAML → byte-identical `vault(action=project)` output.
+
+read_contract_version: "0.1"
+
+# Canonical typed field this contract keys off — matches okf-contract
+# type_field so the two compose without a second taxonomy.
+type_field: okf_type
+
+# 1. Authority gradient — how much a consumer should trust a note of this
+# type before acting on it. Fixed vocabulary (do not extend ad hoc):
+#   authoritative | source_of_truth | operational | reference | speculative
+#   | diary | record
+# `verify: true` + `verify_hint` tells the consumer *how* to check before
+# relying on the note (a cheap, mechanical check — not "ask a human").
+type_authority:
+  System:        { authority: authoritative, verify: false }
+  Specification: { authority: authoritative, verify: false }
+  Project:       { authority: operational,   verify: false }
+  Plan:          { authority: operational,   verify: false }
+  Area:          { authority: operational,   verify: false }
+  Goal:          { authority: operational,   verify: false }
+  Thread:        { authority: operational,   verify: false }
+  Task:          { authority: operational,   verify: false }
+  Concept:       { authority: reference,     verify: true, verify_hint: "check generated/verified/stale_after provenance" }
+  Reference:     { authority: reference,     verify: true }
+  Capture:       { authority: speculative,   verify: true, verify_hint: "treat as leads, not facts" }
+  Journal:       { authority: diary,         verify: false }
+
+# 2. Purpose clusters — "for this question, query this okf_type, in this
+# order." `entry.where` reuses the filter_notes `where=` dialect verbatim
+# (field -> scalar, or {$eq,$ne,$lt,$lte,$gt,$gte,$contains,$exists,$in,
+# $elemMatch}) so a consumer can pass it straight through — declarative,
+# executable, no expression language of its own (mirrors okf-contract
+# path_rules: structured match/enforcement fields, not free prose).
+# Per-vault overrideable; first-match-wins semantics mirror path_rules when
+# a vault layers purposes (none shipped here — one cluster per purpose id).
+purposes:
+  project_status:
+    entry:
+      okf_type: Project
+      where: { status: { $in: [active, planned] } }
+    traverse:
+      - { via: related, to: Plan }
+      - { via: related, to: Area }
+      - { via: related, to: Goal }
+    read_order: [Project, Plan, Area, Goal]
+  personal_knowledge:
+    entry:
+      okf_type: Concept
+    read_order: [Concept, Reference]
+
+# 3. Cross-type traversals (directed edges) — the join keys and what they
+# mean, so a consumer doesn't re-derive "how does a Project relate to a
+# Plan" from scratch every session.
+traversals:
+  - { from: Project, to: Plan, via: related, semantics: "execution plans; check todos/progress" }
+  - { from: Project, to: Area, via: related, semantics: "owning area" }
+  - { from: Area,    to: Goal, via: related, semantics: "strategic alignment" }
+  - { from: Thread,  to: Task, via: related, semantics: "action items spawned from thread" }
+
+# 4. Lifecycle-read semantics — consumer-side interpretation of a `status`
+# value when *reading* a note of this type. Single-owner split from okf:
+# okf-contract `type_profiles.<Type>.note_status` is the allowed vocabulary
+# (what values a note may hold); this is what each value *means to a
+# reader* (not a writer) — they do not duplicate each other, and this
+# section only needs entries for types where that meaning isn't obvious
+# from the status word alone.
+lifecycle_read:
+  Project:
+    active: "live"
+    planned: "scoped"
+    done: "archival context"
+    blocked: "check thread for reason"
+  Capture:
+    "*": "unverified; verify before use"
+
+# Lint (vault(action=lint)): cross-checks okf_type references between this
+# file and okf-contract path_rules in both directions —
+# read_contract.unknown_okf_type (warn: a type named here absent from
+# path_rules — dangling reference) and read_contract.missing_type_authority
+# (info: a path_rules type with no type_authority/lifecycle_read entry here
+# yet — an onboarding gap, not a defect).

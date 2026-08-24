@@ -4518,6 +4518,10 @@ def vault_op(
             for f in part.get("flaws") or []:
                 if isinstance(f, dict):
                     merged_flaws.append(f)
+        merged_flaws.extend(
+            f.as_dict()
+            for f in note_lint.detect_read_contract_type_mismatches(root, vault=b.name)
+        )
         counts: dict[str, int] = {}
         for f in merged_flaws:
             code = str(f.get("code") or "?")

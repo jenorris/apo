@@ -122,6 +122,80 @@ class NoteLintUnitTests(unittest.TestCase):
         self.assertEqual(flaws[0].evidence["name"], "phantom-skill")
 
 
+class ReadContractCrossCheckTest(unittest.TestCase):
+    """vault-level okf_type cross-check between okf-contract and read-contract.
+
+    Resolves open question 4 from projects/apo-pkb/read-contract-consumer-side.md
+    (atlas, via the apo MCP): flag read-contract okf_type refs absent from okf
+    path_rules, and the reverse.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        cdir = self.root / "system" / "contracts"
+        cdir.mkdir(parents=True)
+        (cdir / "okf-contract.schema.yaml").write_text(
+            "okf_contract_version: '1'\n"
+            "path_rules:\n"
+            "  - match: areas/threads/**\n"
+            "    okf_type: Thread\n"
+            "  - match: areas/goals/**\n"
+            "    okf_type: Goal\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_no_read_contract_is_noop(self):
+        flaws = note_lint.detect_read_contract_type_mismatches(self.root, vault="v")
+        self.assertEqual(flaws, [])
+
+    def test_no_okf_contract_is_noop(self):
+        for f in self.root.glob("system/contracts/okf-contract*"):
+            f.unlink()
+        (self.root / "system" / "contracts" / "read-contract.schema.yaml").write_text(
+            "type_authority:\n  Thread: {authority: operational}\n", encoding="utf-8"
+        )
+        flaws = note_lint.detect_read_contract_type_mismatches(self.root, vault="v")
+        self.assertEqual(flaws, [])
+
+    def test_flags_both_directions(self):
+        (self.root / "system" / "contracts" / "read-contract.schema.yaml").write_text(
+            "type_authority:\n"
+            "  Thread: {authority: operational}\n"
+            "  Obligation: {authority: source_of_truth}\n",
+            encoding="utf-8",
+        )
+        flaws = note_lint.detect_read_contract_type_mismatches(self.root, vault="v")
+        by_code = {}
+        for f in flaws:
+            by_code.setdefault(f.code, []).append(f.evidence.get("okf_type"))
+        # Obligation: named in read-contract, absent from okf path_rules.
+        self.assertIn("Obligation", by_code.get("read_contract.unknown_okf_type", []))
+        # Goal: in okf path_rules, no read-contract type_authority/lifecycle_read entry.
+        self.assertIn("Goal", by_code.get("read_contract.missing_type_authority", []))
+        # Thread: present on both sides -> no flaw either direction.
+        self.assertNotIn("Thread", by_code.get("read_contract.unknown_okf_type", []))
+        self.assertNotIn("Thread", by_code.get("read_contract.missing_type_authority", []))
+
+    def test_purposes_and_traversals_also_checked(self):
+        (self.root / "system" / "contracts" / "read-contract.schema.yaml").write_text(
+            "purposes:\n"
+            "  action_items:\n"
+            "    entry: {okf_type: Thread}\n"
+            "    read_order: [Thread, Task]\n"
+            "traversals:\n"
+            "  - {from: Thread, to: Task, via: related}\n",
+            encoding="utf-8",
+        )
+        flaws = note_lint.detect_read_contract_type_mismatches(self.root, vault="v")
+        unknown = {f.evidence.get("okf_type") for f in flaws if f.code == "read_contract.unknown_okf_type"}
+        self.assertIn("Task", unknown)
+        self.assertNotIn("Thread", unknown)
+
+
 class FlawsWriteIntegration(unittest.TestCase):
     def setUp(self):
         okf.clear_contract_cache()
@@ -215,6 +289,30 @@ class FlawsWriteIntegration(unittest.TestCase):
         self.assertTrue(out["ok"], out)
         codes = {f.get("code") for f in (out.get("flaws") or [])}
         self.assertIn("link.broken", codes)
+
+    def test_vault_lint_read_contract_cross_check(self):
+        (self.root / "system" / "contracts" / "read-contract.schema.yaml").write_text(
+            "type_authority:\n"
+            "  Thread: {authority: operational}\n"
+            "  Obligation: {authority: source_of_truth}\n",
+            encoding="utf-8",
+        )
+        out = self.ops.vault_op("lint", limit=50)
+        self.assertTrue(out["ok"], out)
+        codes = {f.get("code") for f in (out.get("flaws") or [])}
+        self.assertIn("read_contract.unknown_okf_type", codes)
+        unknown = [
+            f for f in out.get("flaws") or [] if f.get("code") == "read_contract.unknown_okf_type"
+        ]
+        self.assertEqual(unknown[0]["evidence"]["okf_type"], "Obligation")
+
+    def test_vault_lint_no_read_contract_unaffected(self):
+        """Regression: a vault with no read-contract file lints exactly as before —
+        no read_contract.* codes ever appear."""
+        out = self.ops.vault_op("lint", limit=50)
+        self.assertTrue(out["ok"], out)
+        codes = {f.get("code") for f in (out.get("flaws") or [])}
+        self.assertFalse(any(c.startswith("read_contract.") for c in codes))
 
     def test_read_note_lint_opt_in(self):
         path = "areas/threads/lintme.md"

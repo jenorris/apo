@@ -462,6 +462,195 @@ class WriteHabitsProjectTest(unittest.TestCase):
         self.assertTrue(any("more — see okf-contract" in line for line in lines))
 
 
+class ReadContractProjectTest(unittest.TestCase):
+    """read-contract: format_read_routing_lines + render_desk_body wiring.
+
+    Additive over okf-contract — see projects/apo-pkb/read-contract-consumer-side.md
+    (atlas, via the apo MCP) for the design. No engine discovery/merge changes were
+    needed (vault_contracts.discover_contracts is generic over filenames); this
+    covers only the new projection formatter + its render_desk_body wiring.
+    """
+
+    def _read_data(self) -> dict:
+        return {
+            "read_contract_version": "0.1",
+            "type_field": "okf_type",
+            "type_authority": {
+                "Obligation": {
+                    "authority": "source_of_truth",
+                    "verify": True,
+                    "verify_hint": "cross-check status + cadence against today",
+                },
+                "System": {"authority": "authoritative", "verify": False},
+            },
+            "purposes": {
+                "compliance": {
+                    "entry": {
+                        "okf_type": "Obligation",
+                        "where": {"status": {"$in": ["active", "pending"]}},
+                        "order_by": "cadence",
+                    },
+                    "read_order": ["Obligation", "Review", "Policy"],
+                },
+            },
+        }
+
+    def test_format_read_routing_lines_basic(self):
+        lines = vault_project.format_read_routing_lines(
+            "atlas", self._read_data(), token_budget=None
+        )
+        text = "\n".join(lines)
+        self.assertIn("### `atlas`", text)
+        self.assertIn("`compliance`", text)
+        self.assertIn("`Obligation`", text)
+        self.assertIn('"status"', text)
+        self.assertIn("`Obligation` → `Review` → `Policy`", text)
+        self.assertIn("Type authority:", text)
+        self.assertIn("`Obligation`=source_of_truth", text)
+        self.assertIn("cross-check status + cadence against today", text)
+        self.assertIn("`System`=authoritative", text)
+
+    def test_format_read_routing_lines_empty_purposes_is_noop(self):
+        self.assertEqual(vault_project.format_read_routing_lines("atlas", {}, token_budget=None), [])
+        self.assertEqual(
+            vault_project.format_read_routing_lines("atlas", {"purposes": {}}, token_budget=None),
+            [],
+        )
+
+    def test_format_read_routing_lines_truncates_to_token_budget(self):
+        read = {
+            "purposes": {
+                f"purpose{i}": {"entry": {"okf_type": "Note"}, "read_order": ["Note"]}
+                for i in range(60)
+            }
+        }
+        lines = vault_project.format_read_routing_lines("atlas", read, token_budget=20)
+        self.assertLess(len(lines), 60)
+        self.assertTrue(any("more — see read-contract" in line for line in lines))
+
+    def test_render_desk_body_includes_read_routing_section(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {
+                "atlas": {
+                    "root": "/vault/atlas",
+                    "default": True,
+                    "contracts": {
+                        "okf-contract": {
+                            "ok": True,
+                            "data": {
+                                "path_rules": [
+                                    {
+                                        "match": "areas/compliance/**/obl-*.md",
+                                        "enforcement": "soft",
+                                        "okf_type": "Obligation",
+                                    }
+                                ]
+                            },
+                        },
+                        "read-contract": {"ok": True, "data": self._read_data()},
+                    },
+                },
+            },
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertIn("## Read routing", body)
+        self.assertIn("`compliance`", body)
+        read_pos = body.index("## Read routing")
+        okf_pos = body.index("## Type routing (OKF)")
+        examples_pos = body.index("## Examples")
+        self.assertLess(okf_pos, read_pos)
+        self.assertLess(read_pos, examples_pos)
+
+    def test_render_desk_body_without_read_contract_is_byte_identical(self):
+        """Regression: a vault with no read-contract renders exactly as it did
+        before this feature existed — same merge minus the read-contract entry
+        produces a body with the Read routing block removed and nothing else
+        changed."""
+        base_contracts = {
+            "usage-contract": {
+                "ok": True,
+                "data": {"purpose": "Personal PKB.", "token_budget": 800},
+            },
+            "okf-contract": {
+                "ok": True,
+                "data": {
+                    "path_rules": [
+                        {
+                            "match": "areas/compliance/**/obl-*.md",
+                            "enforcement": "soft",
+                            "okf_type": "Obligation",
+                        }
+                    ]
+                },
+            },
+        }
+        merge_without = {
+            "default_vault": "atlas",
+            "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": base_contracts}},
+            "desk": {"habits": {}},
+        }
+        merge_with = {
+            "default_vault": "atlas",
+            "vaults": {
+                "atlas": {
+                    "root": "/vault/atlas",
+                    "default": True,
+                    "contracts": {
+                        **base_contracts,
+                        "read-contract": {"ok": True, "data": self._read_data()},
+                    },
+                }
+            },
+            "desk": {"habits": {}},
+        }
+        body_without = vault_project.render_desk_body(merge_without)
+        body_with = vault_project.render_desk_body(merge_with)
+        self.assertNotIn("## Read routing", body_without)
+        self.assertIn("## Read routing", body_with)
+        read_block_start = body_with.index("## Read routing")
+        read_block_end = body_with.index("## Examples")
+        stripped = body_with[:read_block_start] + body_with[read_block_end:]
+        # Contract inventory (a separate, unrelated section) legitimately still
+        # differs — it lists every discovered contract id, read-contract included.
+        stripped = stripped.replace("`read-contract` ← `None`; ", "")
+        self.assertEqual(stripped, body_without)
+
+    def test_render_desk_body_read_contract_deterministic_regardless_of_key_order(self):
+        """Same vault + same read-contract data -> byte-identical projection,
+        independent of the YAML mapping's key insertion order (a real vault
+        author may reorder purposes/type_authority keys without meaning to
+        change anything semantically)."""
+        data_a = self._read_data()
+        # Same content, different insertion order for both dict-valued sections.
+        data_b = {
+            "read_contract_version": data_a["read_contract_version"],
+            "type_field": data_a["type_field"],
+            "purposes": dict(data_a["purposes"]),
+            "type_authority": dict(reversed(list(data_a["type_authority"].items()))),
+        }
+
+        def _merge(data: dict) -> dict:
+            return {
+                "default_vault": "atlas",
+                "vaults": {
+                    "atlas": {
+                        "root": "/vault/atlas",
+                        "default": True,
+                        "contracts": {"read-contract": {"ok": True, "data": data}},
+                    }
+                },
+                "desk": {"habits": {}},
+            }
+
+        body_a = vault_project.render_desk_body(_merge(data_a))
+        body_b = vault_project.render_desk_body(_merge(data_b))
+        self.assertEqual(body_a, body_b)
+        # And calling again with the same input is itself byte-identical.
+        self.assertEqual(body_a, vault_project.render_desk_body(_merge(data_a)))
+
+
 class DiscoverContractsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="apo-vcontracts-"))
