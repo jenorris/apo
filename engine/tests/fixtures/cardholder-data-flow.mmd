@@ -1,0 +1,36 @@
+flowchart LR
+    subgraph WEB["Customer sites"]
+        C["Public Customers"]
+        GG["gradguard.com"]
+        RW["renterswidget"]
+        AC["account.gradguard.com"]
+    end
+    subgraph ADMIN["Policy admin"]
+        A["Call Center Agent"]
+    end
+    subgraph AGY["Agency"]
+        COR["cortana.gradguard.com"]
+    end
+    subgraph API["api.gradguard.com"]
+        API1["Core API"]
+        SKY["skypad — renters"]
+        FAB["faber — tuition"]
+    end
+    subgraph PAY["Payment providers"]
+        STR["Stripe — card"]
+        AUTH["Authorize.net — ACH"]
+    end
+    C --> GG
+    C --> RW
+    C --> AC
+    A --> COR
+    GG --> API1
+    RW --> API1
+    AC --> API1
+    COR --> API1
+    API1 --> SKY
+    API1 --> FAB
+    SKY --> STR
+    SKY --> AUTH
+    FAB --> STR
+    FAB --> AUTH

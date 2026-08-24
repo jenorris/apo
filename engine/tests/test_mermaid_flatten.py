@@ -1,0 +1,158 @@
+"""Pure-function tests for Mermaid flatten / search stringification."""
+
+from __future__ import annotations
+
+import unittest
+
+from apo_engine import mermaid_index as mi
+from apo_engine import mermaid_parse as mp
+from apo_engine.search_eval import _score_hit
+
+
+class NodeFlattenTest(unittest.TestCase):
+    def test_contract_template_shape(self):
+        flat = mi.node_flatten_text(
+            "DFD — Cardholder",
+            "PAY",
+            "STR",
+            "Stripe — card",
+            template="{title} > {subgraph} > {node} — {label}",
+        )
+        self.assertEqual(flat, "DFD — Cardholder > PAY > STR — Stripe — card")
+
+    def test_empty_subgraph_collapses(self):
+        flat = mi.node_flatten_text(
+            "Title",
+            "",
+            "N1",
+            "Label",
+            template="{title} > {subgraph} > {node} — {label}",
+        )
+        self.assertNotIn(" >  > ", flat)
+        self.assertEqual(flat, "Title > N1 — Label")
+
+
+class EntityTokensTest(unittest.TestCase):
+    def test_acronym_and_label_words(self):
+        tokens = mi._entity_search_tokens("STR", "Stripe — card")
+        self.assertIn("STR", tokens)
+        self.assertIn("Stripe", tokens)
+        self.assertIn("card", tokens)
+
+    def test_tuition_program_yields_tuition_token(self):
+        tokens = mi._entity_search_tokens("TProg", "Tuition Program")
+        self.assertIn("Tuition", tokens)
+        self.assertIn("Program", tokens)
+        # expect_entity: Tuition must match flattened node text
+        flat = (
+            mi.node_flatten_text(
+                "DFD — Standard Data Flow",
+                "GradGuard",
+                "TProg",
+                "Tuition Program",
+                template="{title} > {subgraph} > {node} — {label}",
+            )
+            + " · "
+            + tokens
+        )
+        self.assertIn("tuition", flat.lower())
+
+
+class CatalogPrefixTest(unittest.TestCase):
+    def test_slug_token_expansion(self):
+        prefix = mi.catalog_search_prefix(
+            {
+                "diagram_id": "cardholder-data-flow",
+                "title": "DFD — Cardholder Data Flow",
+                "type": "flowchart",
+            }
+        )
+        self.assertIn("cardholder-data-flow", prefix)
+        self.assertIn("cardholder", prefix)
+        self.assertIn("data", prefix)
+        self.assertIn("flow", prefix)
+        self.assertIn("DFD — Cardholder Data Flow", prefix)
+        self.assertIn("flowchart", prefix)
+
+
+class FileHeaderEdgeFlattenTest(unittest.TestCase):
+    def setUp(self):
+        self.diagram = mp.MermaidDiagram(
+            diagram_type="flowchart",
+            direction="LR",
+            nodes=[
+                mp.MermaidNode("STR", "Stripe — card", "PAY"),
+                mp.MermaidNode("SKY", "skypad — renters", "API"),
+            ],
+            edges=[mp.MermaidEdge("SKY", "STR", "")],
+            subgraphs=["WEB", "PAY"],
+        )
+
+    def test_file_flatten_has_labels_not_raw_direction(self):
+        flat = mi.file_flatten_text("DFD — Cardholder", self.diagram)
+        self.assertIn("Stripe — card", flat)
+        self.assertIn("flowchart", flat)
+        self.assertNotIn("flowchart LR", flat)
+        self.assertNotIn("subgraph", flat.lower())
+
+    def test_header_flatten_lists_subgraphs(self):
+        flat = mi.header_flatten_text("DFD — Cardholder", self.diagram)
+        self.assertIn("subgraphs:", flat)
+        self.assertIn("WEB", flat)
+        self.assertIn("PAY", flat)
+        self.assertNotIn("flowchart LR", flat)
+
+    def test_edge_flatten_shape(self):
+        flat = mi.edge_flatten_text("DFD — Cardholder", self.diagram.edges[0])
+        self.assertEqual(flat, "DFD — Cardholder > SKY --> STR")
+
+
+class SearchEvalRegressionTest(unittest.TestCase):
+    def test_tuition_entity_matches_flattened_node(self):
+        tokens = mi._entity_search_tokens("TProg", "Tuition Program")
+        content = (
+            mi.node_flatten_text(
+                "DFD — Standard Data Flow",
+                "GradGuard",
+                "TProg",
+                "Tuition Program",
+            )
+            + " · "
+            + tokens
+        )
+        results = [
+            {
+                "source": "diagrams/mermaid-catalog/standard-data-flow/diagram.mmd",
+                "chunk_kind": "mermaid_node",
+                "content": content,
+            }
+        ]
+        rank, _ = _score_hit(
+            results,
+            expect=["diagrams/mermaid-catalog/standard-data-flow/diagram.mmd"],
+            expect_chunk_kind="mermaid_node",
+            expect_entity="Tuition",
+            cut=3,
+        )
+        self.assertEqual(rank, 1)
+
+    def test_mermaid_header_satisfies_mermaid_file_expect(self):
+        results = [
+            {
+                "source": "d.mmd",
+                "chunk_kind": "mermaid_header",
+                "content": "DFD > subgraphs: GradGuard, PROC",
+            }
+        ]
+        rank, hit = _score_hit(
+            results,
+            expect=["d.mmd"],
+            expect_chunk_kind="mermaid_file",
+            cut=3,
+        )
+        self.assertEqual(rank, 1)
+        self.assertEqual(hit["chunk_kind"], "mermaid_header")
+
+
+if __name__ == "__main__":
+    unittest.main()

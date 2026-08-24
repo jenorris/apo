@@ -54,12 +54,15 @@ Copy examples to `~/.apo/`:
 
 - `search-eval-mermaid-compliance.yaml`
 - `search-eval-mermaid-work-fenced.yaml`
+- `search-eval-mermaid-policy-relay.yaml` — policy-vocabulary queries (catalog + vault-wide)
 
 Run: `just search-eval --file ~/.apo/search-eval-mermaid-compliance.yaml`
 
+Policy-relay results (gates, misses, recommendations): [search-eval-mermaid-policy-relay-results.md](../examples/search-eval-mermaid-policy-relay-results.md).
+
 ## Search tuning (compliance catalog)
 
-Post-reindex benchmark (2026-08-19, k=3): compliance **54.5%** hit@3 (gate ≥80%); work fenced-md **75%** (gate ≥70%, passes).
+Post-reindex benchmark (2026-08-24, k=3): compliance catalog **86.36%** hit@3 (gate ≥80%, passes); policy-relay catalog-scoped **83.33%** (gate ≥75%, passes); policy-relay vault-wide **50% → 60%** after query-gated vault-wide mermaid boost (gate ≥60%, passes). Prior (2026-08-19): catalog **54.5%** before 0.16.1 tuning.
 
 ### Observed failure modes
 

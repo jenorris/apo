@@ -1837,20 +1837,63 @@ def purge_source(full_path: Path) -> bool:
     return True
 
 
-def _catalog_retrieval_boost(path: str, chunk_kind: str, folder_prefix: str) -> float:
-    """Post-fusion score multiplier for mermaid catalog diagram recall."""
-    if not folder_prefix or "mermaid-catalog" not in folder_prefix.replace("\\", "/"):
-        return 1.0
+# Architecture vocabulary — vault-wide mermaid boost only when the query looks
+# like a DFD / CDE / payment-flow question (avoids promoting diagrams on
+# unrelated unscoped searches).
+_ARCH_QUERY_RE = re.compile(
+    r"\b("
+    r"cde|chd|pci|pan|cardholder|stripe|ecs|skypad|faber|cortana|starrez|"
+    r"authorize\.?net|segmentation|architecture|"
+    r"data[\s-]*flow|network[\s-]*diagram|payment[\s-]*processor|"
+    r"diagram\.mmd|mermaid"
+    r")\b",
+    re.I,
+)
+
+
+def _is_architecture_query(query: str) -> bool:
+    return bool(_ARCH_QUERY_RE.search(query or ""))
+
+
+def _catalog_retrieval_boost(
+    path: str,
+    chunk_kind: str,
+    folder_prefix: str,
+    query: str = "",
+) -> float:
+    """Post-fusion score multiplier for mermaid catalog diagram recall.
+
+    Catalog-scoped (``folder`` contains ``mermaid-catalog``): always apply
+    path/chunk_kind boosts and pages demotion.
+
+    Vault-wide (empty ``folder``): same shape, stronger multipliers, but only
+    when ``query`` matches architecture vocabulary — so policy prose does not
+    silently lose every CDE/payment question to diagrams on unrelated searches.
+    """
     norm = path.replace("\\", "/")
+    in_catalog = "mermaid-catalog" in norm
+    folder_scoped = bool(
+        folder_prefix and "mermaid-catalog" in folder_prefix.replace("\\", "/")
+    )
+    vault_wide = (not folder_prefix) and in_catalog and _is_architecture_query(query)
+    if not folder_scoped and not vault_wide:
+        return 1.0
+
+    # Vault-wide needs a larger nudge — competitors are the whole vault.
+    d_mmd = 1.35 if vault_wide else 1.18
+    d_kind = 1.22 if vault_wide else 1.10
+    d_pages = 0.70 if vault_wide else 0.82
+    d_pages_row = 0.55 if vault_wide else 0.75
+
     boost = 1.0
     if norm.endswith("/diagram.mmd") or norm.endswith("diagram.mmd"):
-        boost *= 1.18
+        boost *= d_mmd
     if chunk_kind in ("mermaid_file", "mermaid_header", "mermaid_node", "mermaid_edge"):
-        boost *= 1.10
+        boost *= d_kind
     if "/pages/" in norm:
-        boost *= 0.82
+        boost *= d_pages
     if chunk_kind == "table_row" and "/pages/" in norm:
-        boost *= 0.75
+        boost *= d_pages_row
     return boost
 
 
@@ -2122,10 +2165,18 @@ def search(
     collect_n = max(k, config.RERANK_POOL) if rerank_on else k
     # Folder already constrained retrieval. Exclude may drop hits — when exclude is set,
     # fetch all fused candidates so we don't under-fill k after filtering.
+    vault_wide_arch = (not folder_prefix) and _is_architecture_query(query)
     if exclude:
         fetch_n = len(ranked)
     else:
         fetch_n = min(len(ranked), max(collect_n * 2, collect_n + 8))
+        # Wider pool so vault-wide mermaid boosts can promote diagrams that
+        # sat just outside the default top-N fused cut.
+        if vault_wide_arch:
+            fetch_n = min(len(ranked), max(fetch_n, 48))
+    # Collect enough candidates for post-fusion boost reordering (then cut to k).
+    if vault_wide_arch and not rerank_on and k > 0:
+        collect_n = fetch_n
     ids = ranked[:fetch_n]
     by_id: dict[int, tuple] = {}
     if ids:
@@ -2171,7 +2222,7 @@ def search(
         if _path_excluded(path, excl_prefixes, excl_globs):
             continue
         score = (fused[rid] / top) * _catalog_retrieval_boost(
-            path, chunk_kind or "section", folder_prefix
+            path, chunk_kind or "section", folder_prefix, query=query
         )
         out_text = _build_snippet(
             text,
@@ -2205,10 +2256,17 @@ def search(
         full_texts.append(text)
         if len(hits) >= collect_n:
             break
-    if folder_prefix and "mermaid-catalog" in folder_prefix.replace("\\", "/") and hits:
+    # Re-sort after path/chunk boosts (catalog-scoped or vault-wide architecture).
+    catalog_folder = bool(
+        folder_prefix and "mermaid-catalog" in folder_prefix.replace("\\", "/")
+    )
+    if hits and (catalog_folder or vault_wide_arch):
         paired = sorted(zip(hits, full_texts), key=lambda p: p[0].score, reverse=True)
         hits = [p[0] for p in paired]
         full_texts = [p[1] for p in paired]
+        if vault_wide_arch and not rerank_on and k > 0:
+            hits = hits[:k]
+            full_texts = full_texts[:k]
     if rerank_on and hits:
         hits, status = rerank.rerank_hits(query, hits, k, texts=full_texts)
         _search_rerank.set(status)

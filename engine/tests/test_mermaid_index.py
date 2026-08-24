@@ -16,6 +16,7 @@ from apo_engine import config, core, ops
 
 _DIM = 32
 FIX = Path(__file__).parent / "fixtures" / "standard-data-flow.mmd"
+FIX_CHD = Path(__file__).parent / "fixtures" / "cardholder-data-flow.mmd"
 
 
 def _fake_embed(texts: list[str], **kwargs) -> list[list[float]]:
@@ -103,6 +104,98 @@ class MermaidIndexTest(unittest.TestCase):
         self.assertTrue(out["ok"], out)
         hits = [r for r in out["results"] if r.get("chunk_kind") == "mermaid_node"]
         self.assertTrue(hits, out["results"])
+
+
+class CardholderMermaidIndexTest(unittest.TestCase):
+    """Index real cardholder-data-flow.mmd and check policy-relevant flatten text."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.vault = self.tmp / "vault"
+        catalog_dir = self.vault / "diagrams/mermaid-catalog/cardholder-data-flow"
+        catalog_dir.mkdir(parents=True)
+        (catalog_dir / "diagram.mmd").write_text(FIX_CHD.read_text(encoding="utf-8"), encoding="utf-8")
+        (self.vault / "diagrams/mermaid-catalog/catalog.yaml").write_text(
+            yaml.dump(
+                {
+                    "diagrams": [
+                        {
+                            "slug": "cardholder-data-flow",
+                            "title": "DFD — Cardholder Data Flow",
+                            "type": "flowchart",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.vault / "system/contracts").mkdir(parents=True, exist_ok=True)
+        contract = (
+            Path(__file__).resolve().parents[2] / "docs/contracts/mermaid-contract.schema.yaml"
+        )
+        (self.vault / "system/contracts/mermaid-contract.schema.yaml").write_text(
+            contract.read_text(encoding="utf-8")
+            if contract.is_file()
+            else (
+                "mermaid_contract_version: '0.1'\n"
+                "diagrams:\n"
+                "  - match: 'diagrams/mermaid-catalog/**/diagram.mmd'\n"
+                "    chunk_strategy: nodes_and_edges\n"
+                "    flatten_template: '{title} > {subgraph} > {node} — {label}'\n"
+            ),
+            encoding="utf-8",
+        )
+        self.index = self.tmp / "index.db"
+        self._patches = [
+            mock.patch.object(config, "NOTES_ROOT", self.vault),
+            mock.patch.object(config, "INDEX_PATH", self.index),
+            mock.patch.object(config, "COLLECTION", "mermaid_chd_index_test"),
+            mock.patch.object(config, "VAULTS_CONFIG", ""),
+            mock.patch.object(core, "embed", _fake_embed),
+            mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
+        ]
+        for p in self._patches:
+            p.start()
+        core.index_vault(rebuild=True, verbose=False)
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+        core.writer_close()
+        core.reader_close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _rows(self):
+        db = core.reader_connect()
+        return db.execute(
+            "SELECT chunk_kind, row_key, text FROM chunks "
+            "WHERE path='diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd' ORDER BY ord"
+        ).fetchall()
+
+    def test_stripe_node_flatten_and_entity_tokens(self):
+        nodes = [r for r in self._rows() if r[0] == "mermaid_node" and r[1] == "STR"]
+        self.assertTrue(nodes, self._rows())
+        text = nodes[0][2]
+        self.assertIn("Stripe", text)
+        self.assertIn("STR", text)
+        self.assertIn("card", text)
+        self.assertNotIn("subgraph PAY", text)
+        self.assertNotIn("subgraph", text.lower())
+
+    def test_skypad_node_flatten(self):
+        nodes = [r for r in self._rows() if r[0] == "mermaid_node" and r[1] == "SKY"]
+        self.assertTrue(nodes, self._rows())
+        text = nodes[0][2]
+        self.assertIn("skypad", text)
+        self.assertIn("SKY", text)
+        self.assertNotIn("subgraph", text.lower())
+
+    def test_file_chunk_has_catalog_prefix(self):
+        files = [r for r in self._rows() if r[0] == "mermaid_file"]
+        self.assertTrue(files)
+        text = files[0][2]
+        self.assertIn("cardholder-data-flow", text)
+        self.assertIn("cardholder", text)
 
 
 if __name__ == "__main__":
