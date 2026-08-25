@@ -985,7 +985,7 @@ async def scratchpad(
         Field(description="create only: markdown | yaml | json (default markdown)."),
     ] = None,
     content: Annotated[
-        Any | None,
+        str | dict[str, Any] | list[Any] | None,
         Field(
             description=(
                 "create: seed buffer (string, or object/array for format=json). "

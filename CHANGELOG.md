@@ -4,6 +4,18 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.21.1] — 2026-08-25
+
+### Fixed
+
+- **`scratchpad` MCP tool `content` parameter typed `Any`** — pydantic emits an
+  open (`{}`, no `type`) JSON Schema for `Any`, unlike every sibling
+  write-tool's `str | None` content field. Callers passing plain text got no
+  `type: string` branch to match against, so tool-calling layers could
+  misinterpret literal text as raw JSON and fail to parse it. Narrowed to
+  `str | dict[str, Any] | list[Any] | None`, matching what the field actually
+  accepts (string for markdown/yaml, object/array for `format=json`).
+
 ## [0.21.0] — 2026-08-24
 
 New **read-contract** — a machine YAML alongside okf/usage-contract that tells a
