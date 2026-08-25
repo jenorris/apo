@@ -87,6 +87,22 @@ OKF_ENFORCEMENT: str = os.environ.get("APO_OKF_ENFORCEMENT", "").strip().lower()
 # SQLite busy-handler timeout (seconds) — cross-process writer contention.
 DB_TIMEOUT: float = float(os.environ.get("APO_DB_TIMEOUT", "30"))
 
+# MCP / read-only paths: fail fast instead of inheriting the writer timeout.
+DB_READ_TIMEOUT: float = float(os.environ.get("APO_DB_READ_TIMEOUT", "3"))
+
+# WAL size soft cap (bytes). Writer checkpoints when exceeded.
+WAL_LIMIT_BYTES: int = int(os.environ.get("APO_WAL_LIMIT_BYTES", str(64 * 1024 * 1024)))
+
+# Consecutive embed drops of the same file hash before quarantine (no vectors).
+EMBED_FAIL_QUARANTINE: int = int(os.environ.get("APO_EMBED_FAIL_QUARANTINE", "5"))
+
+# Embed-drop retry backoff (seconds) while below quarantine threshold.
+EMBED_FAIL_BACKOFF: float = float(os.environ.get("APO_EMBED_FAIL_BACKOFF", "30"))
+
+# Watcher lock-error exponential backoff (seconds).
+WATCH_LOCK_BACKOFF_START: float = float(os.environ.get("APO_WATCH_LOCK_BACKOFF_START", "2"))
+WATCH_LOCK_BACKOFF_MAX: float = float(os.environ.get("APO_WATCH_LOCK_BACKOFF_MAX", "60"))
+
 # Watcher: prefer filesystem events over poll-only scan.
 WATCH_USE_EVENTS: bool = os.environ.get("APO_WATCH_EVENTS", "1").lower() not in ("0", "false", "no")
 

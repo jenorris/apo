@@ -4,6 +4,26 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.21.2] — 2026-08-25
+
+### Fixed
+
+- **Watcher self-deadlock hardening** — poisoned cached writer connections now
+  `rollback()` + `writer_close()` on sqlite errors; watch loop uses exponential
+  lock/busy backoff and skips respawning vault threads that fail to join.
+- **WAL bounds** — `journal_size_limit` on writer connect, passive checkpoint on
+  every index finalize, truncate checkpoint when `-wal` exceeds
+  `APO_WAL_LIMIT_BYTES` after a successful watch cycle.
+- **Embed-drop quarantine** — chronic Ollama embed failures stamp
+  `embed_quarantined` after `APO_EMBED_FAIL_QUARANTINE` drops of the same hash
+  (first drop still unstamped per existing contract); retry backoff via
+  `APO_EMBED_FAIL_BACKOFF`.
+- **MCP read path** — `reader_connect()` uses `mode=ro`, closes stale handles
+  on ping failure, `APO_DB_READ_TIMEOUT` (default 3s); ops map sqlite lock/busy
+  to `{ok: false, error: "index_busy"}`.
+- **Git-sync** — idle `pull_ff_only` skipped when the index is in lock-backoff
+  or WAL is over limit.
+
 ## [0.21.1] — 2026-08-25
 
 ### Fixed
