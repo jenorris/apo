@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import queue
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -150,8 +151,16 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
     process_stop = threading.Event()
     # name -> (VaultBinding, Thread, per-vault stop Event)
     active: dict[str, tuple[object, threading.Thread, threading.Event]] = {}
+    zombie_vaults: set[str] = set()
 
     def spawn(b: vaults.VaultBinding, *, initial_rebuild: bool = False) -> None:
+        if b.name in zombie_vaults:
+            if verbose:
+                print(
+                    f"  [registry] skip respawn for vault {b.name!r} — prior thread still alive",
+                    flush=True,
+                )
+            return
         if initial_rebuild:
             try:
                 deferred.signal_rebuild(b.collection, force=False)
@@ -191,6 +200,16 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
         old_b, t, vault_stop = entry
         vault_stop.set()
         t.join(timeout=5)
+        if t.is_alive():
+            zombie_vaults.add(name)
+            if verbose:
+                print(
+                    f"  [registry] soft-removed vault {name!r} ({reason}) — "
+                    f"thread still alive; index/deferred kept ({old_b.index.name}); "
+                    "will not respawn until watcher restart",
+                    flush=True,
+                )
+            return
         if verbose:
             print(
                 f"  [registry] soft-removed vault {name!r} ({reason}) — "
@@ -338,6 +357,7 @@ def _watch_one(
             )
 
     last_scan = 0.0
+    lock_backoff = 0.0
     reconcile = (
         poll
         if observer is None
@@ -451,12 +471,30 @@ def _watch_one(
 
                 if due_poll:
                     last_scan = now
+                core.clear_index_lock_health()
+                core.checkpoint_wal_if_over_limit(verbose=verbose)
+                lock_backoff = 0.0
             except Exception as e:
+                if isinstance(e, sqlite3.Error):
+                    core.writer_reset()
+                    msg = str(e).lower()
+                    if isinstance(e, sqlite3.OperationalError) and (
+                        "locked" in msg or "busy" in msg
+                    ):
+                        lock_backoff = core.note_index_lock_error()
+                    else:
+                        lock_backoff = config.WATCH_LOCK_BACKOFF_START
                 if verbose:
-                    print(f"  [{label}] watch cycle error (continuing): {e}", flush=True)
+                    suffix = f" (backing off {lock_backoff:.0f}s)" if lock_backoff else ""
+                    print(
+                        f"  [{label}] watch cycle error (continuing){suffix}: {e}",
+                        flush=True,
+                    )
 
             due_in = debouncer.next_due_in()
-            if due_in is not None:
+            if lock_backoff > 0:
+                timeout = max(0.05, lock_backoff)
+            elif due_in is not None:
                 timeout = max(0.05, min(due_in, 1.0 if observer is not None else min(poll, 5.0)))
             else:
                 timeout = 1.0 if observer is not None else min(poll, 5.0)

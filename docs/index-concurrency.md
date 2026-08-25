@@ -69,7 +69,13 @@ Idle vault scans no longer commit when nothing changed.
 
 | Env | Default | Meaning |
 |-----|---------|---------|
-| `APO_DB_TIMEOUT` | `30` | SQLite busy-handler (seconds) |
+| `APO_DB_TIMEOUT` | `30` | SQLite busy-handler for the **writer** (seconds) |
+| `APO_DB_READ_TIMEOUT` | `3` | MCP / read-only busy-handler — fail fast (seconds) |
+| `APO_WAL_LIMIT_BYTES` | `67108864` (64MiB) | Soft WAL cap; passive checkpoint on finalize; truncate after watch cycle when exceeded |
+| `APO_EMBED_FAIL_QUARANTINE` | `5` | Consecutive embed drops of the same file hash before quarantine (no vectors) |
+| `APO_EMBED_FAIL_BACKOFF` | `30` | Seconds between embed-drop retries while below quarantine threshold |
+| `APO_WATCH_LOCK_BACKOFF_START` | `2` | Initial watcher sleep after sqlite lock/busy (seconds) |
+| `APO_WATCH_LOCK_BACKOFF_MAX` | `60` | Cap on watcher lock-error exponential backoff (seconds) |
 | `WATCH_INTERVAL` | `30` | Periodic full hash scan (seconds) |
 | `APO_WATCH_EVENTS` | `1` | fsevents via `watchdog` (`0` = poll-only) |
 | `APO_WATCH_DEBOUNCE` | `2` | Quiet-seconds before embedding a touched path (FS + deferred queue) |
@@ -116,6 +122,26 @@ just watch-status
 tail -f ~/.apo/watch-launchd.log
 just index          # manual full index from CLI (also writes DB — stop watcher first if lock errors)
 ```
+
+### Lock / WAL runaway (last resort)
+
+If the watcher spins on `database is locked` and `index-*.db-wal` grows without bound:
+
+```bash
+just watch-stop
+sqlite3 ~/.apo/index-<vault>.db "PRAGMA wal_checkpoint(TRUNCATE);"
+just watch-install   # or just watch-start after merging a fixed engine
+```
+
+Normal operation: the watcher calls `writer_reset()` on sqlite errors, exponential backoff on
+lock/busy, `PRAGMA wal_checkpoint(PASSIVE)` after each successful index finalize, and
+`wal_checkpoint(TRUNCATE)` when the `-wal` file exceeds `APO_WAL_LIMIT_BYTES`. MCP readers use
+`mode=ro` with the short read timeout and return `{ok: false, error: "index_busy"}` instead of
+hanging until Cursor kills stdio.
+
+Embed drops retry with backoff; after `APO_EMBED_FAIL_QUARANTINE` consecutive failures of the
+same content hash the file is stamped `embed_quarantined` (no vectors) until the hash changes.
+Git idle pull is skipped while the index is in lock-backoff or over the WAL limit.
 
 If MCP and watcher contend during a manual `just index`, stop the watcher first:
 

@@ -761,6 +761,16 @@ class VaultSyncController:
             commit_waiting = self._commit_due_at is not None
         if commit_waiting or index_busy:
             return
+        from apo_engine import core as _core
+
+        if _core.index_lock_backoff_active():
+            if self.verbose:
+                print("  git-sync pull: skipped (index_busy)", flush=True)
+            return
+        if _core.is_wal_over_limit():
+            if self.verbose:
+                print("  git-sync pull: skipped (wal_over_limit)", flush=True)
+            return
         if self._last_pull_at and (now - self._last_pull_at) < settings.pull_interval_seconds:
             return
         # First tick: don't pull immediately — wait one interval from start

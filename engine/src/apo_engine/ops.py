@@ -6,6 +6,7 @@ Read + write paths for gateways. Index writes stay watcher-owned (deferred enque
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 from datetime import datetime, time as dt_time
 from pathlib import Path
@@ -88,6 +89,17 @@ class OpsError(Exception):
 
 def _err(**kw: Any) -> dict[str, Any]:
     return {"ok": False, **kw}
+
+
+def _sqlite_index_err(exc: BaseException) -> dict[str, Any] | None:
+    """Map sqlite lock/busy failures to structured MCP payloads."""
+    if isinstance(exc, core.IndexBusyError):
+        return _err(error="index_busy", message=str(exc))
+    if isinstance(exc, sqlite3.OperationalError):
+        msg = str(exc).lower()
+        code = "index_busy" if "locked" in msg or "busy" in msg else "index_unavailable"
+        return _err(error=code, message=str(exc))
+    return None
 
 
 def _binding(vault: str = "", *, write: bool = False) -> vaults.VaultBinding:
@@ -1100,6 +1112,8 @@ def search(
                 continue
             return _err(error="search_failed", message=msg)
         except Exception as e:
+            if err := _sqlite_index_err(e):
+                return err
             if total_attempts > 1:
                 failed += 1
                 prefix = f"vault {b.name}" if fanout_vaults else ""
@@ -1265,8 +1279,13 @@ def _read_from_chunk(
     if format not in ("markdown", "json", "row", "node"):
         return _err(error="bad_request", message="format must be markdown|json|row|node")
 
-    with vaults.bind(b):
-        chunk = core.lookup_chunk(chunk_hash, include_text=True)
+    try:
+        with vaults.bind(b):
+            chunk = core.lookup_chunk(chunk_hash, include_text=True)
+    except sqlite3.Error as e:
+        if err := _sqlite_index_err(e):
+            return err
+        raise
     if not chunk:
         return _err(
             error="anchor_not_found",
@@ -1283,8 +1302,13 @@ def _read_from_chunk(
         )
 
     # Same-depth navigation: hop to the sibling and read *that* chunk instead.
-    with vaults.bind(b):
-        order = core.note_chunk_order(rel)
+    try:
+        with vaults.bind(b):
+            order = core.note_chunk_order(rel)
+    except sqlite3.Error as e:
+        if err := _sqlite_index_err(e):
+            return err
+        raise
     cur_idx = next((i for i, c in enumerate(order) if c["chunk_hash"] == chunk_hash), -1)
     if sibling is not None:
         target = _resolve_sibling(order, cur_idx, sibling) if cur_idx >= 0 else None
@@ -1580,8 +1604,13 @@ def read_note(
 
     # Explicit ToC: lean outline from the index, no body.
     if mode == "toc" and heading is None:
-        with vaults.bind(b):
-            toc_out = _build_toc(path_s, file_bytes)
+        try:
+            with vaults.bind(b):
+                toc_out = _build_toc(path_s, file_bytes)
+        except sqlite3.Error as e:
+            if err := _sqlite_index_err(e):
+                return err
+            raise
         toc_out.update({"ok": True, "path": path_s, "vault": b.name, "scope": "toc"})
         return _stamp_qualified(toc_out, vault=b.name, path=path_s)
     out: dict[str, Any] = {
@@ -1938,6 +1967,10 @@ def filter_notes(
                 sort=sort,
                 order=order,
             )
+    except sqlite3.Error as e:
+        if err := _sqlite_index_err(e):
+            return err
+        raise
     except ValueError as e:
         return _err(error="bad_request", message=str(e))
     notes = [

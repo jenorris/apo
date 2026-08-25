@@ -210,16 +210,21 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertNotIn("bad.md", paths)
         db = sqlite3.connect(config.INDEX_PATH)
         try:
-            stamped = {
-                r[0] for r in db.execute("SELECT path FROM files").fetchall()
-            }
+            row = db.execute(
+                "SELECT mtime, hash FROM files WHERE path='bad.md'"
+            ).fetchone()
         finally:
             db.close()
-        self.assertIn("good.md", stamped)
-        self.assertNotIn("bad.md", stamped)
+        # Embed-fail tracking may insert a sentinel row (mtime=0, hash='') — not a full stamp.
+        self.assertTrue(row is None or (float(row[0]) == 0.0 and row[1] == ""))
 
         # Healthy reindex picks up the previously dropped note (no mtime-skip trap).
-        core.index_vault(verbose=False)
+        saved_backoff = config.EMBED_FAIL_BACKOFF
+        config.EMBED_FAIL_BACKOFF = 0.0
+        try:
+            core.index_vault(verbose=False)
+        finally:
+            config.EMBED_FAIL_BACKOFF = saved_backoff
         self.assertIn("bad.md", self.chunk_paths())
 
     def test_index_files_skips_unreadable_without_aborting_batch(self):

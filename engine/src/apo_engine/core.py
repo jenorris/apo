@@ -49,6 +49,13 @@ _hash_algo_ready: set[str] = set()
 _writer_local = threading.local()
 # Cached read-only connection per thread — reused across search/filter_notes/etc. calls.
 _reader_local = threading.local()
+# Per-index lock backoff + embed-drop retry state (keyed by resolved index path).
+_index_health_lock = threading.Lock()
+_index_health: dict[str, dict[str, float]] = {}
+
+
+class IndexBusyError(Exception):
+    """SQLite index is locked or busy (MCP should fail fast, not hang)."""
 
 # Content identity for files.hash / chunks.content_hash. blake2b is stdlib-only and
 # substantially faster than SHA-256 on large notes; digest sizes keep hex widths stable
@@ -650,6 +657,14 @@ def _ensure_files_columns(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE files ADD COLUMN frontmatter TEXT")
     if "bytes" not in cols:
         db.execute("ALTER TABLE files ADD COLUMN bytes INTEGER")
+    if "embed_fails" not in cols:
+        db.execute("ALTER TABLE files ADD COLUMN embed_fails INTEGER NOT NULL DEFAULT 0")
+    if "embed_fail_hash" not in cols:
+        db.execute("ALTER TABLE files ADD COLUMN embed_fail_hash TEXT")
+    if "embed_quarantined" not in cols:
+        db.execute("ALTER TABLE files ADD COLUMN embed_quarantined INTEGER NOT NULL DEFAULT 0")
+    if "embed_fail_at" not in cols:
+        db.execute("ALTER TABLE files ADD COLUMN embed_fail_at REAL")
 
 
 def _ensure_ref_catalog_tables(db: sqlite3.Connection) -> None:
@@ -711,10 +726,65 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS chunks_table ON chunks(table_id)")
 
 
-def connect(path: Path | None = None) -> sqlite3.Connection:
-    index = Path(path or vaults.index_path()).resolve()
-    key = str(index)
-    db = sqlite3.connect(str(index), timeout=config.DB_TIMEOUT)
+def _health_key(index: Path | None = None) -> str:
+    return str(Path(index or vaults.index_path()).resolve())
+
+
+def index_lock_backoff_active(*, index: Path | None = None) -> bool:
+    """True while the watcher is backing off after sqlite lock errors on this index."""
+    key = _health_key(index)
+    now = time.monotonic()
+    with _index_health_lock:
+        h = _index_health.get(key, {})
+        return float(h.get("backoff_until", 0.0)) > now
+
+
+def note_index_lock_error(*, index: Path | None = None) -> float:
+    """Record a lock/busy sqlite error; return seconds to sleep before retry."""
+    key = _health_key(index)
+    with _index_health_lock:
+        h = _index_health.setdefault(key, {})
+        n = int(h.get("consecutive", 0)) + 1
+        h["consecutive"] = float(n)
+        delay = min(
+            config.WATCH_LOCK_BACKOFF_START * (2 ** (n - 1)),
+            config.WATCH_LOCK_BACKOFF_MAX,
+        )
+        h["backoff_until"] = time.monotonic() + delay
+        return delay
+
+
+def clear_index_lock_health(*, index: Path | None = None) -> None:
+    key = _health_key(index)
+    with _index_health_lock:
+        h = _index_health.get(key)
+        if h is not None:
+            h.pop("consecutive", None)
+            h.pop("backoff_until", None)
+
+
+def wal_bytes(*, index: Path | None = None) -> int:
+    p = Path(index or vaults.index_path()).resolve()
+    wal = Path(f"{p}-wal")
+    try:
+        return wal.stat().st_size if wal.is_file() else 0
+    except OSError:
+        return 0
+
+
+def is_wal_over_limit(*, index: Path | None = None) -> bool:
+    return wal_bytes(index=index) > config.WAL_LIMIT_BYTES
+
+
+def _open_sqlite(index: Path, *, timeout: float, read_only: bool = False) -> sqlite3.Connection:
+    if read_only:
+        db = sqlite3.connect(
+            f"file:{index}?mode=ro",
+            uri=True,
+            timeout=timeout,
+        )
+    else:
+        db = sqlite3.connect(str(index), timeout=timeout)
     if not hasattr(db, "enable_load_extension"):
         raise RuntimeError(
             "This Python's sqlite3 cannot load extensions (needed for sqlite-vec). "
@@ -724,14 +794,23 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     db.enable_load_extension(True)
     sqlite_vec.load(db)
     db.enable_load_extension(False)
-    # busy_timeout is per-connection (must be set every time); journal_mode is a persistent
-    # property of the database file itself — setting it on an already-WAL file still forces
-    # SQLite to open/verify the -wal file each time (measured ~0.28ms), pure overhead paid on
-    # every read-only connect() (search/filter_notes/recent_notes/... open one per call).
-    # Only need to assert it once per process, same lifetime as the schema-bootstrap check.
-    db.execute(f"PRAGMA busy_timeout={int(config.DB_TIMEOUT * 1000)}")
-    if key not in _schema_ready:
+    busy_ms = int(timeout * 1000)
+    db.execute(f"PRAGMA busy_timeout={busy_ms}")
+    return db
+
+
+def connect(path: Path | None = None, *, read_only: bool = False) -> sqlite3.Connection:
+    index = Path(path or vaults.index_path()).resolve()
+    key = str(index)
+    if read_only and not index.is_file():
+        # RO URI cannot create an index file — bootstrap schema once via a writer connection.
+        bootstrap = connect(path=index, read_only=False)
+        bootstrap.close()
+    timeout = config.DB_READ_TIMEOUT if read_only else config.DB_TIMEOUT
+    db = _open_sqlite(index, timeout=timeout, read_only=read_only)
+    if not read_only and key not in _schema_ready:
         db.execute("PRAGMA journal_mode=WAL")
+        db.execute(f"PRAGMA journal_size_limit={config.WAL_LIMIT_BYTES}")
         db.executescript(
             """
             CREATE TABLE IF NOT EXISTS meta   (key TEXT PRIMARY KEY, value TEXT);
@@ -761,6 +840,11 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
             CREATE INDEX IF NOT EXISTS backlinks_source ON backlinks(source);
             """
         )
+        _ensure_chunk_columns(db)
+        _ensure_files_columns(db)
+        _ensure_ref_catalog_tables(db)
+        _schema_ready.add(key)
+    elif read_only and key not in _schema_ready:
         _ensure_chunk_columns(db)
         _ensure_files_columns(db)
         _ensure_ref_catalog_tables(db)
@@ -812,6 +896,19 @@ def writer_connect(
     return db
 
 
+def writer_reset(*, index_key: str | None = None) -> None:
+    """Rollback and close the cached writer after a poisoned transaction."""
+    key = index_key if index_key is not None else _index_key()
+    conns = _tls_map(_writer_local, "conns")
+    db = conns.get(key)
+    if db is not None:
+        try:
+            db.rollback()
+        except sqlite3.Error:
+            pass
+    writer_close(index_key=index_key)
+
+
 def writer_close(*, index_key: str | None = None) -> None:
     """Close writer connection(s). Default: active index only; pass '' to close all."""
     conns = _tls_map(_writer_local, "conns")
@@ -858,10 +955,10 @@ def reader_connect() -> sqlite3.Connection:
                 pings[key] = now
                 return db
             except sqlite3.Error:
-                pass
+                reader_close(index_key=key)
         else:
             return db
-    db = connect()
+    db = connect(read_only=True)
     conns[key] = db
     pings[key] = now
     return db
@@ -998,6 +1095,117 @@ def _finalize_index_writes(db: sqlite3.Connection) -> None:
     ensure_fts(db)
     db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_ready','1')")
     db.commit()
+    try:
+        db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+    except sqlite3.Error:
+        pass
+
+
+def checkpoint_wal_if_over_limit(*, verbose: bool = False) -> bool:
+    """TRUNCATE checkpoint when the -wal file exceeds ``WAL_LIMIT_BYTES``."""
+    if not is_wal_over_limit():
+        return False
+    try:
+        db = writer_connect()
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        if verbose:
+            print(
+                f"  wal checkpoint truncate (wal now {wal_bytes()} bytes)",
+                flush=True,
+            )
+        return True
+    except sqlite3.Error:
+        writer_reset()
+        return False
+
+
+def _files_embed_state(
+    db: sqlite3.Connection, rel: str
+) -> tuple[int, str | None, int, float]:
+    row = db.execute(
+        "SELECT embed_fails, embed_fail_hash, embed_quarantined, embed_fail_at "
+        "FROM files WHERE path=?",
+        (rel,),
+    ).fetchone()
+    if row is None:
+        return 0, None, 0, 0.0
+    return int(row[0] or 0), row[1], int(row[2] or 0), float(row[3] or 0.0)
+
+
+def _is_embed_quarantined(db: sqlite3.Connection, rel: str, file_hash: str) -> bool:
+    _fails, fail_hash, quarantined, _at = _files_embed_state(db, rel)
+    return bool(quarantined) and fail_hash == file_hash
+
+
+def _embed_retry_backoff_active(db: sqlite3.Connection, rel: str, file_hash: str) -> bool:
+    fails, fail_hash, quarantined, fail_at = _files_embed_state(db, rel)
+    if quarantined and fail_hash == file_hash:
+        return True
+    if fails <= 0 or fail_hash != file_hash:
+        return False
+    return (time.time() - fail_at) < config.EMBED_FAIL_BACKOFF
+
+
+def _record_embed_drops(
+    db: sqlite3.Connection,
+    dropped: set[str],
+    plans_by_rel: dict[str, Any],
+    *,
+    verbose: bool,
+) -> set[str]:
+    """Persist embed-fail counters; quarantine chronic drops. Returns quarantined paths."""
+    quarantined: set[str] = set()
+    now = time.time()
+    for rel in dropped:
+        plan = plans_by_rel.get(rel)
+        if plan is None:
+            continue
+        fh = plan.file_hash
+        fails, fail_hash, _q, _at = _files_embed_state(db, rel)
+        fails = (fails + 1) if fail_hash == fh else 1
+        if fails >= config.EMBED_FAIL_QUARANTINE:
+            db.execute(
+                "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter, bytes, "
+                "embed_fails, embed_fail_hash, embed_quarantined, embed_fail_at) "
+                "VALUES (?,?,?,?,?,?,?,1,?)",
+                (
+                    rel,
+                    plan.mtime,
+                    fh,
+                    plan.frontmatter_json,
+                    plan.file_bytes,
+                    fails,
+                    fh,
+                    now,
+                ),
+            )
+            quarantined.add(rel)
+            if verbose:
+                print(
+                    f"  WARNING: quarantined embed for {rel!r} after {fails} drop(s)",
+                    flush=True,
+                )
+        else:
+            # Unstamped retry row — mtime/hash sentinels so the next pass still re-embeds.
+            db.execute(
+                "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter, bytes, "
+                "embed_fails, embed_fail_hash, embed_quarantined, embed_fail_at) "
+                "VALUES (?,?,?,?,?,?,?,0,?)",
+                (rel, 0.0, "", plan.frontmatter_json, plan.file_bytes, fails, fh, now),
+            )
+            if verbose:
+                print(
+                    f"  WARNING: embed drop for {rel!r} — retry {fails}/"
+                    f"{config.EMBED_FAIL_QUARANTINE} on next index",
+                    flush=True,
+                )
+    if dropped and verbose and not quarantined:
+        print(
+            f"  WARNING: {len(dropped)} file(s) left unstamped after embed drop — "
+            "will retry on next index (not a permanent mtime-skip)",
+            flush=True,
+        )
+    return quarantined
 
 
 def _embed_and_store_pending(
@@ -1050,11 +1258,7 @@ def _embed_and_store_pending(
                     flush=True,
                 )
     if dropped and verbose:
-        print(
-            f"  WARNING: {len(dropped)} file(s) left unstamped after embed drop — "
-            "will retry on next index (not a permanent mtime-skip)",
-            flush=True,
-        )
+        pass  # caller logs via _record_embed_drops
     return stored, dropped
 
 
@@ -1231,6 +1435,23 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
     if not root.exists():
         raise SystemExit(f"NOTES_ROOT does not exist: {root}")
 
+    try:
+        return _index_vault_impl(
+            rebuild=rebuild, limit=limit, verbose=verbose, root=root, t0=t0
+        )
+    except sqlite3.Error:
+        writer_reset()
+        raise
+
+
+def _index_vault_impl(
+    *,
+    rebuild: bool,
+    limit: int | None,
+    verbose: bool,
+    root: Path,
+    t0: float,
+) -> IndexStats:
     if rebuild:
         writer_close()
         _schema_ready.discard(_index_key())
@@ -1289,9 +1510,17 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
             db.execute("UPDATE files SET mtime=? WHERE path=?", (st.st_mtime, rel))
             mtime_refreshed = True
             continue
-        if prev:
+        if _is_embed_quarantined(db, rel, h):
+            db.execute("UPDATE files SET mtime=? WHERE path=?", (st.st_mtime, rel))
+            mtime_refreshed = True
+            continue
+        if _embed_retry_backoff_active(db, rel, h):
+            continue
+        if prev and prev[1] == "":
+            # Embed-fail sentinel — rebuild chunks but keep fail counters on the files row.
             _delete_path(db, rel)
-            # Drop the catalog row so a failed embed cannot mtime-skip on the old stamp.
+        elif prev:
+            _delete_path(db, rel)
             db.execute("DELETE FROM files WHERE path=?", (rel,))
             stats.changed += 1
         else:
@@ -1355,14 +1584,19 @@ def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool =
     dropped: set[str] = set()
     if pending:
         stats.chunks, dropped = _embed_and_store_pending(db, pending, verbose=verbose)
+    plans_by_rel = {
+        rel: _EmbedDropPlan(mtime, h, fm_json, file_bytes)
+        for rel, mtime, h, fm_json, file_bytes in file_stamps
+    }
+    quarantined = _record_embed_drops(db, dropped, plans_by_rel, verbose=verbose) if dropped else set()
     stamped = 0
     for rel, mtime, h, fm_json, file_bytes in file_stamps:
         if rel in dropped:
-            # Undo added/changed counts for notes we could not finish indexing.
-            if rel in known:
-                stats.changed = max(0, stats.changed - 1)
-            else:
-                stats.added = max(0, stats.added - 1)
+            if rel not in quarantined:
+                if rel in known:
+                    stats.changed = max(0, stats.changed - 1)
+                else:
+                    stats.added = max(0, stats.added - 1)
             continue
         db.execute(
             "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter, bytes) VALUES (?,?,?,?,?)",
@@ -1593,6 +1827,14 @@ def _vectors_by_content_hash(db: sqlite3.Connection, rel: str) -> dict[str, list
 
 
 @dataclass
+class _EmbedDropPlan:
+    mtime: float
+    file_hash: str
+    frontmatter_json: str | None
+    file_bytes: int
+
+
+@dataclass
 class _FilePlan:
     rel: str
     full_path: Path
@@ -1615,6 +1857,15 @@ def index_file(full_path: Path, verbose: bool = False) -> int:
 
 
 def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
+    """Index many notes with partial chunk reuse and one batched Ollama embed."""
+    try:
+        return _index_files_impl(paths, verbose=verbose)
+    except sqlite3.Error:
+        writer_reset()
+        raise
+
+
+def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
     """Index many notes with partial chunk reuse and one batched Ollama embed."""
     root = vaults.notes_root()
     db = writer_connect()
@@ -1664,6 +1915,11 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
         if prev is not None and prev[1] == file_hash:
             db.execute("UPDATE files SET mtime=? WHERE path=?", (st_mtime, rel))
             continue
+        if _is_embed_quarantined(db, rel, file_hash):
+            db.execute("UPDATE files SET mtime=? WHERE path=?", (st_mtime, rel))
+            continue
+        if _embed_retry_backoff_active(db, rel, file_hash):
+            continue
         try:
             file_bytes = full_path.stat().st_size
         except OSError:
@@ -1712,9 +1968,10 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
     for rel in purge_rels:
         _delete_path_by_rel(db, rel)
     for plan in active:
+        prev = known.get(plan.rel)
         _delete_path(db, plan.rel)
-        # Drop catalog row until embed succeeds — avoids permanent mtime-skip on drop.
-        db.execute("DELETE FROM files WHERE path=?", (plan.rel,))
+        if not (prev is not None and prev[1] == ""):
+            db.execute("DELETE FROM files WHERE path=?", (plan.rel,))
         if plan.wikilinks:
             db.executemany(
                 "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
@@ -1783,6 +2040,10 @@ def index_files(paths: list[Path] | set[Path], *, verbose: bool = False) -> int:
                     f"  … stored {min(i + _EMBED_COMMIT_BATCH, len(all_pending))}/{len(all_pending)} chunks",
                     flush=True,
                 )
+    quarantined: set[str] = set()
+    if dropped:
+        plans_by_rel = {plan.rel: plan for plan in active}
+        quarantined = _record_embed_drops(db, dropped, plans_by_rel, verbose=verbose)
     stamped = 0
     for plan in active:
         if plan.rel in dropped:
