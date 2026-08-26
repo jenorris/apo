@@ -57,6 +57,10 @@ desk-project-claude:
 desk-project-cursor:
     ./scripts/write-cursor-rule.sh
 
+# Lint markdown for bad filter_notes({...}) wire examples (missing where=).
+check-filter-notes-wire:
+    ./scripts/check-filter-notes-wire.sh
+
 # OKF bundle: validate | fix | init | export | ingest.
 # `okf validate --profile okf` checks SPEC §11 conformance exactly;
 # `--profile apo` (default) is the stricter house producer profile.
