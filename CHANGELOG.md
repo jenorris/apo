@@ -4,6 +4,19 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.22.1] — 2026-08-26
+
+### Added
+
+- **`just desk-project-cursor`** — places compact index (`--mode index`, ~1.8KB) into `~/.cursor/rules/apo-desk.mdc` via `scripts/write-cursor-rule.sh`.
+- **`just check-filter-notes-wire`** — lint script guards `filter_notes({...})` doc examples missing `where=`.
+
+### Changed
+
+- **Tier-2 desk projection** — removed `## Examples`, `## Contract inventory`, and `## Key directives (recap)` from `render_desk_body()` (index mode unchanged).
+- **MCP Field descriptions** — deduped `expected_mtime` and region-hash suffix text in `server.py`.
+- **Docs** — `vault(action=project)` described as return-only; host places via `desk-project-cursor` / `desk-project-claude`.
+
 ## [0.22.0] — 2026-08-26
 
 ### Changed (breaking)
