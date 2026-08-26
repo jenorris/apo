@@ -319,6 +319,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
         self.assertGreater(directive_pos, -1)
         self.assertGreater(table_pos, -1)
         self.assertLess(directive_pos, table_pos)
+        self.assertIn("vault(action=stats", index_body)
         self.assertIn("`atlas`", index_body)
         self.assertIn("personal PARA", index_body)
         # Sections that belong to Tier 2 only, not the compact index.
@@ -987,6 +988,7 @@ class VaultOpTest(unittest.TestCase):
         self.assertLess(indexed["bytes"], full["bytes"])
         self.assertIn("`alpha`", indexed["body"])
         self.assertIn('vault(action=project, vaults=["<id>"])', indexed["body"])
+        self.assertIn("vault(action=stats", indexed["body"])
         # default_vault/desk_meta are attached the same way regardless of mode.
         self.assertEqual(indexed["default_vault"], full["default_vault"])
 

@@ -73,7 +73,7 @@ Structured content follows the same anchor-first discipline as prose:
 
 ```
 read_note(mode=toc) → read_note(chunk_hash=)               # outline, then one section
-search(natural language) → row hit (chunk_kind=table_row)  → patch_note(update_cell, …)
+search(natural language) → row hit (chunk_kind=table_row) → patch_table(update_cell, …)
 read_note(chunk_hash=row, format=row) → expected_row_hash    → patch_note(row op)
 ```
 

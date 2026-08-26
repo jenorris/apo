@@ -23,11 +23,11 @@ from apo_engine.mcp_backend import ApoStore
 from apo_engine.mcp_instructions import MCP_INSTRUCTIONS as _MCP_INSTRUCTIONS
 from apo_engine.patch_ops import (
     OPS_FIELD_DESC,
-    PATCH_NOTES_ITEMS_DESC,
     SCRATCHPAD_OPS_FIELD_DESC,
-    PatchNotesItem,
-    PatchOp,
+    TABLE_OPS_FIELD_DESC,
+    PatchNoteOp,
     ScratchpadOp,
+    TablePatchOp,
 )
 
 # Tool annotation presets
@@ -435,6 +435,16 @@ _VAULT_ARG_DESC = (
     "Vault id from this MCP process registry when path/folder has no vault_id: prefix."
 )
 
+_READ_NOTE_PATH_DESC = _VAULT_REL_PATH_DESC + " XOR with chunk_hash."
+_READ_NOTE_CHUNK_HASH_DESC = "Section anchor from search_notes hits (XOR with path)."
+_READ_NOTE_FORCE_DESC = "chunk_hash mode: return full section above preview threshold."
+_READ_NOTE_FIELDS_DESC = "Optional frontmatter projection; [] omits frontmatter key."
+_READ_NOTE_REF_DESC = (
+    "Path mode only: read a git blob at this ref (branch/bookmark/OID) "
+    "from the vault root repo. Read-only; not compatible with chunk_hash=. "
+    "For jj WIP preview, pass the exported feature bookmark."
+)
+
 
 @mcp.tool(annotations=_MUTATE)
 async def write_note(
@@ -540,49 +550,76 @@ async def append_note(
 async def patch_note(
     path: Annotated[
         str,
-        Field(description=_VAULT_REL_PATH_DESC + " Omit when using items=."),
+        Field(description=_VAULT_REL_PATH_DESC + " Omit for place-only ops."),
     ] = "",
     ops: Annotated[
-        list[PatchOp] | None,
+        list[PatchNoteOp] | None,
         Field(description=OPS_FIELD_DESC),
-    ] = None,
-    items: Annotated[
-        list[PatchNotesItem] | None,
-        Field(description=PATCH_NOTES_ITEMS_DESC),
     ] = None,
     strict: bool = False,
     dry_run: bool = False,
     verbose: bool = False,
     expected_mtime: Annotated[
         float | None,
-        Field(description=_EXPECTED_MTIME_PATCH_DESC),
+        Field(description=_EXPECTED_MTIME_DESC),
     ] = None,
     expected_frontmatter_hash: Annotated[
         str | None,
-        Field(description=_REGION_HASH_DESC + _REGION_HASH_SINGLE_PATH_SUFFIX),
+        Field(description=_REGION_HASH_DESC),
     ] = None,
     expected_body_hash: Annotated[
         str | None,
-        Field(description=_REGION_HASH_DESC + _REGION_HASH_SINGLE_PATH_SUFFIX),
+        Field(description=_REGION_HASH_DESC),
     ] = None,
     expected_content_hash: Annotated[
         str | None,
-        Field(description=_REGION_HASH_DESC + _REGION_HASH_SINGLE_PATH_SUFFIX),
+        Field(description=_REGION_HASH_DESC),
     ] = None,
     vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
 ) -> dict:
-    """Mutate frontmatter/sections or place (ops place). Single: path+ops or place-only ops. Multi: items[]."""
+    """Mutate frontmatter/sections or place (ops place). path+ops or place-only ops."""
     return await asyncio.to_thread(
         apo_ops.patch_entry,
         path=path,
         ops=ops,
-        items=items,
+        items=None,
         strict=strict,
         dry_run=dry_run,
         verbose=verbose,
         expected_mtime=expected_mtime,
         expected_frontmatter_hash=expected_frontmatter_hash,
         expected_body_hash=expected_body_hash,
+        expected_content_hash=expected_content_hash,
+        vault=vault,
+    )
+
+
+@mcp.tool(annotations=_MUTATE)
+async def patch_table(
+    path: Annotated[str, Field(description=_VAULT_REL_PATH_DESC)],
+    ops: Annotated[list[TablePatchOp], Field(description=TABLE_OPS_FIELD_DESC)],
+    strict: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+    expected_mtime: Annotated[
+        float | None,
+        Field(description=_EXPECTED_MTIME_DESC),
+    ] = None,
+    expected_content_hash: Annotated[
+        str | None,
+        Field(description=_REGION_HASH_DESC),
+    ] = None,
+    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
+) -> dict:
+    """GFM table row/cell mutators. Anchor from search table_row hits or read_note(format=row)."""
+    return await asyncio.to_thread(
+        apo_ops.patch_note,
+        path,
+        ops,
+        strict=strict,
+        dry_run=dry_run,
+        verbose=verbose,
+        expected_mtime=expected_mtime,
         expected_content_hash=expected_content_hash,
         vault=vault,
     )
@@ -595,26 +632,20 @@ async def patch_note(
 
 @mcp.tool(annotations=_RO)
 async def read_note(
-    path: Annotated[
-        str,
-        Field(description=_VAULT_REL_PATH_DESC + " XOR with chunk_hash."),
-    ] = "",
+    path: Annotated[str, Field(description=_READ_NOTE_PATH_DESC)] = "",
     chunk_hash: Annotated[
         str | None,
-        Field(description="Section anchor from search_notes hits (XOR with path)."),
+        Field(description=_READ_NOTE_CHUNK_HASH_DESC),
     ] = None,
     heading: str | None = None,
     vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
     start_line: int | None = None,
     end_line: int | None = None,
     max_chars: int | None = None,
-    force: Annotated[
-        bool,
-        Field(description="chunk_hash mode: return full section above preview threshold."),
-    ] = False,
+    force: Annotated[bool, Field(description=_READ_NOTE_FORCE_DESC)] = False,
     fields: Annotated[
         list[str] | None,
-        Field(description="Optional frontmatter projection; [] omits frontmatter key."),
+        Field(description=_READ_NOTE_FIELDS_DESC),
     ] = None,
     raw: Annotated[
         bool,
@@ -662,16 +693,7 @@ async def read_note(
             ),
         ),
     ] = False,
-    ref: Annotated[
-        str,
-        Field(
-            description=(
-                "Path mode only: read a git blob at this ref (branch/bookmark/OID) "
-                "from the vault root repo. Read-only; not compatible with chunk_hash=. "
-                "For jj WIP preview, pass the exported feature bookmark."
-            ),
-        ),
-    ] = "",
+    ref: Annotated[str, Field(description=_READ_NOTE_REF_DESC)] = "",
 ) -> dict:
     """Read by path or search hit chunk_hash. Search → read_note(chunk_hash=)."""
     return await asyncio.to_thread(

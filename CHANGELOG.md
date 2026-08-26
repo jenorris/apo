@@ -4,6 +4,31 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-08-26
+
+### Changed (breaking)
+
+- **`patch_note` MCP slim** — note/section/place ops only (8 variants). Removed `items[]` batch param from MCP (RPC `POST /v1/patch_notes` unchanged). Table row ops moved to new **`patch_table`** tool (6 variants).
+- **`MCP_INSTRUCTIONS` handshake** — trimmed to ~770 chars (was ~1.9k); documents `patch_table`, `vault(action=stats)`, and per-vault `project`.
+- **Claude `apo-desk` skill** — `write-claude-skill.sh` now projects **index** mode (~1KB) instead of full desk (~29KB).
+
+### Added
+
+- **`patch_table`** MCP tool — GFM table row/cell mutators (`update_cell`, `update_row`, `append_row`, `delete_row`, `replace_table`, `alter_table_schema`).
+- **`test_patch_table_schema.py`** / **`test_mcp_schema_size.py`** — regression ceilings on tool payload size.
+- **Desk index** — `vault(action=stats, days=7)` habit-check line in compact projection.
+
+### MCP instruction size (patch_note split)
+
+| Metric | 0.22.1 | 0.23.0 |
+|--------|--------|--------|
+| All tools (`list_tools`) | 36,842 chars | 29,524 chars (−20%) |
+| `patch_note` tool | 17,884 (48.5%) | 5,252 (17.8%) |
+| `patch_table` tool | — | 5,314 (18.0%) |
+| Handshake `MCP_INSTRUCTIONS` | 1,911 chars | 773 chars |
+
+**Upgrade:** Quit Cursor/Claude fully (Cmd+Q) so MCP tool schemas reload. Table edits: use `patch_table` instead of `patch_note` with table ops.
+
 ## [0.22.1] — 2026-08-26
 
 ### Added

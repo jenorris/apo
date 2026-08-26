@@ -88,12 +88,11 @@ class PatchNoteSchemaTest(unittest.TestCase):
             "field",
             "find",
             "replace",
-            "key/old/new",
+            "patch_table",
             "set_field",
             "replace_text",
             "append_note",
-            "scope",
-            "Aliases frozen",
+            "place",
         ):
             self.assertIn(token, desc, msg=f"ops description missing {token!r}: {desc!r}")
         # Prefer compact key map over shipping full JSON examples in schema.
@@ -105,6 +104,7 @@ class PatchNoteSchemaTest(unittest.TestCase):
 
         self.assertIn("prefer", (by_name["append_note"].description or "").lower())
         self.assertIn("place", (by_name["patch_note"].description or "").lower())
+        self.assertIn("patch_table", by_name)
         self.assertNotIn("place_note", by_name)
         self.assertNotIn("delete_note", by_name)
         self.assertNotIn("move_note", by_name)
@@ -160,8 +160,6 @@ class PatchNoteSchemaTest(unittest.TestCase):
         items = ops.get("items") or {}
         variants = items.get("oneOf") or items.get("anyOf")
         self.assertIsInstance(variants, list, msg=f"expected oneOf/anyOf, got: {json.dumps(items)[:800]}")
-        self.assertGreaterEqual(len(variants), 6)
-
         op_names: set[str] = set()
         for v in variants:
             props = v.get("properties") or {}
@@ -171,21 +169,21 @@ class PatchNoteSchemaTest(unittest.TestCase):
             elif "enum" in op_schema:
                 op_names.update(op_schema["enum"])
             self.assertNotEqual(v.get("additionalProperties"), True)
-
-        expected = {
-            "set_field",
-            "delete_field",
-            "replace_text",
-            "replace_section",
-            "append",
-            "prepend",
-            "append_eof",
-            "place",
-        }
-        self.assertTrue(
-            expected <= op_names,
-            msg=f"missing op variants: {expected - op_names}; saw {op_names}",
+        self.assertEqual(
+            op_names,
+            {
+                "set_field",
+                "delete_field",
+                "replace_text",
+                "replace_section",
+                "append",
+                "prepend",
+                "append_eof",
+                "place",
+            },
         )
+        props = _tool_params(tool)
+        self.assertNotIn("items", props)
 
     def test_set_field_requires_field(self):
         from apo_engine.patch_ops import SetFieldOp, ops_to_dicts

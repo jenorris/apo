@@ -264,6 +264,32 @@ class AlterTableSchemaOp(_TableOpBase):
     confirm: bool = False
 
 
+PatchNoteOp = Annotated[
+    Union[
+        SetFieldOp,
+        DeleteFieldOp,
+        ReplaceTextOp,
+        ReplaceSectionOp,
+        AppendOp,
+        PrependOp,
+        AppendEofOp,
+        PlaceOp,
+    ],
+    Field(discriminator="op"),
+]
+
+TablePatchOp = Annotated[
+    Union[
+        UpdateCellOp,
+        UpdateRowOp,
+        AppendRowOp,
+        DeleteRowOp,
+        ReplaceTableOp,
+        AlterTableSchemaOp,
+    ],
+    Field(discriminator="op"),
+]
+
 PatchOp = Annotated[
     Union[
         SetFieldOp,
@@ -299,18 +325,23 @@ TABLE_OPS = frozenset(
 )
 
 OPS_FIELD_DESC = (
-    "Deterministic mutators; discriminated by op. "
+    "Note/section mutators; discriminated by op (table row ops → patch_table). "
     "Keys: field/find/replace — never path/key/old/new/old_text/new_text (aliases accepted). "
     "Ops: set_field(field,value); delete_field(field); "
     "replace_text(find,replace,scope.heading|heading|chunk_hash); "
     "replace_section(heading|target|chunk_hash,text); "
     "append/prepend(text,heading|target|chunk_hash); append_eof(text); "
-    "place(src,dst,overwrite?,fields?,allow_cross_vault?) — move/copy (replaces place_note); "
-    "src/dst in different vaults requires allow_cross_vault=true (always copy, never move). "
-    "Standalone add → append_note. "
-    "Aliases frozen: target≡heading; replace_text heading≡scope.heading; "
-    "set_field path≡field; replace_text old_text/new_text≡find/replace; "
-    "chunk_hash≡search hit (stale → heading fallback when path+heading known)."
+    "place(src,dst,overwrite?,fields?,allow_cross_vault?). "
+    "Standalone add → append_note. Multi-path batch → RPC patch_notes only."
+)
+
+TABLE_OPS_FIELD_DESC = (
+    "GFM table row mutators; discriminated by op. "
+    "Locator: table_id (from search table_row hit) or heading; omit when note has one table. "
+    "Concurrency: expected_content_hash|expected_row_hash from read_note(chunk_hash, format=row). "
+    "Ops: update_cell(row_key,column,value); update_row(row_key,columns); "
+    "append_row(row); delete_row(row_key); replace_table(rows|csv,merge?); "
+    "alter_table_schema(rename_columns|add_column|drop_column, confirm?)."
 )
 
 PATCH_NOTES_ITEMS_DESC = (

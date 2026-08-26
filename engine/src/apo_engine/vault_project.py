@@ -691,8 +691,9 @@ def render_desk_index(merge: dict[str, Any]) -> str:
     )
     lines.append("")
     lines.append(
-        "Full policy / engine API: skill **`mcp-apo`**. Return-only — "
-        "re-run after `~/.apo/desk.yaml` or vault `system/contracts/` changes."
+        "Full policy / engine API: skill **`mcp-apo`**. Habit check: "
+        "`vault(action=stats, days=7)` (folder scoping, expected_mtime). "
+        "Return-only — re-run after `~/.apo/desk.yaml` or vault `system/contracts/` changes."
     )
     lines.append("")
 
