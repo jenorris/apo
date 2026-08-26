@@ -970,34 +970,6 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.append("")
         lines.extend(read_lines)
 
-    lines.append("## Examples")
-    lines.append("")
-    lines.append("<example>")
-    lines.append("Creating a new concept note (frontmatter matches the floor and type above):")
-    lines.append("")
-    lines.append("    ---")
-    lines.append("    title: <short-name>")
-    lines.append("    okf_type: <from Type routing above, or this vault's default_okf_type>")
-    lines.append("    description: <one sentence>")
-    lines.append('    timestamp: "<ISO 8601>"')
-    lines.append("    status: active")
-    lines.append("    ---")
-    lines.append("")
-    lines.append("    # <short-name>")
-    lines.append("")
-    lines.append("    <one paragraph — the fact/decision/reference itself>")
-    lines.append("</example>")
-    lines.append("")
-    lines.append("<example>")
-    lines.append("Patching an existing note instead of rewriting it:")
-    lines.append("")
-    lines.append("    patch_note(path=\"areas/threads/example.md\", ops=[")
-    lines.append('      {"op": "set_field", "field": "status", "value": "done"},')
-    lines.append('      {"op": "replace_text", "find": "old text", "replace": "new text"}')
-    lines.append("    ])")
-    lines.append("</example>")
-    lines.append("")
-
     if git_safety_lines:
         lines.append("## Git safety")
         lines.append("")
@@ -1112,26 +1084,6 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.extend(throughput_lines)
         lines.append("")
 
-    lines.append("## Contract inventory")
-    lines.append("")
-    lines.append("Live machine IR under each vault's `system/contracts/` (discovered by `vault(action=contracts|merge)`).")
-    lines.append("")
-    for name, row in sorted(vaults.items()):
-        if not isinstance(row, dict):
-            continue
-        contracts = row.get("contracts") if isinstance(row.get("contracts"), dict) else {}
-        if not contracts:
-            lines.append(f"- `{name}`: _(none)_")
-            continue
-        bits = []
-        for cid, entry in sorted(contracts.items()):
-            if isinstance(entry, dict):
-                bits.append(f"`{cid}` ← `{entry.get('path')}`")
-            else:
-                bits.append(f"`{cid}`")
-        lines.append(f"- `{name}`: " + "; ".join(bits))
-    lines.append("")
-
     # Role-specific short notes without dumping Meta OKF
     role_notes = desk.get("role_notes") if isinstance(desk.get("role_notes"), dict) else {}
     if role_notes:
@@ -1173,19 +1125,6 @@ def render_desk_body(merge: dict[str, Any]) -> str:
             label = Path(path).stem.replace("-", " ").replace("_", " ")
             lines.append(f"- {_md_link(label, path)}")
         lines.append("")
-
-    lines.append("## Key directives (recap)")
-    lines.append("")
-    lines.append(
-        "Write workflow: search first, scoped with `folder=` → write/append/"
-        "patch, preserving prior content → stamp the frontmatter floor → "
-        "pass `expected_mtime` on follow-up edits to a note already read "
-        "this session."
-    )
-    if directive_lines:
-        lines.append("")
-        lines.extend(directive_lines[:3])
-    lines.append("")
 
     lines.append("## Safety")
     lines.append("")

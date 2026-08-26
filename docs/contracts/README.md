@@ -10,7 +10,7 @@
 
 Do **not** confuse templates here with a setting in MCP config. Opt-in means: put the machine-readable (and/or agent-facing) contract **in the vault**, then point agents at it.
 
-**Agent discovery:** MCP/RPC `vault(action=list|contracts|describe|merge|project)`. Prefer YAML under `system/contracts/`. Admin engine ops via `apo_admin(action=list|describe|invoke)` with `confirm=true` when destructive. `merge` / `contracts` / `describe` return summaries by default (`full=true` for YAML bodies). `merge` unions the registry with per-vault contracts and `~/.apo/desk.yaml`. `project` emits Cursor `apo-desk.mdc`, Claude `apo-desk` skill, and optionally Hermes (`host=hermes|all`) — see [../examples/desk.example.yaml](../examples/desk.example.yaml) and [../hermes.md](../hermes.md); re-run via `just desk-project` or the watcher after desk/contract changes.
+**Agent discovery:** MCP/RPC `vault(action=list|contracts|describe|merge|project)`. Prefer YAML under `system/contracts/`. Admin engine ops via `apo_admin(action=list|describe|invoke)` with `confirm=true` when destructive. `merge` / `contracts` / `describe` return summaries by default (`full=true` for YAML bodies). `merge` unions the registry with per-vault contracts and `~/.apo/desk.yaml`. `project` is return-only — host places Cursor index via `just desk-project-cursor`, Claude full via `just desk-project-claude`, optionally Hermes (`host=hermes|all`) — see [../examples/desk.example.yaml](../examples/desk.example.yaml) and [../hermes.md](../hermes.md); re-run after desk/contract changes.
 
 ## Shipped templates
 

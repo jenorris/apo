@@ -408,6 +408,17 @@ _REGION_HASH_DESC = (
     "When expected_mtime is stale, a scoped write still proceeds if this hash matches "
     "the untouched frontmatter, body, or section/chunk."
 )
+_REGION_HASH_SINGLE_PATH_SUFFIX = " Single-path only; per-item for items[]."
+
+_EXPECTED_MTIME_DESC = (
+    "Optimistic concurrency: pass mtime from a prior read/write for this path. "
+    "On stale_write, re-read and retry (or pass matching region hashes)."
+)
+_EXPECTED_MTIME_PATCH_DESC = (
+    "Single-path only: optimistic concurrency mtime. "
+    "Multi-path: set expected_mtime per items[] entry. "
+    "Stale mtime + matching region hash still allows scoped ops."
+)
 
 _VAULT_REL_PATH_DESC = (
     "Vault-relative path, or vault_id:rel (e.g. work:areas/threads/x.md). "
@@ -448,12 +459,7 @@ async def write_note(
     ] = None,
     expected_mtime: Annotated[
         float | None,
-        Field(
-            description=(
-                "Optimistic concurrency: pass mtime from a prior read/write for this path. "
-                "On stale_write, re-read and retry (or pass matching region hashes)."
-            ),
-        ),
+        Field(description=_EXPECTED_MTIME_DESC),
     ] = None,
     expected_frontmatter_hash: Annotated[
         str | None,
@@ -497,12 +503,7 @@ async def append_note(
     create: bool = False,
     expected_mtime: Annotated[
         float | None,
-        Field(
-            description=(
-                "Optimistic concurrency: pass mtime from a prior read/write for this path. "
-                "On stale_write, re-read and retry (or pass matching region hashes)."
-            ),
-        ),
+        Field(description=_EXPECTED_MTIME_DESC),
     ] = None,
     expected_frontmatter_hash: Annotated[
         str | None,
@@ -554,25 +555,19 @@ async def patch_note(
     verbose: bool = False,
     expected_mtime: Annotated[
         float | None,
-        Field(
-            description=(
-                "Single-path only: optimistic concurrency mtime. "
-                "Multi-path: set expected_mtime per items[] entry. "
-                "Stale mtime + matching region hash still allows scoped ops."
-            ),
-        ),
+        Field(description=_EXPECTED_MTIME_PATCH_DESC),
     ] = None,
     expected_frontmatter_hash: Annotated[
         str | None,
-        Field(description=_REGION_HASH_DESC + " Single-path only; per-item for items[]."),
+        Field(description=_REGION_HASH_DESC + _REGION_HASH_SINGLE_PATH_SUFFIX),
     ] = None,
     expected_body_hash: Annotated[
         str | None,
-        Field(description=_REGION_HASH_DESC + " Single-path only; per-item for items[]."),
+        Field(description=_REGION_HASH_DESC + _REGION_HASH_SINGLE_PATH_SUFFIX),
     ] = None,
     expected_content_hash: Annotated[
         str | None,
-        Field(description=_REGION_HASH_DESC + " Single-path only; per-item for items[]."),
+        Field(description=_REGION_HASH_DESC + _REGION_HASH_SINGLE_PATH_SUFFIX),
     ] = None,
     vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
 ) -> dict:

@@ -355,17 +355,32 @@ class WriteHabitsProjectTest(unittest.TestCase):
         # Sequential, not just enumerable — steps are numbered in order.
         self.assertLess(body.index("1. `search_notes`"), body.index("4. On any follow-up"))
 
-    def test_render_desk_body_includes_delimited_examples(self):
+    def test_render_desk_body_omits_examples_section(self):
         merge = {
             "default_vault": "atlas",
             "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": {}}},
             "desk": {"habits": {}},
         }
         body = vault_project.render_desk_body(merge)
-        self.assertIn("## Examples", body)
-        self.assertEqual(body.count("<example>"), 2)
-        self.assertEqual(body.count("</example>"), 2)
-        self.assertIn("patch_note(path=", body)
+        self.assertNotIn("## Examples", body)
+        self.assertNotIn("<example>", body)
+
+    def test_render_desk_body_omits_contract_inventory(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {
+                "atlas": {
+                    "root": "/vault/atlas",
+                    "default": True,
+                    "contracts": {
+                        "usage-contract": {"ok": True, "data": {}},
+                    },
+                },
+            },
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertNotIn("## Contract inventory", body)
 
     def test_render_desk_body_front_loads_purpose_scope_and_floor(self):
         merge = {
@@ -423,7 +438,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
         self.assertLess(directives_pos, workflow_pos)
         self.assertLess(workflow_pos, close_pos)
 
-    def test_render_desk_body_ends_with_recap_before_safety(self):
+    def test_render_desk_body_ends_with_safety(self):
         merge = {
             "default_vault": "atlas",
             "vaults": {
@@ -444,11 +459,10 @@ class WriteHabitsProjectTest(unittest.TestCase):
             "desk": {"habits": {}},
         }
         body = vault_project.render_desk_body(merge)
-        self.assertIn("## Key directives (recap)", body)
-        self.assertIn("Search first.", body.split("## Key directives (recap)")[1])
-        recap_pos = body.index("## Key directives (recap)")
-        safety_pos = body.index("## Safety")
-        self.assertLess(recap_pos, safety_pos)
+        self.assertNotIn("## Key directives (recap)", body)
+        self.assertIn("## Safety", body)
+        self.assertIn("Search first.", body.split("## Vault directives")[1])
+        self.assertTrue(body.rstrip().endswith("Calendar."))
 
     def test_format_okf_path_rules_lines_truncates_to_token_budget(self):
         okf = {
@@ -559,9 +573,9 @@ class ReadContractProjectTest(unittest.TestCase):
         self.assertIn("`compliance`", body)
         read_pos = body.index("## Read routing")
         okf_pos = body.index("## Type routing (OKF)")
-        examples_pos = body.index("## Examples")
+        session_pos = body.index("## Session audit")
         self.assertLess(okf_pos, read_pos)
-        self.assertLess(read_pos, examples_pos)
+        self.assertLess(read_pos, session_pos)
 
     def test_render_desk_body_without_read_contract_is_byte_identical(self):
         """Regression: a vault with no read-contract renders exactly as it did
@@ -610,11 +624,8 @@ class ReadContractProjectTest(unittest.TestCase):
         self.assertNotIn("## Read routing", body_without)
         self.assertIn("## Read routing", body_with)
         read_block_start = body_with.index("## Read routing")
-        read_block_end = body_with.index("## Examples")
+        read_block_end = body_with.index("## Session audit")
         stripped = body_with[:read_block_start] + body_with[read_block_end:]
-        # Contract inventory (a separate, unrelated section) legitimately still
-        # differs — it lists every discovered contract id, read-contract included.
-        stripped = stripped.replace("`read-contract` ← `None`; ", "")
         self.assertEqual(stripped, body_without)
 
     def test_render_desk_body_read_contract_deterministic_regardless_of_key_order(self):

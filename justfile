@@ -53,6 +53,10 @@ desk-project *ARGS:
 desk-project-claude:
     ./scripts/write-claude-skill.sh
 
+# Compact index → Cursor always-on apo-desk.mdc (~1.8KB).
+desk-project-cursor:
+    ./scripts/write-cursor-rule.sh
+
 # OKF bundle: validate | fix | init | export | ingest.
 # `okf validate --profile okf` checks SPEC §11 conformance exactly;
 # `--profile apo` (default) is the stricter house producer profile.
