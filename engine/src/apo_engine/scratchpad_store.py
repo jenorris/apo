@@ -10,10 +10,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-Format = Literal["markdown", "yaml", "json", "mmd"]
-State = Literal["ACTIVE", "STAGED", "VALID", "PROMOTED"]
+Format = Literal["yaml", "json"]
+State = Literal["ACTIVE", "STAGED", "PROMOTED"]
 
 DEFAULT_TTL_S = 24 * 60 * 60
+_BUFFER_TRUNCATE = 8 * 1024
 
 
 def scratchpads_root() -> Path:
@@ -29,16 +30,7 @@ class ScratchpadMeta:
     format: Format
     state: State = "ACTIVE"
     vault: str | None = None
-    schema_path: str | None = None
-    schema_type: str | None = None
-    schema_vault: str | None = None
-    schema_hash: str | None = None
     destination_path: str | None = None
-    source_path: str | None = None
-    base_content_hash: str | None = None
-    base_section_hashes: dict[str, str] = field(default_factory=dict)
-    allow_foreign_schema: bool = False
-    allow_cross_vault_schema: bool = False
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     ttl_s: int = DEFAULT_TTL_S
@@ -65,13 +57,7 @@ def _session_dir(session_id: str) -> Path:
 
 
 def buffer_filename(fmt: Format) -> str:
-    if fmt == "json":
-        return "buffer.json"
-    if fmt == "yaml":
-        return "buffer.yaml"
-    if fmt == "mmd":
-        return "buffer.mmd"
-    return "buffer.md"
+    return "buffer.json" if fmt == "json" else "buffer.yaml"
 
 
 def new_session_id() -> str:
@@ -87,7 +73,6 @@ def save_session(meta: ScratchpadMeta, content: str) -> None:
     meta_text = json.dumps(meta.to_dict(), indent=2, sort_keys=True) + "\n"
     tmp_buf = root / f".{buf_path.name}.tmp"
     tmp_meta = root / ".meta.json.tmp"
-    # Buffer first, meta last — readers that load meta.json see a consistent pair.
     tmp_buf.write_text(content, encoding="utf-8")
     os.replace(tmp_buf, buf_path)
     tmp_meta.write_text(meta_text, encoding="utf-8")
@@ -135,15 +120,20 @@ def status_envelope(meta: ScratchpadMeta, **extra: Any) -> dict[str, Any]:
         "state": meta.state,
         "format": meta.format,
         "vault": meta.vault,
-        "schema_path": meta.schema_path,
-        "schema_type": meta.schema_type,
-        "schema_vault": meta.schema_vault,
-        "schema_hash": meta.schema_hash,
         "destination_path": meta.destination_path,
-        "source_path": meta.source_path,
         "promoted_path": meta.promoted_path,
         "ttl_s": meta.ttl_s,
         "updated_at": meta.updated_at,
     }
     out.update(extra)
     return out
+
+
+def read_buffer_payload(content: str) -> dict[str, Any]:
+    """Return buffer text for read action; truncate large payloads."""
+    if len(content.encode("utf-8")) > _BUFFER_TRUNCATE:
+        return {
+            "buffer": content[:_BUFFER_TRUNCATE],
+            "tip": "buffer truncated (>8KiB); patch surgically with set_field",
+        }
+    return {"buffer": content}

@@ -1,117 +1,51 @@
-# Scratchpad (ephemeral workshop buffers)
+# Scratchpad (JSON/YAML payload workshop)
 
-Staging lifecycle for JSON / YAML / Markdown **before** a vault write. One MCP/RPC tool:
+Ephemeral buffer for **JSON/YAML catalog payloads** before a vault write. One MCP/RPC tool:
 
 ```text
-scratchpad(action=create|checkout|read|patch|validate|bind_schema|commit|discard|status|duplicate, …)
+scratchpad(action=create|read|patch|commit|discard, …)
 ```
 
 Spill lives under `~/.apo/scratchpads/<session_id>/` (override with `APO_SCRATCHPADS_ROOT`). Default TTL is 24h.
 
 ## Why
 
-Agents burn tokens regenerating MCP JSON payloads and pasting plans between turns. Scratchpad keeps a **format-guaranteed buffer**, surgical `patch` ops, vaulted schema diagnostics, and promote without re-emitting the body.
+Agents burn tokens regenerating whole JSON/YAML MCP payloads. Scratchpad keeps a **format-guaranteed buffer**, surgical `patch` ops (`set_field` / `delete_field`), optional schema check at **commit**, and promote without re-emitting the body.
 
-## Modes
+## Loop
 
-| Mode | Vault required? | Works | Does not |
-|------|-----------------|-------|----------|
-| **Workshop (vault-free)** | No | `create`, `patch`, `read`, format validate | `bind_schema`, `commit`, `write_note(scratchpad=)` without a vault target |
-| **Schema-bound** | Yes (`vault=`) | Above + `bind_schema` / schema validate | — |
-| **Promote** | Yes | `commit` or `write_note` / `append_note` with `scratchpad=` | — |
+1. `scratchpad(action=create, format=json|yaml, content=…)` — vault-free
+2. `scratchpad(action=patch, session_id=…, ops=[{op:set_field, field, value}, …])`
+3. Optional: `scratchpad(action=read, session_id=…)` — returns truncated `buffer` when large
+4. `scratchpad(action=commit, session_id=…, vault=…, destination_path=…, schema_path=?, schema_type=?)`
+5. Or `scratchpad(action=discard, session_id=…)`
 
-`create` does **not** require `vault=`. Pass `vault=` only when binding schemas or committing.
+**Formats:** `json` (default) and `yaml` only. Markdown / `.mmd` → use `write_note` / `patch_note` directly.
+
+**Promote:** `commit` only (no `write_note(scratchpad=)` / `patch_note(scratchpad=)`).
+
+**Schema:** pass `schema_path` and/or `schema_type` on **commit** — loaded from the destination vault (`system/schemas/`, okf `type_profiles`). No session bind step.
+
+**Concurrency:** last writer wins (overwrite via `write_note`). No checkout / 3-way merge.
+
+After `PROMOTED`, `patch` fails — `create` a new session to iterate.
 
 ## Token-efficient responses
 
-Mutate / validate / status responses are **envelope-only by default** (`session_id`, `state`, `format`, schema pins, `diagnostics`, `hashes`). Ask for bytes with `include`:
-
-- `fragment` — path / heading / fields
-- `handoff` — compact projection (`x-apo-handoff` or heuristics)
-- `toc` — markdown headings
-- `buffer` / `raw` — full text (truncated >8KiB with a tip)
-
-When a schema is bound, `patch` runs validate in-process unless `validate=false`.
+`create` / `patch` / `commit` return **envelope-only** by default (`session_id`, `state`, `format`, `diagnostics`). Use `read` when you need bytes.
 
 Prefer `ops=[{op:set_field, field, value}]` with **native JSON values** over regenerating `content=`.
 
-## Schemas
-
-Primary home: **`system/schemas/**/*.schema.json`** in the **pinned** vault.
-
-| Flag | Default | Meaning |
-|------|---------|---------|
-| `vault=` | required on bind | Load schema / okf-contract only from this vault |
-| `schema_vault` + content hash | persisted | Origin pin; hash drift → WARNING |
-| `allow_foreign_schema` | false | Allow `schema_path` outside `system/schemas/` (still inside vault) |
-| `allow_cross_vault_schema` | false | Allow commit when `schema_vault` ≠ destination vault |
-
-Secondary: `schema_type=` → that vault’s okf-contract `type_profiles` (e.g. Plan with todos — **example**, not a privileged engine path). Dual bind (`schema_path` + `schema_type`) validates **AND**. `$ref`: same-doc + vault-relative only; no remote `http(s)`.
-
-## Scenario A — payload workshop
-
-1. `scratchpad(action=create, format=json, content=…)`
-2. `patch` with `set_field` / `delete_field` until clean
-3. `bind_schema(schema_path=system/schemas/….schema.json, vault=…)` or `schema_type=…`
-4. `read(include=["fragment"], json_path=$.…)` → pass fragment into foreign MCP
-5. Optional: `write_note(path, scratchpad=session_id, vault=…)` or `commit`
-
-## Scenario B — inter-agent handoff
-
-1. Agent A: create / patch / validate; hand off **`session_id`** (spill survives process restart)
-2. Agent B: `status` + `read(view=handoff)` → patch → optional `commit`
-
-## Scenario C — variants from a known-good template
-
-Adjusting a series of notes off one validated template without re-emitting the body each time, or
-mutating the shared template itself:
-
-1. `checkout(vault=…, vault_path=…)` (or `create`/`commit` to first establish the template) →
-   `session_id` is the template.
-2. Per variant: `duplicate(session_id=<template>)` → a brand-new, independent `session_id` with
-   the same buffer content and **no pinned merge-base** — unlike `checkout`, its first `commit`
-   behaves like a plain create-then-write rather than a 3-way merge against the template's
-   original vault note, so committing each variant to its own brand-new `destination_path` just
-   works (a pinned base would misread "destination doesn't exist yet" as "deleted since base"
-   and raise `MERGE_CONFLICT`). Works even after the template session was `commit`-ed (`PROMOTED`
-   is a legitimate, validated template source — mutation is blocked on the *original* session,
-   not on clones of it).
-3. `patch` the clone's adjustments, then `commit(destination_path=…)` to wherever that variant
-   belongs. Repeat step 2 for the next variant — the template session is never mutated.
-
-`duplicate` only needs `session_id=` (the source to fork); the response's own `session_id` is the
-new clone's. Compare to `checkout`, which forks from a **vault** note — `duplicate` forks from an
-**existing scratchpad buffer**, so no round-trip through the vault is needed between variants.
-
-## Commit / merge
-
-`checkout` snapshots base text + section hashes. `commit`:
-
-1. Re-validates bound schemas
-2. Reads current **vault working-tree** bytes at `destination_path` (not a jj bookmark / secondary worktree)
-3. Section-tree + frontmatter 3-way merge; preamble is its own unit. Frontmatter field merges keep YAML comments via `yaml_rt` (one-sided FM edits return that side’s fence text verbatim; mixed key wins apply `set_field` / `delete_field` on a base `CommentedMap`).
-4. Non-overlapping edits auto-merge; same heading both changed → `MERGE_CONFLICT`
-5. CAS re-read; write via `write_note`; session → `PROMOTED` (mutations denied; `read` follows vault)
-
-**JSON / YAML catalog paths:** when buffer `format` matches the destination suffix (`.json`, `.yaml`/`.yml`), promote/commit writes **raw catalog bytes** — no OKF frontmatter wrapper. Markdown destinations still go through OKF as usual.
-
-**Workbench note:** Apo writes registered vault roots (e.g. `~/Notes/Work`, `~/Workbench/compliance`). Scratchpad does **not** replace jj worktrees for compliance SoT — it helps when multiple writers hit the same registered path.
-
-## Promote without re-emit
+## Example
 
 ```text
-write_note(path, scratchpad=<session_id>, vault=…)     # omit content=/sections=/frontmatter=
-append_note(path, scratchpad=<session_id>, vault=…)    # omit text=
-patch_note(path, scratchpad=<session_id>, ops=[…], vault=…)   # markdown: ops then merge-commit
-scratchpad(action=commit, session_id=…, destination_path=…, vault=…)
+scratchpad(action=create, format=json, content={"status":"draft","todos":[…]})
+scratchpad(action=patch, session_id=<id>, ops=[{op:set_field, field=todos[0].status, value=completed}])
+scratchpad(action=commit, session_id=<id>, vault=work, destination_path=inbox/plan.json, schema_type=Plan)
 ```
-
-Pass **`path + scratchpad=` only** on `write_note` — empty `content=` is ignored; non-empty body args are rejected. Prefer the **`bind_schema` / `patch` response envelope** over a parallel `status` in the same turn (meta is written atomically; parallel `status` may read pre-bind state).
-
-`patch_note(scratchpad=)` applies `ops` to the spill buffer then merge-commits to `path` (markdown-only). Bound schemas always re-validate before promote.
 
 ## Related
 
 - [agent-throughput.md](./agent-throughput.md) — when to use scratchpad vs direct write
-- [patch-note-ops.md](./patch-note-ops.md) — shared `ops[]` dialect
+- [patch-note-ops.md](./patch-note-ops.md) — full ops dialect lives on `patch_note`; scratchpad exposes `set_field` / `delete_field` only
 - [local-rpc.md](./local-rpc.md) — `POST /v1/scratchpad`

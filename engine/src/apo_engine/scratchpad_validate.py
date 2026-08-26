@@ -1,19 +1,17 @@
-"""Scratchpad validation: format parse, vaulted JSON Schema, okf type_profiles."""
+"""Scratchpad validation: format parse + optional schema at commit."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
 
-from apo_engine import note_lint
-from apo_engine import vaults as vault_reg
 from apo_engine.okf import resolve_contract_path
 from apo_engine.scratchpad_format import _diag, buffer_as_dict, normalize_buffer
-from apo_engine.scratchpad_store import Format, ScratchpadMeta
+from apo_engine.scratchpad_store import Format
 
 SCHEMA_PREFIX = "system/schemas/"
 
@@ -24,22 +22,17 @@ def file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def resolve_schema_file(
-    vault_root: Path,
-    schema_path: str,
-    *,
-    allow_foreign: bool,
-) -> tuple[Path | None, dict[str, Any] | None]:
+def resolve_schema_file(vault_root: Path, schema_path: str) -> tuple[Path | None, dict[str, Any] | None]:
     rel = schema_path.strip().lstrip("/")
     if not rel:
         return None, _diag("ERROR", "BAD_SCHEMA_PATH", "schema_path", "schema_path is empty")
-    if not allow_foreign and not rel.startswith(SCHEMA_PREFIX):
+    if not rel.startswith(SCHEMA_PREFIX):
         return None, _diag(
             "ERROR",
             "FOREIGN_SCHEMA",
             rel,
-            f"schema_path must live under {SCHEMA_PREFIX} (pass allow_foreign_schema=true to opt in).",
-            hint=f"Move the schema to {SCHEMA_PREFIX} or set allow_foreign_schema=true.",
+            f"schema_path must live under {SCHEMA_PREFIX}",
+            hint=f"Move the schema to {SCHEMA_PREFIX}.",
         )
     path = (vault_root / rel).resolve()
     try:
@@ -62,7 +55,6 @@ def load_json_schema(path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] 
 
 
 def _local_registry(vault_root: Path, schema_file: Path, schema: dict[str, Any]) -> Any:
-    """Build a referencing.Registry that only resolves vault-local file refs."""
     try:
         from referencing import Registry, Resource
         from referencing.jsonschema import DRAFT202012
@@ -74,7 +66,6 @@ def _local_registry(vault_root: Path, schema_file: Path, schema: dict[str, Any])
     def _retrieve(uri: str) -> Resource:
         if uri.startswith(("http://", "https://")):
             raise ValueError(f"remote $ref not allowed: {uri}")
-        # file:// or relative
         if uri.startswith("file://"):
             from pathlib import Path as P
 
@@ -128,7 +119,7 @@ def validate_json_schema(
     for err in errors:
         path = ".".join(str(p) for p in err.absolute_path) or "$"
         diagnostics.append(
-            _diag("ERROR", "SCHEMA_ERROR", path, err.message, hint="Fix the field or rebind schema.")
+            _diag("ERROR", "SCHEMA_ERROR", path, err.message, hint="Fix the field or adjust schema.")
         )
     return diagnostics
 
@@ -148,28 +139,6 @@ def load_type_profile(vault_root: Path, schema_type: str) -> dict[str, Any] | No
     return profile if isinstance(profile, dict) else None
 
 
-def profile_allowlists(
-    meta: ScratchpadMeta,
-    vault_root: Path | None,
-) -> dict[str, list[str]] | None:
-    """Expose okf type_profile allowlists on status/bind/validate envelopes."""
-    if not meta.schema_type or vault_root is None:
-        return None
-    profile = load_type_profile(vault_root, meta.schema_type)
-    if not profile:
-        return None
-    allow: dict[str, list[str]] = {}
-    note_status = profile.get("note_status")
-    if isinstance(note_status, list):
-        allow["note_status"] = [str(x) for x in note_status]
-    todos_spec = profile.get("todos")
-    if isinstance(todos_spec, dict):
-        item_status = todos_spec.get("item_status")
-        if isinstance(item_status, list):
-            allow["todo_status"] = [str(x) for x in item_status]
-    return allow or None
-
-
 def _profile_status_hint(raw_status: Any, note_status: list[Any]) -> str | None:
     allowed = [str(x) for x in note_status]
     val = str(raw_status)
@@ -184,7 +153,6 @@ def _profile_status_hint(raw_status: Any, note_status: list[Any]) -> str | None:
 
 
 def validate_type_profile(instance: dict[str, Any], schema_type: str, profile: dict[str, Any]) -> list[dict[str, Any]]:
-    """Best-effort shape checks for okf type_profiles (e.g. Plan todos)."""
     diagnostics: list[dict[str, Any]] = []
     todos_spec = profile.get("todos")
     if isinstance(todos_spec, dict) and "todos" in instance:
@@ -233,86 +201,28 @@ def validate_type_profile(instance: dict[str, Any], schema_type: str, profile: d
     return diagnostics
 
 
-def handoff_paths_from_schema(schema: dict[str, Any] | None) -> list[str] | None:
-    if not schema:
-        return None
-    ext = schema.get("x-apo-handoff")
-    if isinstance(ext, list) and all(isinstance(x, str) for x in ext):
-        return list(ext)
-    return None
-
-
-def _link_check_flaws(
-    meta: ScratchpadMeta,
+def validate_buffer(
+    fmt: Format,
     content: str,
     *,
     vault_root: Path | None,
-    known_skills: Iterable[str] | None,
-) -> list[dict[str, Any]]:
-    """Corpus-quality flaws[] for a scratchpad buffer — same detectors as
-    vault(action=lint), run pre-commit so a piped skill/note gets the same
-    dangling-pointer check as one already written to the vault.
-    """
-    if vault_root is None:
-        return []
-    link_path = meta.destination_path or meta.source_path or "<scratchpad>"
-    vault_roots: dict[str, Path] | None = None
-    try:
-        _, bindings = vault_reg.load_bindings()
-        vault_roots = {name: b.resolved().root for name, b in bindings.items()}
-    except Exception:
-        vault_roots = None
-    flaws: list[dict[str, Any]] = []
-    flaws.extend(
-        f.as_dict()
-        for f in note_lint.detect_broken_links(
-            content,
-            path=link_path,
-            vault_root=vault_root,
-            vault=meta.vault or "",
-            vault_roots=vault_roots,
-        )
-    )
-    flaws.extend(
-        f.as_dict()
-        for f in note_lint.detect_skill_references(
-            content,
-            path=link_path,
-            vault=meta.vault or "",
-            known_skills=known_skills,
-        )
-    )
-    return flaws
-
-
-def validate_session(
-    meta: ScratchpadMeta,
-    content: str,
-    *,
-    vault_root: Path | None,
-    known_skills: Iterable[str] | None = None,
+    schema_path: str | None = None,
+    schema_type: str | None = None,
 ) -> dict[str, Any]:
-    """Return envelope with valid + diagnostics (format + bound schemas) plus
-    flaws[] (link-checking — broken/ambiguous/cross-vault wikilinks, unknown
-    skill references when known_skills is supplied). flaws[] never affects
-    ``valid``: it's corpus-quality signal, not a hard validation gate.
-    """
+    """Validate buffer format and optional commit-time schema pins."""
     diagnostics: list[dict[str, Any]] = []
-    _, format_diags = normalize_buffer(meta.format, content)
+    _, format_diags = normalize_buffer(fmt, content)
     diagnostics.extend(format_diags)
 
-    instance = buffer_as_dict(meta.format, content)
-    schema_obj: dict[str, Any] | None = None
+    instance = buffer_as_dict(fmt, content)
 
-    if meta.schema_path:
+    if schema_path:
         if vault_root is None:
             diagnostics.append(
-                _diag("ERROR", "VAULT_REQUIRED", "vault", "vault= is required to bind schema_path")
+                _diag("ERROR", "VAULT_REQUIRED", "vault", "vault= is required with schema_path")
             )
         else:
-            path, err = resolve_schema_file(
-                vault_root, meta.schema_path, allow_foreign=meta.allow_foreign_schema
-            )
+            path, err = resolve_schema_file(vault_root, schema_path)
             if err:
                 diagnostics.append(err)
             elif path is not None:
@@ -320,15 +230,6 @@ def validate_session(
                 if load_err:
                     diagnostics.append(load_err)
                 elif schema_obj is not None:
-                    if meta.schema_hash and file_sha256(path) != meta.schema_hash:
-                        diagnostics.append(
-                            _diag(
-                                "WARNING",
-                                "SCHEMA_CHANGED",
-                                meta.schema_path,
-                                "Bound schema file content hash changed since bind",
-                            )
-                        )
                     if instance is None:
                         diagnostics.append(
                             _diag("ERROR", "INSTANCE_UNPARSED", "$", "Cannot validate unparsed buffer against schema")
@@ -340,35 +241,28 @@ def validate_session(
                             )
                         )
 
-    if meta.schema_type:
+    if schema_type:
         if vault_root is None:
             diagnostics.append(
-                _diag("ERROR", "VAULT_REQUIRED", "vault", "vault= is required to bind schema_type")
+                _diag("ERROR", "VAULT_REQUIRED", "vault", "vault= is required with schema_type")
             )
         else:
-            profile = load_type_profile(vault_root, meta.schema_type)
+            profile = load_type_profile(vault_root, schema_type)
             if profile is None:
                 diagnostics.append(
                     _diag(
                         "ERROR",
                         "UNKNOWN_SCHEMA_TYPE",
-                        meta.schema_type,
-                        f"type_profile {meta.schema_type!r} not found in okf-contract",
+                        schema_type,
+                        f"type_profile {schema_type!r} not found in okf-contract",
                     )
                 )
             elif isinstance(instance, dict):
-                diagnostics.extend(validate_type_profile(instance, meta.schema_type, profile))
+                diagnostics.extend(validate_type_profile(instance, schema_type, profile))
             else:
                 diagnostics.append(
                     _diag("ERROR", "INSTANCE_UNPARSED", "$", "Cannot validate type_profile against non-object buffer")
                 )
 
     errors = [d for d in diagnostics if d.get("severity") == "ERROR"]
-    return {
-        "valid": len(errors) == 0,
-        "diagnostics": diagnostics,
-        "handoff_paths": handoff_paths_from_schema(schema_obj),
-        "flaws": _link_check_flaws(
-            meta, content, vault_root=vault_root, known_skills=known_skills
-        ),
-    }
+    return {"valid": len(errors) == 0, "diagnostics": diagnostics}

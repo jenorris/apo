@@ -293,7 +293,7 @@ class TestLocalRpc(unittest.TestCase):
         self.assertTrue(dest.is_file())
         self.assertIn("source: rpc-test", dest.read_text(encoding="utf-8"))
 
-    def test_patch_scratchpad_promote(self):
+    def test_scratchpad_commit_via_rpc(self):
         spill = self.tmp / "spill"
         spill.mkdir()
         prev = os.environ.get("APO_SCRATCHPADS_ROOT")
@@ -303,27 +303,28 @@ class TestLocalRpc(unittest.TestCase):
                 "/v1/scratchpad",
                 {
                     "action": "create",
-                    "format": "markdown",
-                    "content": "# Rpc\nbody\n",
+                    "format": "json",
+                    "content": {"title": "Rpc", "status": "draft"},
                 },
             )
             self.assertEqual(status, 200, created)
             self.assertTrue(created["ok"], created)
             sid = created["session_id"]
-            status, patched = self._post(
-                "/v1/patch",
+            status, committed = self._post(
+                "/v1/scratchpad",
                 {
-                    "path": "inbox/rpc-spill.md",
-                    "scratchpad": sid,
-                    "ops": [{"op": "set_field", "field": "status", "value": "open"}],
+                    "action": "commit",
+                    "session_id": sid,
+                    "vault": "default",
+                    "destination_path": "inbox/rpc-spill.json",
                 },
             )
-            self.assertEqual(status, 200, patched)
-            self.assertTrue(patched["ok"], patched)
-            self.assertEqual(patched.get("scratchpad_state"), "PROMOTED")
-            dest = self.vault / "inbox" / "rpc-spill.md"
+            self.assertEqual(status, 200, committed)
+            self.assertTrue(committed["ok"], committed)
+            self.assertEqual(committed.get("state"), "PROMOTED")
+            dest = self.vault / "inbox" / "rpc-spill.json"
             self.assertTrue(dest.is_file())
-            self.assertIn("status: open", dest.read_text(encoding="utf-8"))
+            self.assertIn('"status": "draft"', dest.read_text(encoding="utf-8"))
         finally:
             if prev is None:
                 os.environ.pop("APO_SCRATCHPADS_ROOT", None)

@@ -12,7 +12,7 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 6. **Dual-write** → parallel tools in one turn, same `vault=`
 7. **Multi-path patch** → `patch_note(items=…)` (not session log)
 8. **Structure-only atom** → prefer `write_note` / `patch_note(set_field)` on a `.yaml` path (no `append_note` / headings)
-9. **JSON/YAML payload workshop or Plan handoff** → `scratchpad` (vault-free create/patch; bind schema then `commit` / `write_note(scratchpad=)`) — see [scratchpad.md](./scratchpad.md)
+9. **JSON/YAML payload workshop** → `scratchpad` (create → patch → commit; optional schema at commit) — see [scratchpad.md](./scratchpad.md)
 
 ## Hard defaults
 
@@ -95,10 +95,12 @@ read_note(chunk_hash=…, format=node)   # structured node payload
 
 - **Catalog join** on `diagrams/mermaid-catalog/<slug>/diagram.mmd` — `diagram_id` := catalog slug; see [mermaid-notes.md](contracts/mermaid-notes.md).
 - **Fenced-md** in `.md` notes uses the same chunk kinds; breadcrumb = note title + section heading.
-- **Scratchpad**: `format=mmd` for diagram workshops; promote with `write_note(path, scratchpad=…)`.
 - **Eval**: `search-eval-mermaid-compliance.yaml` + `expect_chunk_kind` / `expect_entity` scoring.
 
 See [mermaid-notes.md](contracts/mermaid-notes.md).
+
+## Tables (0.6+)
+
 - **Column renames/adds/drops** go through `alter_table_schema` with `confirm=true` (they re-embed every row).
 
 See [tables.md](tables.md) and [toc-navigation.md](toc-navigation.md) for the full contract.
@@ -128,4 +130,3 @@ Before the final reply on an Apo turn:
 3. Parallel dual-write same `vault=`?
 4. `mtime` → `expected_mtime` on follow-up writes?
 5. Regenerating a whole JSON/YAML blob? Prefer `scratchpad` + `set_field` ([scratchpad.md](./scratchpad.md)).
-6. Handing a Plan/todos buffer to another agent? Pass `session_id` + `read(view=handoff)`, not a chat paste.

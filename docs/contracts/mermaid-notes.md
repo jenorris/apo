@@ -40,9 +40,9 @@ Ship [mermaid-contract.schema.yaml](mermaid-contract.schema.yaml) under `system/
 
 Cross-reference: [table-contract.schema.yaml](table-contract.schema.yaml) — shared `chunk_kind`-aware search habits.
 
-## Scratchpad
+## Diagram authoring
 
-`scratchpad(format=mmd)` workshops `.mmd` buffers; promote via `write_note(path, scratchpad=session_id)` (raw write, no frontmatter wrapper).
+Use `write_note` on a `.mmd` path for diagram source. Scratchpad does not support `format=mmd`.
 
 ## Reindex
 

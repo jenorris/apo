@@ -4,6 +4,27 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-08-26
+
+### Changed (breaking)
+
+- **Lean scratchpad** — five actions only: `create | read | patch | commit | discard`. Removed `checkout`, `duplicate`, `bind_schema`, `validate`, `status`; removed `write_note` / `append_note` / `patch_note` (`scratchpad=`) promote paths; removed 3-way merge (`scratchpad_merge.py`). Formats: **json** and **yaml** only (default json). Schema via `schema_path` / `schema_type` on **commit** only. MCP `scratchpad.ops` is a 2-variant union (`set_field`, `delete_field`) — not the full `PatchOp` surface.
+
+**Upgrade:** Quit Cursor/Claude fully (Cmd+Q) so MCP tool schemas reload.
+
+### Added
+
+- **`test_scratchpad_schema.py`** — CI ceilings on scratchpad MCP tool size (≤3000 chars name+desc+params), op variants (2), property count (≤10), handshake blurb (≤220), and absence of `scratchpad=` on sibling write tools.
+
+### MCP instruction size (scratchpad cut)
+
+| Metric | Before | After |
+|--------|--------|-------|
+| All tools (`list_tools` name+desc+params) | 45,658 chars | 36,842 chars (−19%) |
+| `scratchpad` tool | 10,016 (21.9%) | 1,924 (5.2%) |
+| Handshake scratchpad blurb | 603 chars | 202 chars |
+| `scratchpad=` on write/append/patch | 682 chars | 0 |
+
 ## [0.21.3] — 2026-08-25
 
 Apo mutators now reject non-note paths (`.py`, scripts, dotfiles) before OKF

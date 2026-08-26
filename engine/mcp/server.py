@@ -21,7 +21,14 @@ from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
 from apo_engine.mcp_backend import ApoStore
 from apo_engine.mcp_instructions import MCP_INSTRUCTIONS as _MCP_INSTRUCTIONS
-from apo_engine.patch_ops import OPS_FIELD_DESC, PATCH_NOTES_ITEMS_DESC, PatchNotesItem, PatchOp
+from apo_engine.patch_ops import (
+    OPS_FIELD_DESC,
+    PATCH_NOTES_ITEMS_DESC,
+    SCRATCHPAD_OPS_FIELD_DESC,
+    PatchNotesItem,
+    PatchOp,
+    ScratchpadOp,
+)
 
 # Tool annotation presets
 _RO = {"readOnlyHint": True, "openWorldHint": False}
@@ -461,16 +468,6 @@ async def write_note(
         Field(description=_REGION_HASH_DESC),
     ] = None,
     vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
-    scratchpad: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Optional scratchpad session_id: promote spill buffer as note body. "
-                "Omit content=/sections=/frontmatter= (empty content= is ignored). "
-                "Re-validates when the session has a bound schema."
-            ),
-        ),
-    ] = None,
 ) -> dict:
     """Create or overwrite a note. Use content= (or sections[]/frontmatter). Prefer append_note / patch_note for edits."""
     return await asyncio.to_thread(
@@ -484,7 +481,6 @@ async def write_note(
         expected_body_hash=expected_body_hash,
         expected_content_hash=expected_content_hash,
         vault=vault,
-        scratchpad=scratchpad,
     )
 
 
@@ -521,15 +517,6 @@ async def append_note(
         Field(description=_REGION_HASH_DESC),
     ] = None,
     vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
-    scratchpad: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Optional scratchpad session_id: use buffer as text= (XOR with text/content). "
-                "Re-validates when the session has a bound schema."
-            ),
-        ),
-    ] = None,
 ) -> dict:
     """Preferred add for session log / History / post-search text. Use text=. Anchor: chunk_hash → heading → EOF."""
     return await asyncio.to_thread(
@@ -545,7 +532,6 @@ async def append_note(
         expected_body_hash=expected_body_hash,
         expected_content_hash=expected_content_hash,
         vault=vault,
-        scratchpad=scratchpad,
     )
 
 
@@ -589,15 +575,6 @@ async def patch_note(
         Field(description=_REGION_HASH_DESC + " Single-path only; per-item for items[]."),
     ] = None,
     vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
-    scratchpad: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Optional scratchpad session_id: apply ops to buffer then merge-commit to path. "
-                "Markdown-only; XOR with items[]. Re-validates when schema bound."
-            ),
-        ),
-    ] = None,
 ) -> dict:
     """Mutate frontmatter/sections or place (ops place). Single: path+ops or place-only ops. Multi: items[]."""
     return await asyncio.to_thread(
@@ -613,7 +590,6 @@ async def patch_note(
         expected_body_hash=expected_body_hash,
         expected_content_hash=expected_content_hash,
         vault=vault,
-        scratchpad=scratchpad,
     )
 
 
@@ -964,25 +940,15 @@ async def history(
 async def scratchpad(
     action: Annotated[
         str,
-        Field(
-            description=(
-                "create | checkout | read | patch | validate | bind_schema | "
-                "commit | discard | status | duplicate"
-            ),
-        ),
+        Field(description="create | read | patch | commit | discard"),
     ],
     session_id: Annotated[
         str | None,
-        Field(
-            description=(
-                "Spill session id (required except create/checkout). duplicate: the "
-                "source session to fork — the response's session_id is the new clone."
-            ),
-        ),
+        Field(description="Spill session id (required except create)."),
     ] = None,
     format: Annotated[
         str | None,
-        Field(description="create only: markdown | yaml | json (default markdown)."),
+        Field(description="create only: json | yaml (default json)."),
     ] = None,
     content: Annotated[
         str | dict[str, Any] | list[Any] | None,
@@ -994,89 +960,28 @@ async def scratchpad(
         ),
     ] = None,
     vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
-    vault_path: Annotated[
-        str | None,
-        Field(description="checkout: vault-relative note path to fork into spill."),
-    ] = None,
     schema_path: Annotated[
         str | None,
         Field(
             description=(
-                "JSON Schema under system/schemas/ in the pinned vault "
-                "(allow_foreign_schema to escape). Empty string clears."
+                "commit only: JSON Schema under system/schemas/ in the destination vault."
             ),
         ),
     ] = None,
     schema_type: Annotated[
         str | None,
-        Field(description="okf type_profiles name in the pinned vault (e.g. Plan)."),
+        Field(description="commit only: okf type_profiles name (e.g. Plan)."),
     ] = None,
     ops: Annotated[
-        list[PatchOp] | None,
-        Field(description="patch: same ops dialect as patch_note (single buffer; no items[])."),
+        list[ScratchpadOp] | None,
+        Field(description=SCRATCHPAD_OPS_FIELD_DESC),
     ] = None,
     destination_path: Annotated[
         str | None,
-        Field(description="commit: vault-relative destination (default: checkout source)."),
-    ] = None,
-    include: Annotated[
-        list[str] | None,
-        Field(
-            description=(
-                "Optional views: fragment | handoff | toc | buffer. "
-                "Mutate/validate omit buffer by default."
-            ),
-        ),
-    ] = None,
-    view: Annotated[
-        str | None,
-        Field(description="read shortcut: raw | handoff | fragment | toc."),
-    ] = None,
-    json_path: Annotated[str | None, Field(description="fragment: JSON/YAML field path.")] = None,
-    heading: Annotated[str | None, Field(description="fragment: markdown heading.")] = None,
-    fields: Annotated[
-        list[str] | None,
-        Field(description="fragment: YAML/FM field names."),
-    ] = None,
-    region: Annotated[
-        str | None,
-        Field(description="fragment: frontmatter | body."),
-    ] = None,
-    validate: Annotated[
-        bool | None,
-        Field(
-            description=(
-                "patch: run validate after ops when schema bound (default true if bound). "
-                "Pass false to skip."
-            ),
-        ),
-    ] = None,
-    allow_foreign_schema: Annotated[
-        bool,
-        Field(description="Allow schema_path outside system/schemas/ (default false)."),
-    ] = False,
-    allow_cross_vault_schema: Annotated[
-        bool,
-        Field(
-            description=(
-                "Allow commit when schema_vault ≠ destination vault (default false)."
-            ),
-        ),
-    ] = False,
-    known_skills: Annotated[
-        list[str] | None,
-        Field(
-            description=(
-                "validate: skill names that actually exist in the caller's environment. "
-                "When set, flags any `foo` skill / \"the foo skill\" prose mention in the "
-                "buffer that isn't in this list (flaws[], code link.unknown_skill) — catches "
-                "a skill/note pointing at a renamed or removed sibling skill. Omit to skip "
-                "the check (no guessing at what skills exist)."
-            ),
-        ),
+        Field(description="commit: vault-relative destination path."),
     ] = None,
 ) -> dict:
-    """Ephemeral workshop buffer: create/checkout → patch → validate → commit (or write_note scratchpad=)."""
+    """Ephemeral JSON/YAML payload workshop: create → patch → commit."""
     return await asyncio.to_thread(
         apo_ops.scratchpad_op,
         action,
@@ -1084,21 +989,10 @@ async def scratchpad(
         format=format,
         content=content,
         vault=vault,
-        vault_path=vault_path,
         schema_path=schema_path,
         schema_type=schema_type,
         ops=ops,
         destination_path=destination_path,
-        include=include,
-        view=view,
-        json_path=json_path,
-        heading=heading,
-        fields=fields,
-        region=region,
-        validate=validate,
-        allow_foreign_schema=allow_foreign_schema,
-        allow_cross_vault_schema=allow_cross_vault_schema,
-        known_skills=known_skills,
     )
 
 
