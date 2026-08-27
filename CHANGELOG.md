@@ -4,6 +4,23 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-08-27
+
+Adapted from a review of [tobi/qmd](https://github.com/tobi/qmd) — its README calls
+per-result descriptive context its key feature ("don't sleep on it"). Apo already
+carried this data (usage-contract `layout`, previously only rendered into the static
+desk-projection "Folder layout" section) — this surfaces the same per-vault dict
+inline on each search hit instead.
+
+### Added
+
+- **`folder_context` on search hits** — `search_notes` / `query` results now carry a
+  `folder_context` field (top-level-folder → one-line description, from the hit's
+  vault's usage-contract `layout`) when the vault has one and the hit's folder is
+  described. Absent when neither is true — no schema growth for vaults that don't use
+  `layout`. `vaults.read_usage_layout()` is cached per vault root, invalidated on the
+  contract file's own mtime (same pattern as the 0.23.1 `load_bindings()` fix).
+
 ## [0.23.1] — 2026-08-27
 
 Three perf fixes, no behavior/schema changes. `pyproject.toml` / `__init__.py`

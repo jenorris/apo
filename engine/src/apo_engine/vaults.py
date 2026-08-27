@@ -227,6 +227,50 @@ def read_usage_default_vault_claim(root: Path) -> str | None:
     return claim or None
 
 
+_usage_layout_cache_lock = threading.Lock()
+_usage_layout_cache: dict[str, tuple[float, dict[str, str]]] = {}
+
+
+def read_usage_layout(root: Path) -> dict[str, str]:
+    """Return usage-contract ``layout`` (top-level folder -> one-line description), or {}.
+
+    Adapted from qmd (github.com/tobi/qmd)'s per-path search-result context, which it
+    calls its key feature: results self-describe their neighborhood inline instead of
+    requiring an agent to already hold the whole vault's folder layout in context.
+    ``vault_project.format_layout_line`` already renders this same ``layout`` dict for
+    the static desk projection — this is the per-search-hit sibling of that.
+
+    Cached per resolved root, invalidated on the contract file's own mtime (one stat
+    on a cache hit, no YAML re-parse) — this is called once per vault per search, and
+    a search result count of 1 is the whole reason ``load_bindings()`` needed the same
+    treatment.
+    """
+    resolved = root.expanduser().resolve()
+    key = str(resolved)
+    mtime = 0.0
+    for rel in _USAGE_CANDIDATES:
+        p = resolved / rel
+        try:
+            mtime = p.stat().st_mtime
+            break
+        except OSError:
+            continue
+    with _usage_layout_cache_lock:
+        cached = _usage_layout_cache.get(key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    data = _read_usage_data(resolved)
+    layout = data.get("layout") if data else None
+    out = (
+        {str(k): str(v) for k, v in layout.items() if str(v or "").strip()}
+        if isinstance(layout, dict)
+        else {}
+    )
+    with _usage_layout_cache_lock:
+        _usage_layout_cache[key] = (mtime, out)
+    return out
+
+
 def _index_file_count(path: Path) -> int | None:
     """Return files-table row count, or None if unreadable / missing table."""
     try:

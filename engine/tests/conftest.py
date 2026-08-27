@@ -34,3 +34,5 @@ def _isolated_apo_runtime(tmp_path, monkeypatch):
     vaults._vault_id_cache.clear()
     # load_bindings() is cached (perf fix) — same leak risk as _vault_id_cache above.
     vaults.invalidate_bindings_cache()
+    # read_usage_layout() is cached too — same leak risk, same fix.
+    vaults._usage_layout_cache.clear()

@@ -850,10 +850,15 @@ def _search_one_vault(
     if stamp_vault:
         for row in results:
             row["vault"] = b.name
+    layout = vaults.read_usage_layout(root)
     for row in results:
         src = str(row.get("source") or "")
         if src:
             row["qualified_path"] = _qualified_path(b.name, src)
+            if layout:
+                ctx = layout.get(src.split("/", 1)[0])
+                if ctx:
+                    row["folder_context"] = ctx
     reranked = False
     if rr is not None:
         if rr.get("applied"):
