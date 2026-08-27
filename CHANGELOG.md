@@ -4,6 +4,42 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.25.2] — 2026-08-27
+
+0.25.1 scoped qmd's fusion refinements to `search_expanded()` only, deliberately not
+touching `search()`/`rerank.rerank_hits()` — no eval file existed at the time to
+validate a change against the house rule in `docs/search-quality.md` ("no lift, no
+merge"). Investigated properly this time: built a 24-query labeled eval set
+(`docs/search-quality.md`'s methodology) against a real vault and measured both
+refinements against `search()` directly, with real numbers instead of priors.
+
+### Changed
+
+- **`search()` reranking: full-override → position-aware blend.** Measured
+  (`APO_RERANK=1`, 24 queries, k=5): current shipped behavior (full override)
+  scored **hit@5 95.83%, MRR@5 0.795** — a real regression vs. not reranking at all
+  (hit@5 100%, MRR@5 0.861), reproducing `docs/search-quality.md`'s existing
+  "reranker is a marginal, opt-in refinement" finding, just more starkly on this
+  set. The position-aware blend already shipped in `search_expanded()` (0.25.1),
+  applied to `search()` too: **hit@5 100%, MRR@5 0.826** — recovers the miss the
+  full-override reranker introduced and closes most (not all) of the gap to
+  not-reranking-at-all. `rerank.rerank_hits()` (still used by callers that want
+  the old full-override reorder+cut in one call) is unchanged; `search()` now
+  calls `rerank.rerank_scores()` directly instead, same as `search_expanded()`.
+  `Hit.score` for a reranked top hit can now land just under `1.0` rather than
+  always exactly at it — documented on `search()`'s docstring.
+- **Top-rank bonus stays exclusive to `search_expanded()`** — tried porting it to
+  `search()`'s plain 2-list (FTS + vector) fusion and measured a regression
+  (MRR@5 0.861 → 0.854, no hit@5 change): "#1 in either list" is a much weaker
+  agreement signal for a single query than "#1 in several independently-generated
+  sub-query variants," which is what the bonus is actually validated for.
+  `search_expanded()`'s docstring corrected to stop implying otherwise.
+
+Eval file: `~/.apo/search-eval-grid.yaml` (not checked in — vault-path-specific,
+per `docs/search-quality.md` convention). All 841 tests pass (1 updated for the new
+blended-score expectation).
+
+## [0.25.1] — 2026-08-27
 ## [0.25.1] — 2026-08-27
 
 Follow-up to 0.25.0's query expansion: switch to qmd's own fine-tuned expansion

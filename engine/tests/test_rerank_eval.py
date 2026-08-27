@@ -78,7 +78,14 @@ class RerankVaultTest(unittest.TestCase):
         self.assertTrue(out["ok"], out)
         self.assertTrue(out.get("reranked"), out)
         self.assertEqual(out["results"][0]["source"], "second.md")
-        self.assertEqual(out["results"][0]["score"], 1.0)
+        # Position-aware blend (search-quality.md eval, 2026-08-27: rerank + blend
+        # beat rerank-alone by +0.031 MRR@5 on a 24-query labeled set, recovering a
+        # miss the full-override reranker introduced) — no longer a flat re-normalize
+        # to exactly 1.0. Top retrieval rank blends at 75% retrieval / 25% reranker,
+        # so a reranker-favored doc that wasn't already the #1 retrieval hit lands
+        # just under 1.0, not at it.
+        self.assertGreaterEqual(out["results"][0]["score"], 0.9)
+        self.assertLess(out["results"][0]["score"], 1.0)
 
     def test_rerank_missing_dep_falls_back_with_warning(self):
         with (

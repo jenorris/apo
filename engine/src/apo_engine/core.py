@@ -2627,7 +2627,7 @@ def search_expanded(
 
     Distinct from :func:`search`'s single-query internal FTS+vector fusion — this fuses
     *across several independently-ranked sub-query result lists*, keyed by ``chunk_hash``
-    (RRF only needs each input's rank order, not how it was produced). Two refinements
+    (RRF only needs each input's rank order, not how it was produced). One refinement
     on top of plain RRF, adapted from qmd's own fusion (its architecture doc, not just
     its README — a deeper pass than the ``folder_context``/transport features):
 
@@ -2635,15 +2635,16 @@ def search_expanded(
       flat bonus on its fused score (+0.05 of the pool's top score; #2-3 get +0.02).
       Protects an exact match for the original query from being diluted when the
       expanded variants disagree with it.
-    - **Position-aware rerank blend**: when ``config.RERANK`` is on, the reranker
-      doesn't fully override the fused order (what :func:`rerank.rerank_hits` does
-      for :func:`search`) — it's blended with the pre-rerank score, weighted by the
-      hit's *retrieval* rank tier: top 1-3 stay 75% retrieval / 25% reranker (a
-      confident top match survives a noisy reranker call), 4-10 at 60/40, 11+ at
-      40/60 (trust the reranker more once retrieval confidence is already low).
 
-    Both are scoped to this function only — :func:`search` and :func:`rerank.rerank_hits`
-    (used by every other caller) are untouched.
+    Position-aware rerank blending — reranking weighted by retrieval rank tier
+    instead of fully overriding fused order — is shared with :func:`search`'s
+    reranking now (both call :func:`rerank.rerank_scores`), not exclusive to this
+    function. The **top-rank bonus stayed exclusive to this function**: measured with
+    ``just search-eval`` against a 24-query labeled set (``docs/search-quality.md``),
+    it *hurt* :func:`search`'s plain 2-list (FTS + vector) single-query fusion
+    (MRR@5 0.861 → 0.854) — "#1 in either list" is a much weaker agreement signal for
+    one query than "#1 in several independently-generated sub-query variants," which
+    is what the bonus is actually validated for here.
     """
     if queries is None:
         queries = expand_query(query, intent=intent)
@@ -2723,7 +2724,10 @@ def search(
 
     Hit.score is the fused RRF strength normalized to the best candidate
     (1.0 = top hit), so scores are monotonic with ranking — comparable within
-    one result set, not across queries.
+    one result set, not across queries. With ``config.RERANK`` on, this is the
+    *pre-rerank* normalization the reranker score is then position-aware blended
+    against (see :func:`rerank.rerank_scores`) — the top hit's final score can land
+    just under 1.0 when the reranker didn't fully agree it belonged there.
 
     Folder scopes use path-constrained FTS + exact distance over ``chunks.embedding``
     (no global vec0 scan). Unscoped exclude widens the FTS pool only; dense KNN stays
@@ -2913,8 +2917,19 @@ def search(
             hits = hits[:k]
             full_texts = full_texts[:k]
     if rerank_on and hits:
-        hits, status = rerank.rerank_hits(query, hits, k, texts=full_texts)
+        # Position-aware blend, not a full override — see docs/search-quality.md for
+        # the eval (0.795 -> 0.826 MRR@5 vs. the old rerank.rerank_hits() reorder).
+        scores, status = rerank.rerank_scores(query, full_texts)
+        if scores is not None:
+            lo, hi = min(scores), max(scores)
+            span = hi - lo
+            for rrf_rank, h in enumerate(hits):
+                rr_norm = (scores[rrf_rank] - lo) / span if span > 0 else 1.0
+                w = 0.75 if rrf_rank < 3 else 0.60 if rrf_rank < 10 else 0.40
+                h.score = round(w * h.score + (1 - w) * rr_norm, 4)
+            hits.sort(key=lambda h: h.score, reverse=True)
         _search_rerank.set(status)
+        hits = hits[:k] if k > 0 else hits
     return hits
 
 
