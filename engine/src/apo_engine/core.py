@@ -29,6 +29,11 @@ import heapq
 import sqlite_vec
 import yaml
 
+try:
+    import numpy as _np
+except ImportError:  # numpy is transitive (fastembed/rerank extra) — not a base dep
+    _np = None
+
 from . import config
 from . import rerank
 from . import table_markdown
@@ -1747,6 +1752,44 @@ def _l2_sq_blob(qvec: list[float], blob: bytes) -> float:
     return dist
 
 
+_L2_BATCH_SIZE = 4096
+
+
+def _l2_sq_batch(qvec: list[float], id_blob_pairs: list[tuple[int, bytes]]) -> list[tuple[float, int]]:
+    """Squared L2 between ``qvec`` and many float32 embedding blobs.
+
+    Vectorized with numpy when available — one bulk stack + one elementwise op per
+    batch instead of a per-row Python loop (the dominant cost of a folder-scoped scan
+    over thousands of chunks). Falls back to :func:`_l2_sq_blob` per row otherwise.
+    Same dimension-mismatch handling as ``_l2_sq_blob`` (scored 1e9 above qvec, never
+    picked — a defensive case for a stale embedding from a since-changed model dim).
+    """
+    if not id_blob_pairs:
+        return []
+    if _np is None:
+        return [(_l2_sq_blob(qvec, blob), rid) for rid, blob in id_blob_pairs]
+
+    qn = len(qvec)
+    # float64 throughout — matches _l2_sq_blob's arithmetic (python floats), not the
+    # float32 storage dtype, so ranking is bit-for-bit consistent with the fallback.
+    qarr = _np.asarray(qvec, dtype=_np.float64)
+    out: list[tuple[float, int]] = []
+    same_dim_ids: list[int] = []
+    rows: list[Any] = []
+    for rid, blob in id_blob_pairs:
+        if len(blob) // 4 != qn:
+            out.append((1e9, rid))
+            continue
+        rows.append(_np.frombuffer(blob, dtype="<f4").astype(_np.float64))
+        same_dim_ids.append(rid)
+    if rows:
+        mat = _np.vstack(rows)
+        diffs = mat - qarr
+        dists = _np.einsum("ij,ij->i", diffs, diffs)
+        out.extend(zip(dists.tolist(), same_dim_ids))
+    return out
+
+
 def _scoped_vector_hits(
     db: sqlite3.Connection,
     qvec: list[float],
@@ -1760,17 +1803,18 @@ def _scoped_vector_hits(
     When ``prefer_ids`` is set (hybrid + FTS hits), score those first. If the folder is
     large (``> SCOPED_VECTOR_FULL_SCAN_MAX``) and we have prefer_ids, skip the full
     folder scan — FTS already constrained candidates. Otherwise scan the folder with a
-    bounded heap (no full-list sort).
+    bounded heap (distances computed in ``_L2_BATCH_SIZE``-row batches, not a full sort
+    or a full in-memory materialization of every blob in the folder).
     """
     scored: list[tuple[float, int]] = []
 
     if prefer_ids:
         ph = ",".join("?" * len(prefer_ids))
-        for rid, blob in db.execute(
+        rows = db.execute(
             f"SELECT id, embedding FROM chunks WHERE id IN ({ph}) AND embedding IS NOT NULL",
             prefer_ids,
-        ):
-            scored.append((_l2_sq_blob(qvec, blob), rid))
+        ).fetchall()
+        scored.extend(_l2_sq_batch(qvec, rows))
 
     max_full = int(getattr(config, "SCOPED_VECTOR_FULL_SCAN_MAX", 500))
     skip_full = bool(prefer_ids) and len(prefer_ids) >= n
@@ -1787,20 +1831,30 @@ def _scoped_vector_hits(
 
     if not skip_full:
         seen = {rid for _, rid in scored}
-        rows = db.execute(
+        cur = db.execute(
             """SELECT id, embedding FROM chunks
                WHERE embedding IS NOT NULL AND path LIKE ? ESCAPE '\\'""",
             (_escape_like(folder_prefix) + "/%",),
         )
         heap: list[tuple[float, int]] = []
-        for rid, blob in rows:
+
+        def _score_batch(batch: list[tuple[int, bytes]]) -> None:
+            for dist, rid in _l2_sq_batch(qvec, batch):
+                if len(heap) < n:
+                    heapq.heappush(heap, (-dist, rid))  # max-heap via negation
+                elif dist < -heap[0][0]:
+                    heapq.heapreplace(heap, (-dist, rid))
+
+        batch: list[tuple[int, bytes]] = []
+        for rid, blob in cur:
             if rid in seen:
                 continue
-            dist = _l2_sq_blob(qvec, blob)
-            if len(heap) < n:
-                heapq.heappush(heap, (-dist, rid))  # max-heap via negation
-            elif dist < -heap[0][0]:
-                heapq.heapreplace(heap, (-dist, rid))
+            batch.append((rid, blob))
+            if len(batch) >= _L2_BATCH_SIZE:
+                _score_batch(batch)
+                batch = []
+        if batch:
+            _score_batch(batch)
         for neg_dist, rid in heap:
             scored.append((-neg_dist, rid))
 

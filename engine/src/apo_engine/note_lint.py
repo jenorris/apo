@@ -363,6 +363,7 @@ def detect_broken_links(
     vault: str = "",
     wiki_index: dict[str, list[str]] | None = None,
     vault_roots: dict[str, Path] | None = None,
+    foreign_idx_cache: dict[str, dict[str, list[str]]] | None = None,
 ) -> list[Flaw]:
     """Broken/ambiguous [[wikilink]] detection.
 
@@ -371,9 +372,16 @@ def detect_broken_links(
     (vault_id -> root), a prefixed target resolves against *that* vault's own
     index instead of the local one; an unknown vault_id is its own flaw
     (``link.unknown_vault``) rather than a silent no-match.
+
+    ``foreign_idx_cache`` lets a batch caller (:func:`lint_folder`) share one
+    per-foreign-vault index across every note in the sweep — building it here
+    (the default, a fresh dict) is correct for a single note but means a full
+    :func:`_build_wiki_index` walk of the *foreign* vault on every call in a
+    sweep where many notes link into the same foreign vault.
     """
     idx = wiki_index if wiki_index is not None else _build_wiki_index(vault_root)
-    foreign_idx_cache: dict[str, dict[str, list[str]]] = {}
+    if foreign_idx_cache is None:
+        foreign_idx_cache = {}
     flaws: list[Flaw] = []
     seen: set[str] = set()
     for raw_target, lineno in _wiki_targets(content):
@@ -606,6 +614,7 @@ def lint_note(
     include_format: bool = True,
     wiki_index: dict[str, list[str]] | None = None,
     vault_roots: dict[str, Path] | None = None,
+    foreign_idx_cache: dict[str, dict[str, list[str]]] | None = None,
     known_skills: Iterable[str] | None = None,
     auto_fix: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
@@ -658,6 +667,7 @@ def lint_note(
                 vault=vault,
                 wiki_index=wiki_index,
                 vault_roots=vault_roots,
+                foreign_idx_cache=foreign_idx_cache,
             )
         )
         flaws_out.extend(
@@ -701,6 +711,9 @@ def lint_folder(
         }
 
     wiki_index = _build_wiki_index(vault_root) if include_links else None
+    # Shared across every note in this sweep — without it, each note linking into the
+    # same foreign vault re-walks that vault's entire file tree from scratch.
+    foreign_idx_cache: dict[str, dict[str, list[str]]] = {}
     vault_roots: dict[str, Path] | None = None
     if include_links:
         try:
@@ -737,6 +750,7 @@ def lint_folder(
             include_format=True,
             wiki_index=wiki_index,
             vault_roots=vault_roots,
+            foreign_idx_cache=foreign_idx_cache,
             known_skills=known_skills,
             auto_fix=fix,
         )

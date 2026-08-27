@@ -140,6 +140,13 @@ SCOPED_VECTOR_FULL_SCAN_MAX: int = int(os.environ.get("APO_SCOPED_VECTOR_FULL_SC
 QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "120"))
 QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "64"))
 
+# Cache vault registry discovery (dir walk + per-vault usage-contract YAML parse +
+# index-file resolution) for this many seconds; 0 disables. Invalidated immediately
+# within the window on any change to the discovery fingerprint (env vars / desk.yaml
+# or collection-root mtime) — the TTL is only a safety net for a change load_bindings()
+# can't see cheaply, such as a single vault's own contract file being edited in place.
+BINDINGS_CACHE_TTL: float = float(os.environ.get("APO_BINDINGS_CACHE_TTL", "15"))
+
 # Default exclude globs for *unscoped* searches when the vault has no
 # search-contract.schema.yaml (legacy desk-wide fallback — prefer vault-side
 # ``system/contracts/search-contract.schema.yaml`` per vault).

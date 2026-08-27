@@ -115,7 +115,7 @@ def _load_vaults() -> None:
         _pick(overrides, "APO_INGEST_DIR", apo_config.INGEST_DIR) or apo_config.INGEST_DIR
     )
     try:
-        default_name, bindings = apo_vaults.load_bindings()
+        default_name, bindings = apo_vaults.load_bindings(force=True)
     except (OSError, ValueError, json.JSONDecodeError) as e:
         raise VaultError(f"vault registry error: {e}") from e
 

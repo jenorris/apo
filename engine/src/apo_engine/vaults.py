@@ -29,6 +29,8 @@ import os
 import secrets
 import subprocess
 import sys
+import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -519,8 +521,69 @@ def resolve_default_vault(
     )
 
 
-def load_bindings() -> tuple[str, dict[str, VaultBinding]]:
-    """Return (default_name, {vault_id: VaultBinding})."""
+_bindings_cache_lock = threading.Lock()
+_bindings_cache: dict[str, Any] | None = None  # {"fp": str, "at": float, "result": (...)}
+
+
+def _bindings_fingerprint() -> str:
+    """Cheap signature of the discovery *inputs* — not the (expensive) per-vault work.
+
+    Changes immediately when the discovery env or the collection-root / registry-file
+    mtime moves, so a real registry change invalidates the cache well before the TTL
+    safety net in :func:`load_bindings` would.
+    """
+    return "\x1f".join(
+        (
+            os.environ.get("APO_COLLECTION_ROOT", ""),
+            os.environ.get("APO_VAULT_PATHS", ""),
+            os.environ.get("APO_VAULT_PATH_LIST", ""),
+            os.environ.get("APO_VAULTS", ""),
+            os.environ.get("APO_DEFAULT_VAULT", ""),
+            os.environ.get("APO_NOTES_ROOT", ""),
+            str(registry_mtime() or ""),
+        )
+    )
+
+
+def invalidate_bindings_cache() -> None:
+    """Drop the cached registry — next :func:`load_bindings` call rebuilds it."""
+    global _bindings_cache
+    with _bindings_cache_lock:
+        _bindings_cache = None
+
+
+def load_bindings(*, force: bool = False) -> tuple[str, dict[str, VaultBinding]]:
+    """Return (default_name, {vault_id: VaultBinding}) — cached.
+
+    Registry discovery (directory walk, one usage-contract YAML parse per vault, and
+    index-file resolution) is real I/O, identical on nearly every call in a process
+    that serves many MCP tool calls per session. Cached for
+    ``config.BINDINGS_CACHE_TTL`` seconds; ``force=True`` (used by the
+    ``apo_admin(reload_config)`` path) always bypasses it.
+    """
+    global _bindings_cache
+    try:
+        ttl = float(getattr(config, "BINDINGS_CACHE_TTL", 15.0))
+    except (TypeError, ValueError):
+        ttl = 15.0
+    if not force and ttl > 0:
+        fp = _bindings_fingerprint()
+        with _bindings_cache_lock:
+            cached = _bindings_cache
+        if cached is not None and cached["fp"] == fp and (time.monotonic() - cached["at"]) < ttl:
+            return cached["result"]
+    else:
+        fp = _bindings_fingerprint() if ttl > 0 else ""
+
+    result = _load_bindings_uncached()
+    if ttl > 0:
+        with _bindings_cache_lock:
+            _bindings_cache = {"fp": fp, "at": time.monotonic(), "result": result}
+    return result
+
+
+def _load_bindings_uncached() -> tuple[str, dict[str, VaultBinding]]:
+    """Return (default_name, {vault_id: VaultBinding}) — always does the full discovery work."""
     out: dict[str, VaultBinding] = {}
     json_default: str | None = None
 

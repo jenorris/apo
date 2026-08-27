@@ -4,6 +4,34 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.23.1] — 2026-08-27
+
+Three perf fixes, no behavior/schema changes. `pyproject.toml` / `__init__.py`
+also corrected — 0.23.0 shipped without bumping them (still read 0.22.0).
+
+### Fixed
+
+- **`vaults.load_bindings()` was uncached** — full registry re-discovery (directory
+  walk, one usage-contract YAML parse per vault, index-file resolution) ran fresh on
+  *every* MCP tool call, since nearly every `ops.py` request handler calls it directly.
+  Now cached (`config.BINDINGS_CACHE_TTL`, default 15s, env `APO_BINDINGS_CACHE_TTL`),
+  invalidated immediately within that window on any discovery-fingerprint change (env
+  vars / `registry_mtime()`). `apo_admin(reload_config)` still forces a fresh read.
+  10-vault registry: 23.8ms → 0.013ms median per call.
+- **Folder-scoped vector search did per-row Python L2** — `core._scoped_vector_hits()`
+  computed squared L2 distance one chunk at a time in a pure-Python loop. New
+  `_l2_sq_batch()` vectorizes it with numpy in 4096-row batches (soft dependency —
+  numpy is transitive via the `rerank` extra, not a base dep; pure-Python fallback
+  when absent). Same ranking, verified bit-identical top-k on real data.
+  12.7k-chunk folder: 824ms → 181ms mean per query.
+- **`vault(action=lint)` re-walked a foreign vault's entire tree per cross-vault link**
+  — `note_lint.detect_broken_links()` built its foreign-vault wiki index fresh on every
+  call instead of sharing one across the sweep. `lint_folder()` now threads a single
+  `foreign_idx_cache` through every note, same pattern it already used for the local
+  `wiki_index`. No vault currently has cross-vault wikilinks in practice — this was a
+  landmine, not an active drag. Synthetic repro (30 notes → 3000-note foreign vault):
+  2013ms → 67ms.
+
 ## [0.23.0] — 2026-08-26
 
 ### Changed (breaking)

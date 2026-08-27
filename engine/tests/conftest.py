@@ -32,3 +32,5 @@ def _isolated_apo_runtime(tmp_path, monkeypatch):
     # fallback path — must not write into the real ~/.apo/vault-ids.json.
     monkeypatch.setattr(vaults, "_FALLBACK_ID_STORE", runtime / "vault-ids.json")
     vaults._vault_id_cache.clear()
+    # load_bindings() is cached (perf fix) — same leak risk as _vault_id_cache above.
+    vaults.invalidate_bindings_cache()
