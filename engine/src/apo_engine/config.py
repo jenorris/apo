@@ -170,12 +170,17 @@ RERANK_POOL: int = int(os.environ.get("APO_RERANK_POOL", "24"))
 # the search path. Disabled → core.search_expanded() still runs (lex+vec on the raw
 # query, RRF-fused, no LLM call) — the expansion step just adds nothing on top.
 QUERY_EXPAND: bool = os.environ.get("APO_QUERY_EXPAND", "0").strip().lower() in ("1", "true", "yes", "on")
-QUERY_EXPAND_MODEL: str = os.environ.get("APO_QUERY_EXPAND_MODEL", "qwen3.5:4b")
-# 15s, not 8: a cold Ollama model load alone measured ~7.4s on a 4B model on this
-# host's hardware — a tight timeout would time out on essentially every call under a
-# host policy of OLLAMA_KEEP_ALIVE=0 (unload after every request; common when Ollama
-# shares a GPU with something else, e.g. ComfyUI VRAM contention).
-QUERY_EXPAND_TIMEOUT: float = float(os.environ.get("APO_QUERY_EXPAND_TIMEOUT", "15"))
+# qmd's own fine-tuned expansion model (Qwen3-1.7B SFT'd on lex:/vec:/hyde: output),
+# not a general chat model prompted for JSON — see docs/models/qmd-query-expansion.md
+# for the one-time `ollama pull` + `ollama create apo-query-expand` setup this name
+# assumes.
+QUERY_EXPAND_MODEL: str = os.environ.get("APO_QUERY_EXPAND_MODEL", "apo-query-expand")
+# 20s: a cold Ollama model load alone measured 7-15s on this host's hardware, and
+# repeat calls were NOT reliably warm even with a per-request keep_alive (another
+# Ollama consumer — e.g. the watcher's own embedding calls, or ComfyUI VRAM
+# contention — can evict it between calls). A tight timeout would time out often
+# under a host policy of OLLAMA_KEEP_ALIVE=0.
+QUERY_EXPAND_TIMEOUT: float = float(os.environ.get("APO_QUERY_EXPAND_TIMEOUT", "20"))
 # Per-request Ollama keep_alive override for the expansion call, independent of the
 # process-wide OLLAMA_KEEP_ALIVE — lets query expansion stay warm across a session's
 # repeated searches without changing that host-wide policy (which a shared-GPU host

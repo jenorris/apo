@@ -62,13 +62,16 @@ class QueryExpansionUnitTest(unittest.TestCase):
         )
 
     def test_enabled_adds_llm_typed_entries(self):
+        # qmd-query-expansion-1.7B's native output: plain lex:/vec:/hyde: lines,
+        # possibly several of the same type, sometimes a stray <think> line.
         payload = {
-            "response": json.dumps(
-                {
-                    "lex": '"connection pool" timeout -redis',
-                    "vec": "why do database connections time out under load",
-                    "hyde": "Database connections time out when the pool is exhausted.",
-                }
+            "response": (
+                "<think>\n"
+                '</think>\n\n'
+                'lex: "connection pool" timeout -redis\n'
+                "lex: db connection timeout\n"
+                "vec: why do database connections time out under load\n"
+                "hyde: Database connections time out when the pool is exhausted.\n"
             )
         }
         with (
@@ -77,9 +80,21 @@ class QueryExpansionUnitTest(unittest.TestCase):
         ):
             out = core.expand_query("database timeout")
         types = [sq["type"] for sq in out]
-        self.assertEqual(types, ["lex", "vec", "lex", "vec", "hyde"])
+        self.assertEqual(types, ["lex", "vec", "lex", "lex", "vec", "hyde"])
         self.assertEqual(out[2]["query"], '"connection pool" timeout -redis')
         self.assertEqual(out[2]["weight"], 1.0)
+
+    def test_enabled_handles_stray_unclosed_think_tag(self):
+        # Observed live: a <think> line with no matching close, output following
+        # directly on the next lines anyway.
+        payload = {"response": "<think>\nlex: db timeout\nvec: why does the db time out\n"}
+        with (
+            mock.patch.object(config, "QUERY_EXPAND", True),
+            mock.patch("apo_engine.core.urllib.request.urlopen", return_value=_OllamaResponse(payload)),
+        ):
+            out = core.expand_query("database timeout")
+        self.assertEqual(len(out), 4)
+        self.assertEqual(out[2], {"type": "lex", "query": "db timeout", "weight": 1.0})
 
     def test_enabled_falls_back_on_backend_failure(self):
         with (
@@ -90,12 +105,12 @@ class QueryExpansionUnitTest(unittest.TestCase):
         self.assertEqual(len(out), 2)
         self.assertEqual({sq["type"] for sq in out}, {"lex", "vec"})
 
-    def test_enabled_falls_back_on_malformed_json(self):
+    def test_enabled_falls_back_when_no_typed_lines_present(self):
         with (
             mock.patch.object(config, "QUERY_EXPAND", True),
             mock.patch(
                 "apo_engine.core.urllib.request.urlopen",
-                return_value=_OllamaResponse({"response": "not json at all"}),
+                return_value=_OllamaResponse({"response": "no typed lines here at all"}),
             ),
         ):
             out = core.expand_query("database timeout")

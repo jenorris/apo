@@ -2530,31 +2530,47 @@ def search_vector_only(
     )
 
 
-_EXPAND_PROMPT = (
-    "You are a search query rewriter for a hybrid BM25 + vector search engine.\n"
-    "Given a user's search query, produce typed sub-queries as a JSON object:\n"
-    '  "lex": a short keyword string tuned for BM25/FTS (quote exact phrases, prefix '
-    "an excluded term with a leading minus). Omit if the query is already just keywords.\n"
-    '  "vec": one natural-language sentence rephrasing the query for semantic embedding '
-    "search. Omit if it wouldn't differ meaningfully from the original query.\n"
-    '  "hyde": a short hypothetical passage (2-3 sentences), written as if it were the '
-    "actual document content that answers the query. Omit if you can't picture what "
-    "such a passage would contain.\n"
-    'Respond with ONLY a JSON object, e.g. {"lex": "...", "vec": "...", "hyde": "..."} '
-    "— omit any key that wouldn't help.\n"
-)
+_EXPAND_LINE_RE = re.compile(r"^\s*(lex|vec|hyde)\s*:\s*(.+?)\s*$", re.IGNORECASE)
+
+
+def _parse_qmd_expansion(text: str, original_query: str) -> list[dict[str, Any]]:
+    """Parse qmd-query-expansion-1.7B's native ``lex:``/``vec:``/``hyde:`` line output.
+
+    The model may emit multiple lines of the same type (unlike a generic JSON-object
+    prompt, which can only carry one of each) and sometimes emits a stray/unclosed
+    ``<think>`` line despite being trained on ``/no_think`` — scan every line for a
+    typed prefix and ignore everything else rather than trying to strip a
+    ``<think>...</think>`` block, which isn't reliably well-formed in practice.
+    """
+    out: list[dict[str, Any]] = []
+    lowered_query = original_query.strip().lower()
+    for line in text.splitlines():
+        m = _EXPAND_LINE_RE.match(line)
+        if not m:
+            continue
+        qtext = m.group(2).strip()
+        if qtext and qtext.lower() != lowered_query:
+            out.append({"type": m.group(1).lower(), "query": qtext, "weight": 1.0})
+    return out
 
 
 def expand_query(query: str, *, intent: str = "") -> list[dict[str, Any]]:
-    """Typed sub-query expansion (``lex``/``vec``/``hyde``) via a local Ollama chat model.
+    """Typed sub-query expansion (``lex``/``vec``/``hyde``) via a local Ollama model.
 
-    Adapted from qmd (github.com/tobi/qmd)'s query-expansion pattern — the original
-    query is always searched on both backends (mirrors qmd's own README: "The
-    original query is sent to both backends"), and the LLM's typed sub-queries (if
-    generation is enabled and succeeds) are added on top, each meant for exactly one
-    backend once :func:`search_expanded` routes them. Disabled by default
-    (``APO_QUERY_EXPAND``); on any failure — model down, malformed JSON, timeout —
-    falls back to just the two base entries. Never raises.
+    Uses qmd (github.com/tobi/qmd)'s own fine-tuned expansion model
+    (``tobil/qmd-query-expansion-1.7B``, trained specifically for this task — not a
+    general chat model prompted for JSON) — see ``docs/models/qmd-query-expansion.md``
+    for the one-time ``ollama pull`` + ``ollama create`` setup. Its prompt format is
+    fixed by its own SFT training (``/no_think Expand this search query: {query}``,
+    baked into the Ollama Modelfile's TEMPLATE) — ``intent`` has no dedicated slot,
+    so it's appended inline as parenthetical context.
+
+    The original query is always searched on both backends first (mirrors qmd's own
+    README: "The original query is sent to both backends"); the model's typed
+    sub-queries (if generation is enabled and succeeds) are added on top, each meant
+    for exactly one backend once :func:`search_expanded` routes them. Disabled by
+    default (``APO_QUERY_EXPAND``); on any failure — model down, timeout — falls back
+    to just the two base entries. Never raises.
     """
     base: list[dict[str, Any]] = [
         {"type": "lex", "query": query, "weight": 2.0},
@@ -2563,20 +2579,15 @@ def expand_query(query: str, *, intent: str = "") -> list[dict[str, Any]]:
     if not config.QUERY_EXPAND:
         return base
     try:
-        prompt = _EXPAND_PROMPT
-        if intent:
-            prompt += f"\nContext: {intent}\n"
-        prompt += f"\nQuery: {query}\n"
+        prompt_query = f"{query} (context: {intent})" if intent else query
         payload = json.dumps(
             {
                 "model": config.QUERY_EXPAND_MODEL,
-                "prompt": prompt,
-                "format": "json",
+                "prompt": prompt_query,
                 "stream": False,
-                "think": False,  # hybrid-thinking models (e.g. qwen3.5) otherwise
-                # spend the whole output budget on <think> and never emit `response`
+                "think": False,  # belt-and-suspenders alongside the model's own
+                # /no_think training — a stray <think> line was still observed once
                 "keep_alive": config.QUERY_EXPAND_KEEP_ALIVE,
-                "options": {"temperature": 0.2},
             }
         ).encode()
         req = urllib.request.Request(
@@ -2586,7 +2597,7 @@ def expand_query(query: str, *, intent: str = "") -> list[dict[str, Any]]:
         )
         with urllib.request.urlopen(req, timeout=config.QUERY_EXPAND_TIMEOUT) as resp:
             data = json.load(resp)
-        parsed = json.loads(data.get("response", "") or "{}")
+        extra = _parse_qmd_expansion(data.get("response", "") or "", query)
     except (
         urllib.error.HTTPError,
         urllib.error.URLError,
@@ -2595,13 +2606,7 @@ def expand_query(query: str, *, intent: str = "") -> list[dict[str, Any]]:
         OSError,
     ):
         return base
-    if not isinstance(parsed, dict):
-        return base
-    for key in ("lex", "vec", "hyde"):
-        val = str(parsed.get(key) or "").strip()
-        if val and val != query:
-            base.append({"type": key, "query": val, "weight": 1.0})
-    return base
+    return base + extra
 
 
 def search_expanded(
@@ -2622,13 +2627,29 @@ def search_expanded(
 
     Distinct from :func:`search`'s single-query internal FTS+vector fusion — this fuses
     *across several independently-ranked sub-query result lists*, keyed by ``chunk_hash``
-    (RRF only needs each input's rank order, not how it was produced). Reranking (when
-    ``config.RERANK``) runs once over the fused set, same as :func:`search`.
+    (RRF only needs each input's rank order, not how it was produced). Two refinements
+    on top of plain RRF, adapted from qmd's own fusion (its architecture doc, not just
+    its README — a deeper pass than the ``folder_context``/transport features):
+
+    - **Top-rank bonus**: a chunk that ranks #1 in *any* sub-query's own list gets a
+      flat bonus on its fused score (+0.05 of the pool's top score; #2-3 get +0.02).
+      Protects an exact match for the original query from being diluted when the
+      expanded variants disagree with it.
+    - **Position-aware rerank blend**: when ``config.RERANK`` is on, the reranker
+      doesn't fully override the fused order (what :func:`rerank.rerank_hits` does
+      for :func:`search`) — it's blended with the pre-rerank score, weighted by the
+      hit's *retrieval* rank tier: top 1-3 stay 75% retrieval / 25% reranker (a
+      confident top match survives a noisy reranker call), 4-10 at 60/40, 11+ at
+      40/60 (trust the reranker more once retrieval confidence is already low).
+
+    Both are scoped to this function only — :func:`search` and :func:`rerank.rerank_hits`
+    (used by every other caller) are untouched.
     """
     if queries is None:
         queries = expand_query(query, intent=intent)
     pool_n = max(k * 3, config.SEARCH_CANDIDATES)
     fused: dict[str, float] = {}
+    best_rank: dict[str, int] = {}
     hit_by_hash: dict[str, Hit] = {}
     full_texts: dict[str, str] = {}
     for sq in queries[:10]:
@@ -2646,13 +2667,25 @@ def search_expanded(
             sub_hits = search_vector_only(qvec, k=pool_n, folder=folder, snippet_chars=0)
         for rank, h in enumerate(sub_hits):
             fused[h.chunk_hash] = fused.get(h.chunk_hash, 0.0) + weight / (RRF_K + rank)
+            if rank < best_rank.get(h.chunk_hash, rank + 1):
+                best_rank[h.chunk_hash] = rank
             hit_by_hash.setdefault(h.chunk_hash, h)
             full_texts.setdefault(h.chunk_hash, h.text)
     if not fused:
         return []
+
     top = max(fused.values())
+    for chash, rank in best_rank.items():
+        if rank == 0:
+            fused[chash] += 0.05 * top
+        elif rank <= 2:
+            fused[chash] += 0.02 * top
+
     ranked = sorted(fused, key=lambda ch: fused[ch], reverse=True)
-    cut = ranked[:k] if k > 0 else ranked
+    rerank_on = config.RERANK and k > 0
+    collect_n = max(k, config.RERANK_POOL) if rerank_on else k
+    cut = ranked[:collect_n] if collect_n > 0 else ranked
+    top = max(fused.values())  # re-max after the bonus so 1.0 still means "pool best"
     out: list[Hit] = []
     for chash in cut:
         h = hit_by_hash[chash]
@@ -2660,11 +2693,21 @@ def search_expanded(
         if snippet_chars > 0:
             h.text = _truncate_word_boundary(h.text, snippet_chars)
         out.append(h)
-    if config.RERANK and out:
+
+    if rerank_on and out:
         rerank_query = str((queries[0] or {}).get("query") or query)
         texts = [full_texts.get(h.chunk_hash, h.text) for h in out]
-        out, status = rerank.rerank_hits(rerank_query, out, k, texts=texts)
+        scores, status = rerank.rerank_scores(rerank_query, texts)
+        if scores is not None:
+            lo, hi = min(scores), max(scores)
+            span = hi - lo
+            for rrf_rank, h in enumerate(out):
+                rr_norm = (scores[rrf_rank] - lo) / span if span > 0 else 1.0
+                w = 0.75 if rrf_rank < 3 else 0.60 if rrf_rank < 10 else 0.40
+                h.score = round(w * h.score + (1 - w) * rr_norm, 4)
+            out.sort(key=lambda h: h.score, reverse=True)
         _search_rerank.set(status)
+        out = out[:k] if k > 0 else out
     return out
 
 

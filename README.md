@@ -103,6 +103,7 @@ just okf validate --vault-root ~/Notes/Yours --profile okf   # SPEC §11 exactly
 | **Surgical writes** | `append_note` / `patch_note` with heading / `chunk_hash` anchors and `expected_mtime` |
 | **Vault contracts** | Optional OKF / search / git / usage contracts — stamp and validate on write; OKF CLI for lint/export/ingest |
 | **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown (+ YAML title/description fields) |
+| **Typed query expansion** | Opt-in `expand=true` — lex/vec/hyde sub-queries RRF-fused with a top-rank bonus and position-aware rerank blend (adapted from [tobi/qmd](https://github.com/tobi/qmd)) |
 | **MCP surface** | 11 top-level tools + 6 admin capabilities via `apo_admin` |
 | **Index-backed graphs** | `backlinks` + `history` (mtime browse; file git log when git contract active) hit sqlite / git — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
@@ -246,9 +247,9 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | `APO_RERANK` | `0` | Opt-in local cross-encoder reranker (`pip install -e '.[rerank]'`) |
 | `APO_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder id |
 | `APO_RERANK_POOL` | `24` | Fused candidates rescored before the cut to `k` |
-| `APO_QUERY_EXPAND` | `0` | Opt-in typed lex/vec/hyde query expansion (adds an Ollama chat call) — `search_notes(expand=true)` |
-| `APO_QUERY_EXPAND_MODEL` | `qwen3.5:4b` | Ollama chat model for expansion |
-| `APO_QUERY_EXPAND_TIMEOUT` | `15` | Seconds — covers a cold model load, not just inference |
+| `APO_QUERY_EXPAND` | `0` | Opt-in typed lex/vec/hyde query expansion (adds an Ollama call) — `search_notes(expand=true)`. One-time model setup: `just setup-query-expand-model` ([docs/models/qmd-query-expansion.md](docs/models/qmd-query-expansion.md)) |
+| `APO_QUERY_EXPAND_MODEL` | `apo-query-expand` | Ollama model for expansion — qmd's own fine-tuned model, see above |
+| `APO_QUERY_EXPAND_TIMEOUT` | `20` | Seconds — covers a cold model load, not just inference |
 | `APO_QUERY_EXPAND_KEEP_ALIVE` | `5m` | Per-request Ollama `keep_alive` for the expansion call only |
 | `APO_MCP_TRANSPORT` | `stdio` | `http` runs a shared server (`just mcp-http`) instead of one subprocess per client |
 | `APO_MCP_HOST` / `APO_MCP_PORT` | `127.0.0.1` / `8878` | HTTP transport bind address |

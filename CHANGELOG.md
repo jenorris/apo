@@ -4,6 +4,39 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.25.1] — 2026-08-27
+
+Follow-up to 0.25.0's query expansion: switch to qmd's own fine-tuned expansion
+model, and import the fusion refinements from qmd's architecture doc that 0.25.0
+didn't yet match (top-rank bonus, position-aware rerank blending).
+
+### Changed
+
+- **`APO_QUERY_EXPAND_MODEL` default: `qwen3.5:4b` → `apo-query-expand`** — qmd's
+  own fine-tuned expansion model (`tobil/qmd-query-expansion-1.7B`, Qwen3-1.7B SFT'd
+  on `lex:`/`vec:`/`hyde:` output), not a general chat model prompted for JSON. One-
+  time setup: `just setup-query-expand-model` (docs/models/qmd-query-expansion.md).
+  `core.expand_query()`'s prompt/parsing rewritten for this model's native plain-text
+  output (multiple `lex:`/`vec:` lines are common, unlike a single JSON object).
+  `APO_QUERY_EXPAND_TIMEOUT` default `15s` → `20s` — a per-request `keep_alive` did
+  not reliably keep the model warm across calls in testing (another Ollama consumer
+  can evict it inside the window on a shared GPU).
+- **`search_expanded()` fusion, two refinements on top of plain RRF** (scoped to
+  this function only — `search()` and `rerank.rerank_hits()`, used by every other
+  caller, are untouched):
+  - **Top-rank bonus**: a chunk ranking #1 in *any* sub-query's own list gets +0.05
+    of the pool's top score; #2-3 get +0.02 — protects an exact match for the
+    original query from dilution when expanded variants disagree with it.
+  - **Position-aware rerank blend**: reranking no longer fully overrides the fused
+    order — blended with it by retrieval rank tier (top 1-3: 75% retrieval / 25%
+    reranker; 4-10: 60/40; 11+: 40/60). New `rerank.rerank_scores()` (raw,
+    unreordered scores) extracted from `rerank_hits()` as a behavior-preserving
+    refactor to make this possible without touching the shared function.
+
+4 new tests (`test_search_expanded_fusion.py`), 5 existing query-expansion tests
+updated for the new model's output format, all 841 pass.
+
+## [0.25.0] — 2026-08-27
 ## [0.25.0] — 2026-08-27
 
 Two more ideas adapted from [tobi/qmd](https://github.com/tobi/qmd) (see 0.24.0).

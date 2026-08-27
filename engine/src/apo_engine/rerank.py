@@ -42,6 +42,30 @@ def _get_encoder() -> tuple[Any, str | None]:
         return _encoder, None
 
 
+def rerank_scores(query: str, texts: list[str]) -> tuple[list[float] | None, dict[str, Any]]:
+    """Raw cross-encoder scores for ``texts`` against ``query``, aligned by index.
+
+    No reordering, no normalization — the building block :func:`rerank_hits` is built
+    on, and what a caller doing its own score blending (e.g. :func:`core.search_expanded`'s
+    position-aware retrieval/reranker blend) needs instead of the reorder-and-overwrite
+    behavior. Returns ``(None, status)`` on any failure — model unavailable, scoring
+    error, or a length mismatch — same failure shape as :func:`rerank_hits`.
+    """
+    enc, err = _get_encoder()
+    if enc is None:
+        return None, {"applied": False, "detail": err or "rerank unavailable"}
+    try:
+        scores = [float(s) for s in enc.rerank(query, texts)]
+    except Exception as e:
+        return None, {"applied": False, "detail": f"rerank scoring failed: {e}"}
+    if len(scores) != len(texts):
+        return None, {
+            "applied": False,
+            "detail": f"rerank returned {len(scores)} scores for {len(texts)} candidates",
+        }
+    return scores, {"applied": True, "detail": f"model={config.RERANK_MODEL}"}
+
+
 def rerank_hits(
     query: str,
     hits: list[Any],
@@ -58,20 +82,10 @@ def rerank_hits(
     fallback = hits[:k] if k > 0 else hits
     if len(hits) < 2:
         return fallback, {"applied": False, "detail": ""}
-    enc, err = _get_encoder()
-    if enc is None:
-        return fallback, {"applied": False, "detail": err or "rerank unavailable"}
-
     docs = texts if texts is not None and len(texts) == len(hits) else [h.text for h in hits]
-    try:
-        scores = [float(s) for s in enc.rerank(query, docs)]
-    except Exception as e:
-        return fallback, {"applied": False, "detail": f"rerank scoring failed: {e}"}
-    if len(scores) != len(hits):
-        return fallback, {
-            "applied": False,
-            "detail": f"rerank returned {len(scores)} scores for {len(hits)} candidates",
-        }
+    scores, status = rerank_scores(query, docs)
+    if scores is None:
+        return fallback, status
 
     order = sorted(range(len(hits)), key=lambda i: scores[i], reverse=True)
     lo, hi = min(scores), max(scores)
@@ -83,4 +97,4 @@ def rerank_hits(
         h.score = round((scores[i] - lo) / span, 4) if span > 0 else 1.0
         reordered.append(h)
     out = reordered[:k] if k > 0 else reordered
-    return out, {"applied": True, "detail": f"model={config.RERANK_MODEL}"}
+    return out, status

@@ -112,6 +112,12 @@ mcp:
 mcp-http:
     APO_MCP_TRANSPORT=http {{mcp_py}} {{mcp_srv}}
 
+# One-time pull + build of qmd's own query-expansion model (APO_QUERY_EXPAND=1).
+# See docs/models/qmd-query-expansion.md.
+setup-query-expand-model:
+    ollama pull hf.co/tobil/qmd-query-expansion-1.7B-gguf:Q4_K_M
+    ollama create apo-query-expand -f docs/models/qmd-query-expansion.Modelfile
+
 inspect:
     # Needs Node (npx) + ripgrep (rg). Prefer `just tool-list` if those are missing.
     npx -y @modelcontextprotocol/inspector --cli {{mcp_py}} {{mcp_srv}} --env APO_NOTES_ROOT=${APO_NOTES_ROOT} --method tools/list | rg '"name"' | wc -l
