@@ -214,6 +214,20 @@ Counts are contract-tested (`engine/tests/test_apo_admin.py`) — if this table 
 
 Habit KPIs (optional): **`vault(action=stats)`**. Operator traces: OTel → Jaeger (Workbench `harness/observability/`).
 
+### Transport
+
+Default is stdio — one subprocess per client (Claude Code, Cursor, each Hermes
+gateway), the way `mcp_servers.apo` config launches `engine/mcp/server.py` today.
+`just mcp-http` (or `APO_MCP_TRANSPORT=http`) runs a shared, long-lived server over
+HTTP instead — many clients can point at one warm process (adapted from
+[tobi/qmd](https://github.com/tobi/qmd)'s `qmd mcp --http`), avoiding N cold-loaded
+copies of the same embed model / bindings cache / metrics state. DNS-rebinding
+protection is on (`host_origin_protection="auto"`, FastMCP's own guard, off by
+default upstream — verify this stays true after any FastMCP upgrade via
+`engine/tests/test_mcp_http_transport.py`); loopback is always trusted,
+`APO_MCP_ALLOWED_HOSTS` / `APO_MCP_ALLOWED_ORIGINS` (comma-separated) only ever add a
+non-loopback client on top.
+
 ## Configuration
 
 Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
@@ -232,6 +246,13 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | `APO_RERANK` | `0` | Opt-in local cross-encoder reranker (`pip install -e '.[rerank]'`) |
 | `APO_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder id |
 | `APO_RERANK_POOL` | `24` | Fused candidates rescored before the cut to `k` |
+| `APO_QUERY_EXPAND` | `0` | Opt-in typed lex/vec/hyde query expansion (adds an Ollama chat call) — `search_notes(expand=true)` |
+| `APO_QUERY_EXPAND_MODEL` | `qwen3.5:4b` | Ollama chat model for expansion |
+| `APO_QUERY_EXPAND_TIMEOUT` | `15` | Seconds — covers a cold model load, not just inference |
+| `APO_QUERY_EXPAND_KEEP_ALIVE` | `5m` | Per-request Ollama `keep_alive` for the expansion call only |
+| `APO_MCP_TRANSPORT` | `stdio` | `http` runs a shared server (`just mcp-http`) instead of one subprocess per client |
+| `APO_MCP_HOST` / `APO_MCP_PORT` | `127.0.0.1` / `8878` | HTTP transport bind address |
+| `APO_MCP_ALLOWED_HOSTS` / `APO_MCP_ALLOWED_ORIGINS` | (empty) | Comma-separated additions to the loopback allowlist (HTTP transport) |
 | `APO_INGEST_DIR` | `resources/wiki` | Advisory convention for wiki ingest paths |
 | `APO_SEND_ALLOW_ROOTS` | `$HOME` | Colon-separated host roots place op / host copy may read from |
 | `APO_SEND_MAX_BYTES` | `5242880` | Max size for host-source `.md` copies (place op) |

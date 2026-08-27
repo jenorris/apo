@@ -2381,6 +2381,293 @@ def _build_snippet(
     return _truncate_word_boundary(cleaned, snippet_chars)
 
 
+def _hits_for_ids(
+    db: sqlite3.Connection,
+    ids: list[int],
+    folder_prefix: str,
+    *,
+    match: str | None,
+    fts_rowid_set: set[int],
+    snippet_chars: int,
+) -> list[Hit]:
+    """Materialize ``Hit`` rows for a caller-ranked chunk id list, preserving order.
+
+    No RRF, no boosts, no rerank — building block for a caller doing its own fusion
+    across several ranked lists (:func:`search_expanded`); :func:`search` does its
+    fusion/boosts inline instead of going through this.
+    """
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    by_id: dict[int, tuple] = {}
+    for row in db.execute(
+        f"""SELECT c.id, c.path, c.heading, c.text, c.chunk_hash, c.heading_level,
+                   c.start_line, c.end_line, f.mtime, COALESCE(f.bytes, 0),
+                   COALESCE(c.section_bytes, LENGTH(c.text)),
+                   COALESCE(c.content_hash, ''),
+                   COALESCE(c.chunk_kind, 'section'),
+                   COALESCE(c.row_key, ''),
+                   COALESCE(c.table_id, '')
+            FROM chunks c LEFT JOIN files f ON f.path = c.path
+            WHERE c.id IN ({placeholders})""",
+        ids,
+    ):
+        by_id[row[0]] = row[1:]
+    root = vaults.notes_root()
+    hits: list[Hit] = []
+    for rid in ids:
+        row = by_id.get(rid)
+        if row is None:
+            continue
+        (
+            path,
+            heading,
+            text,
+            chunk_hash,
+            hlevel,
+            start_line,
+            end_line,
+            mtime,
+            file_bytes,
+            section_bytes,
+            content_hash,
+            chunk_kind,
+            row_key,
+            table_id,
+        ) = row
+        if folder_prefix and not path.startswith(folder_prefix + "/"):
+            continue
+        out_text = _build_snippet(
+            text,
+            snippet_chars,
+            chunk_kind or "section",
+            db=db,
+            match=match,
+            rid=rid,
+            fts_rowids=fts_rowid_set,
+        )
+        hits.append(
+            Hit(
+                path=path,
+                heading=heading or "",
+                text=out_text,
+                score=0.0,  # caller (RRF fusion) overwrites this
+                chunk_hash=chunk_hash or "",
+                heading_level=int(hlevel or 0),
+                start_line=int(start_line or 1),
+                end_line=int(end_line or 1),
+                source=str(root / path),
+                mtime=float(mtime or 0.0),
+                file_bytes=int(file_bytes or 0),
+                section_bytes=int(section_bytes or 0),
+                content_hash=content_hash or "",
+                chunk_kind=chunk_kind or "section",
+                row_key=row_key or "",
+                table_id=table_id or "",
+            )
+        )
+    return hits
+
+
+def search_lex_only(query: str, k: int = 8, folder: str = "", snippet_chars: int = 0) -> list[Hit]:
+    """Pure BM25/FTS5 ranked hits — no vector fusion.
+
+    Building block for typed query-expansion routing (:func:`search_expanded`): a
+    ``lex`` sub-query should hit FTS only, not contaminate the vector pool.
+    """
+    db = reader_connect()
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    match = _fts_query(query)
+    if not match:
+        return []
+    fts_ready = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
+    if not (fts_ready and fts_ready[0] == "1"):
+        return []
+    try:
+        if folder_prefix:
+            frows = db.execute(
+                """SELECT chunks_fts.rowid
+                   FROM chunks_fts
+                   JOIN chunks c ON c.id = chunks_fts.rowid
+                   WHERE chunks_fts MATCH ?
+                     AND c.path LIKE ? ESCAPE '\\'
+                   ORDER BY rank LIMIT ?""",
+                (match, _escape_like(folder_prefix) + "/%", k),
+            ).fetchall()
+        else:
+            frows = db.execute(
+                "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
+                (match, k),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    ids = [r[0] for r in frows]
+    return _hits_for_ids(
+        db, ids, folder_prefix, match=match, fts_rowid_set=set(ids), snippet_chars=snippet_chars
+    )
+
+
+def search_vector_only(
+    qvec: list[float], k: int = 8, folder: str = "", snippet_chars: int = 0
+) -> list[Hit]:
+    """Pure dense-KNN ranked hits — no FTS fusion.
+
+    Building block for typed query-expansion routing (:func:`search_expanded`): a
+    ``vec``/``hyde`` sub-query should hit the vector index only.
+    """
+    db = reader_connect()
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    if folder_prefix:
+        vrows = _scoped_vector_hits(db, qvec, folder_prefix, k, prefer_ids=None)
+    else:
+        vrows = db.execute(
+            "SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+            (sqlite_vec.serialize_float32(qvec), k),
+        ).fetchall()
+    ids = [r[0] for r in vrows]
+    return _hits_for_ids(
+        db, ids, folder_prefix, match=None, fts_rowid_set=set(), snippet_chars=snippet_chars
+    )
+
+
+_EXPAND_PROMPT = (
+    "You are a search query rewriter for a hybrid BM25 + vector search engine.\n"
+    "Given a user's search query, produce typed sub-queries as a JSON object:\n"
+    '  "lex": a short keyword string tuned for BM25/FTS (quote exact phrases, prefix '
+    "an excluded term with a leading minus). Omit if the query is already just keywords.\n"
+    '  "vec": one natural-language sentence rephrasing the query for semantic embedding '
+    "search. Omit if it wouldn't differ meaningfully from the original query.\n"
+    '  "hyde": a short hypothetical passage (2-3 sentences), written as if it were the '
+    "actual document content that answers the query. Omit if you can't picture what "
+    "such a passage would contain.\n"
+    'Respond with ONLY a JSON object, e.g. {"lex": "...", "vec": "...", "hyde": "..."} '
+    "— omit any key that wouldn't help.\n"
+)
+
+
+def expand_query(query: str, *, intent: str = "") -> list[dict[str, Any]]:
+    """Typed sub-query expansion (``lex``/``vec``/``hyde``) via a local Ollama chat model.
+
+    Adapted from qmd (github.com/tobi/qmd)'s query-expansion pattern — the original
+    query is always searched on both backends (mirrors qmd's own README: "The
+    original query is sent to both backends"), and the LLM's typed sub-queries (if
+    generation is enabled and succeeds) are added on top, each meant for exactly one
+    backend once :func:`search_expanded` routes them. Disabled by default
+    (``APO_QUERY_EXPAND``); on any failure — model down, malformed JSON, timeout —
+    falls back to just the two base entries. Never raises.
+    """
+    base: list[dict[str, Any]] = [
+        {"type": "lex", "query": query, "weight": 2.0},
+        {"type": "vec", "query": query, "weight": 2.0},
+    ]
+    if not config.QUERY_EXPAND:
+        return base
+    try:
+        prompt = _EXPAND_PROMPT
+        if intent:
+            prompt += f"\nContext: {intent}\n"
+        prompt += f"\nQuery: {query}\n"
+        payload = json.dumps(
+            {
+                "model": config.QUERY_EXPAND_MODEL,
+                "prompt": prompt,
+                "format": "json",
+                "stream": False,
+                "think": False,  # hybrid-thinking models (e.g. qwen3.5) otherwise
+                # spend the whole output budget on <think> and never emit `response`
+                "keep_alive": config.QUERY_EXPAND_KEEP_ALIVE,
+                "options": {"temperature": 0.2},
+            }
+        ).encode()
+        req = urllib.request.Request(
+            f"{config.OLLAMA_URL}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=config.QUERY_EXPAND_TIMEOUT) as resp:
+            data = json.load(resp)
+        parsed = json.loads(data.get("response", "") or "{}")
+    except (
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+        TimeoutError,
+        ValueError,
+        OSError,
+    ):
+        return base
+    if not isinstance(parsed, dict):
+        return base
+    for key in ("lex", "vec", "hyde"):
+        val = str(parsed.get(key) or "").strip()
+        if val and val != query:
+            base.append({"type": key, "query": val, "weight": 1.0})
+    return base
+
+
+def search_expanded(
+    query: str = "",
+    *,
+    queries: list[dict[str, Any]] | None = None,
+    intent: str = "",
+    k: int = 8,
+    folder: str = "",
+    snippet_chars: int = 0,
+) -> list[Hit]:
+    """RRF-fuse typed sub-queries, each routed to exactly one backend.
+
+    ``lex`` -> :func:`search_lex_only`; ``vec``/``hyde`` -> embed + :func:`search_vector_only`
+    (any other/missing type is treated as ``lex``). Pass ``queries`` for caller-supplied
+    typed sub-queries (pre-expanded, e.g. from an MCP client — same shape qmd's ``query``
+    tool takes); otherwise ``query`` is auto-expanded via :func:`expand_query`.
+
+    Distinct from :func:`search`'s single-query internal FTS+vector fusion — this fuses
+    *across several independently-ranked sub-query result lists*, keyed by ``chunk_hash``
+    (RRF only needs each input's rank order, not how it was produced). Reranking (when
+    ``config.RERANK``) runs once over the fused set, same as :func:`search`.
+    """
+    if queries is None:
+        queries = expand_query(query, intent=intent)
+    pool_n = max(k * 3, config.SEARCH_CANDIDATES)
+    fused: dict[str, float] = {}
+    hit_by_hash: dict[str, Hit] = {}
+    full_texts: dict[str, str] = {}
+    for sq in queries[:10]:
+        qtype = str(sq.get("type") or "lex").strip().lower()
+        qtext = str(sq.get("query") or "").strip()
+        if not qtext:
+            continue
+        weight = float(sq.get("weight", 1.0))
+        if qtype == "lex":
+            sub_hits = search_lex_only(qtext, k=pool_n, folder=folder, snippet_chars=0)
+        else:
+            qvec = query_embed(qtext)
+            if qvec is None:
+                continue
+            sub_hits = search_vector_only(qvec, k=pool_n, folder=folder, snippet_chars=0)
+        for rank, h in enumerate(sub_hits):
+            fused[h.chunk_hash] = fused.get(h.chunk_hash, 0.0) + weight / (RRF_K + rank)
+            hit_by_hash.setdefault(h.chunk_hash, h)
+            full_texts.setdefault(h.chunk_hash, h.text)
+    if not fused:
+        return []
+    top = max(fused.values())
+    ranked = sorted(fused, key=lambda ch: fused[ch], reverse=True)
+    cut = ranked[:k] if k > 0 else ranked
+    out: list[Hit] = []
+    for chash in cut:
+        h = hit_by_hash[chash]
+        h.score = round(fused[chash] / top, 4)
+        if snippet_chars > 0:
+            h.text = _truncate_word_boundary(h.text, snippet_chars)
+        out.append(h)
+    if config.RERANK and out:
+        rerank_query = str((queries[0] or {}).get("query") or query)
+        texts = [full_texts.get(h.chunk_hash, h.text) for h in out]
+        out, status = rerank.rerank_hits(rerank_query, out, k, texts=texts)
+        _search_rerank.set(status)
+    return out
+
+
 def search(
     query: str,
     k: int = 8,

@@ -4,6 +4,46 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-08-27
+
+Two more ideas adapted from [tobi/qmd](https://github.com/tobi/qmd) (see 0.24.0).
+
+### Added
+
+- **Typed query expansion** — `search_notes(expand=true)` RRF-fuses `lex`/`vec`
+  sub-queries instead of one hybrid pass; with `APO_QUERY_EXPAND=1`, an Ollama chat
+  call (`APO_QUERY_EXPAND_MODEL`, default `qwen3.5:4b`) adds LLM-typed `lex`/`vec`/
+  `hyde` sub-queries on top, each routed to exactly one backend (new
+  `core.search_lex_only` / `core.search_vector_only`) — never both, unlike qmd's own
+  README-documented behavior for the *original* query (searched on both). Disabled
+  → behaves like plain hybrid search on the raw query, no LLM call. New
+  `core.expand_query()` / `core.search_expanded()`; never raises — any backend
+  failure (model down, bad JSON) falls back to the un-expanded base pair.
+  - **Found in development, not qmd's problem**: the default expansion model
+    (`qwen3.5:4b`) is a hybrid-thinking model — `format: "json"` without `think:
+    false` burns the whole output budget on `<think>` and returns an empty
+    `response`. Also sends a per-request Ollama `keep_alive` (`APO_QUERY_EXPAND_KEEP_ALIVE`,
+    default `5m`) independent of the process-wide `OLLAMA_KEEP_ALIVE` — a shared-GPU
+    host may deliberately want that at `0` for other consumers (measured: a cold
+    4B-model load alone was ~7.4s here), so expansion keeps its own warm window
+    without changing that policy.
+- **HTTP MCP transport** (`APO_MCP_TRANSPORT=http`, `just mcp-http`) — a shared,
+  long-lived server multiple clients can point at instead of each spawning its own
+  stdio subprocess (qmd's `qmd mcp --http` pattern). DNS-rebinding protection is
+  FastMCP's own `HostOriginGuardMiddleware`, explicitly enabled
+  (`host_origin_protection="auto"`) — mirrors qmd's own fix for the identical bug
+  class (its CHANGELOG #881: loopback binding alone doesn't stop a browser page from
+  re-pointing its hostname at 127.0.0.1). `APO_MCP_ALLOWED_HOSTS` /
+  `APO_MCP_ALLOWED_ORIGINS` (comma-separated) add a non-loopback client.
+  - **Found in development, not qmd's problem**: FastMCP ships this guard **off** by
+    default (`host_origin_protection=False`, its own docstring says "for
+    compatibility") — verified with a live hostile-`Origin` request getting `200`
+    before the explicit `"auto"` was added, `403`/`421` after.
+    `test_mcp_http_transport.py::test_unprotected_app_would_have_allowed_hostile_origin`
+    guards against a future FastMCP silently flipping that default back.
+
+16 new tests, all 836 pass.
+
 ## [0.24.0] — 2026-08-27
 
 Adapted from a review of [tobi/qmd](https://github.com/tobi/qmd) — its README calls

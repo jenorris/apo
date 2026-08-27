@@ -770,6 +770,11 @@ async def search_notes(
             ),
         ),
     ] = "",
+    expand: Annotated[
+        bool,
+        Field(description="RRF-fuse lex+vec sub-queries (+ LLM hyde if APO_QUERY_EXPAND=1). No ref="),
+    ] = False,
+    intent: Annotated[str, Field(description="Disambiguation context for expand=")] = "",
 ) -> dict:
     """Hybrid search. Hits include chunk_hash — read more via read_note(chunk_hash=).
 
@@ -787,6 +792,8 @@ async def search_notes(
         offset=offset,
         exclude=exclude,
         ref=ref,
+        expand=expand,
+        intent=intent,
     )
 
 
@@ -1235,5 +1242,43 @@ def vaults_resource() -> dict:
 # Entry point
 ###############################################################################
 
+def _csv_env(name: str) -> list[str] | None:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return None
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
 if __name__ == "__main__":
-    mcp.run()
+    # Default: stdio, one subprocess per client (Claude Code, Cursor, each Hermes
+    # gateway) — matches how every client's mcp_servers.apo entry launches this file
+    # today. APO_MCP_TRANSPORT=http instead runs a shared, long-lived server multiple
+    # clients can point at (qmd's `qmd mcp --http --daemon` pattern — avoids each
+    # client cold-loading its own copy of everything process-local: the bindings
+    # cache, the embed model, tool_metrics state).
+    #
+    # DNS-rebinding protection is FastMCP's built-in HostOriginProtection, not
+    # hand-rolled here — matching qmd's own fix for the same class of bug
+    # (github.com/tobi/qmd CHANGELOG #881: binding to loopback alone doesn't stop a
+    # browser page from re-pointing its hostname at 127.0.0.1 and reading an
+    # unauthenticated local server). BUT FastMCP ships it OFF by default
+    # (`host_origin_protection=False`, its own docstring says "for compatibility") —
+    # passing transport kwargs without it is silently unprotected, verified by an
+    # actual hostile-Origin request getting 200 before this line was added. Explicit
+    # "auto" here: validates Host always, validates Origin whenever the bound host is
+    # loopback or an explicit allow-list is set — loopback is always implicitly
+    # trusted underneath (FastMCP's DEFAULT_HOSTS), APO_MCP_ALLOWED_HOSTS /
+    # APO_MCP_ALLOWED_ORIGINS (comma-separated) only ever *add* a non-loopback
+    # client, never replace the loopback defaults.
+    transport = (os.environ.get("APO_MCP_TRANSPORT") or "stdio").strip().lower()
+    if transport in ("http", "streamable-http"):
+        mcp.run(
+            transport="http",
+            host=os.environ.get("APO_MCP_HOST", "127.0.0.1"),
+            port=int(os.environ.get("APO_MCP_PORT", "8878")),
+            allowed_hosts=_csv_env("APO_MCP_ALLOWED_HOSTS"),
+            allowed_origins=_csv_env("APO_MCP_ALLOWED_ORIGINS"),
+            host_origin_protection="auto",
+        )
+    else:
+        mcp.run()

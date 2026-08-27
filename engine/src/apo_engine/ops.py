@@ -825,6 +825,8 @@ def _search_one_vault(
     exclude: list[str] | None,
     hybrid: bool,
     stamp_vault: bool,
+    expand: bool = False,
+    intent: str = "",
 ) -> tuple[list[dict[str, Any]], list[str], bool, list[str] | None]:
     """Run hybrid search in one vault. Returns (rows, warnings, reranked, default_exclude)."""
     warnings: list[str] = []
@@ -836,14 +838,26 @@ def _search_one_vault(
         query=query,
     )
     with vaults.bind(b):
-        hits = core.search(
-            query,
-            k=k,
-            folder=folder_clean,
-            snippet_chars=snippet_chars,
-            exclude=effective_exclude,
-            hybrid=hybrid,
-        )
+        if expand:
+            # Typed lex/vec/hyde sub-query RRF fusion (core.search_expanded) — a
+            # different retrieval path from the single-query hybrid one below, so
+            # `exclude=` (glob post-filter) isn't threaded through it yet.
+            hits = core.search_expanded(
+                query,
+                intent=intent,
+                k=k,
+                folder=folder_clean,
+                snippet_chars=snippet_chars,
+            )
+        else:
+            hits = core.search(
+                query,
+                k=k,
+                folder=folder_clean,
+                snippet_chars=snippet_chars,
+                exclude=effective_exclude,
+                hybrid=hybrid,
+            )
         results = shape_search_hits(hits)
         rr = core.last_search_rerank()
         degraded = core.last_search_degraded()
@@ -1024,8 +1038,15 @@ def search(
     limit: int | None = None,
     offset: int = 0,
     ref: str = "",
+    expand: bool = False,
+    intent: str = "",
 ) -> dict[str, Any]:
     ref_s = (ref or "").strip()
+    if ref_s and expand:
+        return _err(
+            error="bad_request",
+            message="search_notes ref= does not support expand= (git-tip search is FTS-only already)",
+        )
     if ref_s and vaults:
         return _err(
             error="bad_request",
@@ -1097,6 +1118,8 @@ def search(
                 exclude=exclude,
                 hybrid=hybrid,
                 stamp_vault=fanout_vaults or fanout_folders,
+                expand=expand,
+                intent=intent,
             )
             if applied_default:
                 if fanout_vaults:

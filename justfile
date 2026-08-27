@@ -105,6 +105,13 @@ watch-uninstall:
 mcp:
     {{mcp_py}} {{mcp_srv}}
 
+# Shared long-lived MCP server over HTTP instead of one stdio subprocess per client
+# (qmd's `qmd mcp --http` pattern) — foreground, Ctrl-C to stop. DNS-rebinding guard
+# is on (FastMCP host_origin_protection="auto"); APO_MCP_ALLOWED_HOSTS /
+# APO_MCP_ALLOWED_ORIGINS (comma-separated) add a non-loopback client if needed.
+mcp-http:
+    APO_MCP_TRANSPORT=http {{mcp_py}} {{mcp_srv}}
+
 inspect:
     # Needs Node (npx) + ripgrep (rg). Prefer `just tool-list` if those are missing.
     npx -y @modelcontextprotocol/inspector --cli {{mcp_py}} {{mcp_srv}} --env APO_NOTES_ROOT=${APO_NOTES_ROOT} --method tools/list | rg '"name"' | wc -l

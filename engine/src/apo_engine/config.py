@@ -165,6 +165,23 @@ RERANK_MODEL: str = os.environ.get("APO_RERANK_MODEL", "Xenova/ms-marco-MiniLM-L
 # Fused candidates scored by the reranker before cutting to k.
 RERANK_POOL: int = int(os.environ.get("APO_RERANK_POOL", "24"))
 
+# Typed query expansion (lex/vec/hyde sub-queries, RRF-fused — adapted from qmd,
+# github.com/tobi/qmd) over a local Ollama chat model. Opt-in: an extra LLM call in
+# the search path. Disabled → core.search_expanded() still runs (lex+vec on the raw
+# query, RRF-fused, no LLM call) — the expansion step just adds nothing on top.
+QUERY_EXPAND: bool = os.environ.get("APO_QUERY_EXPAND", "0").strip().lower() in ("1", "true", "yes", "on")
+QUERY_EXPAND_MODEL: str = os.environ.get("APO_QUERY_EXPAND_MODEL", "qwen3.5:4b")
+# 15s, not 8: a cold Ollama model load alone measured ~7.4s on a 4B model on this
+# host's hardware — a tight timeout would time out on essentially every call under a
+# host policy of OLLAMA_KEEP_ALIVE=0 (unload after every request; common when Ollama
+# shares a GPU with something else, e.g. ComfyUI VRAM contention).
+QUERY_EXPAND_TIMEOUT: float = float(os.environ.get("APO_QUERY_EXPAND_TIMEOUT", "15"))
+# Per-request Ollama keep_alive override for the expansion call, independent of the
+# process-wide OLLAMA_KEEP_ALIVE — lets query expansion stay warm across a session's
+# repeated searches without changing that host-wide policy (which a shared-GPU host
+# may deliberately want at 0 for other consumers).
+QUERY_EXPAND_KEEP_ALIVE: str = os.environ.get("APO_QUERY_EXPAND_KEEP_ALIVE", "5m")
+
 # Local RPC (apo-engine serve) — loopback HTTP for Laravel / other gateways.
 RPC_HOST: str = os.environ.get("APO_RPC_HOST", "127.0.0.1")
 RPC_PORT: int = int(os.environ.get("APO_RPC_PORT", "8765"))
