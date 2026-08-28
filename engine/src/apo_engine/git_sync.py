@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from apo_engine import git_contract
+from apo_engine import git_contract, vaults
 
 _GIT_TIMEOUT_S = 120.0
 _NOTIFY_TIMEOUT_S = 20.0
@@ -109,8 +109,32 @@ def sync_settings(vault_root: Path) -> SyncSettings:
     )
 
 
+def _is_read_only_vault(vault_root: Path) -> bool:
+    """True if ``vault_root`` is registered with ``read_only: true``.
+
+    A read-only mount (e.g. an ingested foreign OKF bundle) promises every
+    *write* op fails — that promise must also cover the automation this
+    module runs unattended (commit/push, and shelling out to
+    ``on_block_command``), not just the MCP write-tool boundary.
+    """
+    try:
+        resolved = vault_root.expanduser().resolve()
+    except OSError:
+        resolved = vault_root
+    try:
+        _, bindings = vaults.load_bindings()
+    except Exception:
+        return False
+    for binding in bindings.values():
+        if binding.root == resolved:
+            return binding.read_only
+    return False
+
+
 def sync_enabled(vault_root: Path) -> bool:
     if not git_contract.git_contract_active(vault_root):
+        return False
+    if _is_read_only_vault(vault_root):
         return False
     return sync_settings(vault_root).enabled
 

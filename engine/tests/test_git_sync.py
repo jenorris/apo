@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -379,6 +380,86 @@ class GitSyncRepoTest(unittest.TestCase):
         ctl.tick(index_busy=False)
         log = _git(self.vault, "log", "-1", "--pretty=%s")
         self.assertTrue(log.stdout.strip().startswith("apo: sync "))
+
+
+class GitSyncReadOnlyVaultTest(unittest.TestCase):
+    """A read-only mount (e.g. an ingested foreign OKF bundle) must not get
+    unattended git-sync automation either — not just MCP writes.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="apo-gsync-ro-"))
+        self.vault = self.tmp / "vault"
+        self.vault.mkdir()
+        (self.vault / "note.md").write_text("# N\n\nv1\n", encoding="utf-8")
+        _git(self.vault, "init", "-b", "main")
+        _git(self.vault, "config", "user.email", "test@example.com")
+        _git(self.vault, "config", "user.name", "Test")
+        _git(self.vault, "add", "note.md")
+        _git(self.vault, "commit", "-m", "initial")
+        (self.vault / "system" / "contracts").mkdir(parents=True)
+        (self.vault / "system" / "contracts" / "usage-contract.schema.yaml").write_text(
+            "usage_contract_version: '0.1'\nvault_id: ro_sync\npurpose: read-only sync test\n",
+            encoding="utf-8",
+        )
+        self.sentinel = self.tmp / "notified.log"
+        _write_contract(
+            self.vault,
+            enabled=True,
+            extra=(
+                "  on_block_command: 'printf \"%s\\n\" \"$APO_SYNC_ERROR\" "
+                f">> {self.sentinel}'\n"
+            ),
+        )
+        self.vaults_file = self.tmp / "vaults.json"
+        self.vaults_file.write_text(
+            json.dumps(
+                {
+                    "default": "ro_sync",
+                    "vaults": {
+                        "ro_sync": {
+                            "root": str(self.vault),
+                            "index": str(self.tmp / "ro_sync.db"),
+                            "read_only": True,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        self._prev_apo_vaults = os.environ.get("APO_VAULTS")
+        os.environ["APO_VAULTS"] = str(self.vaults_file)
+
+    def tearDown(self):
+        if self._prev_apo_vaults is None:
+            os.environ.pop("APO_VAULTS", None)
+        else:
+            os.environ["APO_VAULTS"] = self._prev_apo_vaults
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_sync_enabled_false_despite_contract_enabled_true(self):
+        # The contract says `sync.enabled: true`; the registry's read_only
+        # flag must override that for this root.
+        self.assertTrue(git_sync.sync_settings(self.vault).enabled)
+        self.assertFalse(git_sync.sync_enabled(self.vault))
+
+    def test_controller_never_commits(self):
+        ctl = git_sync.VaultSyncController(self.vault, verbose=False)
+        (self.vault / "note.md").write_text("# N\n\ndirty\n", encoding="utf-8")
+        ctl.note_apo_writes()
+        # Pre-fix this would arm the debounce (contract says enabled: true);
+        # the read_only flag must stop it before that.
+        self.assertFalse(ctl.pending_commit())
+
+        # Force a commit "due" directly (same hook `test_controller_debounce_commit`
+        # uses on a writable vault, where it does trigger a commit) — on a
+        # read_only vault, tick() must still refuse to act on it.
+        ctl._commit_due_at = 0.0  # noqa: SLF001 — test hook
+        ctl.tick(index_busy=False)
+
+        log = _git(self.vault, "log", "-1", "--pretty=%s")
+        self.assertEqual(log.stdout.strip(), "initial")
+        self.assertFalse(self.sentinel.exists())
 
 
 class GitSyncRpcTest(unittest.TestCase):
