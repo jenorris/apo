@@ -4,6 +4,49 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.25.4] — 2026-08-28
+
+Follow-up from a full-repo review (architecture, correctness, tests, config/security,
+recent-churn, untracked-file hygiene) run against 0.25.3.
+
+### Fixed
+
+- **`git_sync`: read_only vaults now also refuse unattended sync automation**, not just
+  MCP writes. `sync_enabled()` only checked the git contract's own `sync.enabled` — an
+  ingested foreign OKF bundle (`read_only: true`, promised to reject every write) still
+  got a `VaultSyncController` built by the watcher, so a bundle whose own
+  `git-contract.schema.yaml` turned on `sync` + `on_block_command` could reach
+  `_notify_blocked()`'s `subprocess.run(..., shell=True)` from a routine idle tick — no
+  MCP write call involved, arbitrary shell execution instead of the promised write
+  rejection. `sync_enabled()` now also refuses when the resolved root matches a
+  registered read_only binding.
+- **`scratchpad.read_buffer_payload`: fixed a multibyte truncation boundary mismatch.**
+  The oversize check counted encoded UTF-8 bytes but truncated by character count, so a
+  buffer with multi-byte content (any non-ASCII text) could land arbitrarily far from
+  the intended 8KiB cap — e.g. an all-2-byte-char buffer truncated to exactly double the
+  budget. Now slices on the same encoded-byte budget the check uses.
+- Removed an unused `_diag` import left over from 0.25.3's scratchpad create fix.
+- Corrected `search()`'s docstring: `_catalog_retrieval_boost()` can push a boosted
+  hit's score above 1.0 (not just just-under, as previously documented) — no behavior
+  change, score is a ranking signal within one result set, not compared across queries.
+
+### Added
+
+- `tests/test_vault_project.py` — `vault_project.py` (1268 lines, generates the
+  desk-projection content agents load every session) had no dedicated test file, only
+  incidental coverage. Covers `is_contracts_rel`, the pointer helpers
+  (`_pointer_vault_id`/`_abs_pointer`), `scope_desk_overlay`, and
+  `_contracts_signature`/`_desk_mtime` against a real filesystem instead of mocks.
+
+### Changed
+
+- `.serena/` and `.claude/` (local tool caches — Serena's LSP cache, a Claude hook
+  config hardcoding an absolute local path) added to `engine/.gitignore`; neither
+  belongs in the shipped engine.
+- Committed `engine/deploy/10-memory-guard.conf`, the apo-engine systemd memory-guard
+  drop-in from the 2026-08-15 OOM triage — it had sat untracked since, one `git clean`
+  from silently losing real production hardening.
+
 ## [0.25.3] — 2026-08-28
 
 ### Fixed
