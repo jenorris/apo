@@ -2724,10 +2724,14 @@ def search(
 
     Hit.score is the fused RRF strength normalized to the best candidate
     (1.0 = top hit), so scores are monotonic with ranking — comparable within
-    one result set, not across queries. With ``config.RERANK`` on, this is the
-    *pre-rerank* normalization the reranker score is then position-aware blended
-    against (see :func:`rerank.rerank_scores`) — the top hit's final score can land
-    just under 1.0 when the reranker didn't fully agree it belonged there.
+    one result set, not across queries. Catalog-scoped or architecture-vocabulary
+    queries apply :func:`_catalog_retrieval_boost` on top of that normalization,
+    which can push a boosted hit's score *above* 1.0 — "1.0 = top hit" is exact
+    only when no boost is in play. With ``config.RERANK`` on, this is the
+    *pre-rerank* score the reranker score is then position-aware blended
+    against (see :func:`rerank.rerank_scores`) — the top hit's final score can
+    land just under 1.0 when the reranker didn't fully agree it belonged
+    there, or above 1.0 when it was already boosted.
 
     Folder scopes use path-constrained FTS + exact distance over ``chunks.embedding``
     (no global vec0 scan). Unscoped exclude widens the FTS pool only; dense KNN stays
