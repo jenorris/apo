@@ -5,3 +5,7 @@ index.db-*
 __pycache__/
 *.pyc
 .env
+
+# local tool caches/config — machine-specific, not part of the shipped engine
+.serena/
+.claude/
