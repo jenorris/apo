@@ -111,18 +111,18 @@ class VaultRegistryTests(unittest.TestCase):
             check=True,
         ).stdout.strip()
 
-        vault_id = vaults.compute_vault_id(repo)
+        vault_id = vaults.compute_collection_id(repo)
         self.assertEqual(vault_id, root_hash[:12])
         # stable across repeated calls (memoized, and re-derivable from git either way)
-        self.assertEqual(vaults.compute_vault_id(repo), vault_id)
+        self.assertEqual(vaults.compute_collection_id(repo), vault_id)
         self.assertFalse(vaults._FALLBACK_ID_STORE.exists())
 
     def test_collection_fallback_random_and_cached(self):
         plain = self.root / "not-a-git-repo"
         plain.mkdir()
-        first = vaults.compute_vault_id(plain)
+        first = vaults.compute_collection_id(plain)
         vaults._vault_id_cache.clear()  # force re-derivation, not just in-process memoization
-        second = vaults.compute_vault_id(plain)
+        second = vaults.compute_collection_id(plain)
         self.assertEqual(first, second)
         store = json.loads(vaults._FALLBACK_ID_STORE.read_text(encoding="utf-8"))
         self.assertEqual(store[str(plain.resolve())], first)

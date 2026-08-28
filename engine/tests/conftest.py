@@ -28,7 +28,7 @@ def _isolated_apo_runtime(tmp_path, monkeypatch):
         "APO_DEFAULT_VAULT",
     ):
         monkeypatch.delenv(key, raising=False)
-    # Non-git vault roots in tests (plain tempdirs) hit compute_vault_id's
+    # Non-git vault roots in tests (plain tempdirs) hit compute_collection_id's
     # fallback path — must not write into the real ~/.apo/vault-ids.json.
     monkeypatch.setattr(vaults, "_FALLBACK_ID_STORE", runtime / "vault-ids.json")
     vaults._vault_id_cache.clear()

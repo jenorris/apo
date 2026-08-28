@@ -135,11 +135,6 @@ def compute_collection_id(root: Path) -> str:
     return collection_id
 
 
-def compute_vault_id(root: Path) -> str:
-    """Alias for :func:`compute_collection_id` (historical name)."""
-    return compute_collection_id(root)
-
-
 _binding: ContextVar[VaultBinding | None] = ContextVar("apo_vault_binding", default=None)
 
 
