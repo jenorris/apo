@@ -979,6 +979,8 @@ async def scratchpad(
         Field(
             description=(
                 "create: seed buffer (string, or object/array for format=json). "
+                "When format is omitted, JSON is tried first then YAML is "
+                "auto-detected; prose/markdown is refused with guidance. "
                 "Prefer later patch ops over re-create."
             ),
         ),

@@ -102,6 +102,21 @@ class ScratchpadWorkshopTests(unittest.TestCase):
         self.assertFalse(bad["ok"])
         self.assertEqual(bad["error"], "bad_request")
 
+    def test_omitted_format_markdown_refused(self):
+        bad = scratchpad.scratchpad_op("create", content="# hi\nsome prose body")
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"], "create_failed")
+        # No poisoned ACTIVE session may be left behind.
+        self.assertNotIn("session_id", bad)
+
+    def test_omitted_format_yaml_autodetected(self):
+        created = scratchpad.scratchpad_op("create", content="name: hi\ncount: 1")
+        self.assertTrue(created["ok"])
+        sid = created["session_id"]
+        self.assertEqual(created["format"], "yaml")
+        raw = scratchpad.scratchpad_op("read", session_id=sid)
+        self.assertIn("name", raw["buffer"])
+
     def test_unknown_action(self):
         bad = scratchpad.scratchpad_op("validate")
         self.assertFalse(bad["ok"])

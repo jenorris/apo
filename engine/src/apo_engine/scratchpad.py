@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from apo_engine import vaults
-from apo_engine.scratchpad_format import apply_ops_to_buffer, normalize_buffer
+from apo_engine import yaml_rt as _yaml_rt
+from apo_engine.scratchpad_format import _diag, apply_ops_to_buffer, normalize_buffer
 from apo_engine.scratchpad_store import (
     Format,
     ScratchpadMeta,
@@ -117,15 +118,47 @@ def scratchpad_op(
     return _bad("bad_action", f"unknown scratchpad action {action!r}")
 
 
-def _create(*, format: str | None, content: Any) -> dict[str, Any]:
-    fmt = _normalize_format(format)
-    if fmt is None:
-        return _bad("bad_request", f"unsupported format {format!r}; use json or yaml")
-    text, diags = normalize_buffer(fmt, content if content is not None else ({} if fmt == "json" else ""))
+def _persist(fmt: Format, text: str, diags: list[dict[str, Any]]) -> dict[str, Any]:
     sid = new_session_id()
     meta = ScratchpadMeta(session_id=sid, format=fmt, state="ACTIVE")
     save_session(meta, text)
     return status_envelope(meta, diagnostics=diags)
+
+
+def _create(*, format: str | None, content: Any) -> dict[str, Any]:
+    fmt = _normalize_format(format)
+    if fmt is None:
+        return _bad("bad_request", f"unsupported format {format!r}; use json or yaml")
+    if content is None:
+        content = {} if fmt == "json" else ""
+
+    # Explicit format (including explicit "json") keeps the strict contract:
+    # a broken payload is preserved as-is with diagnostics so the caller can
+    # recover/repair it rather than losing their seed text (a documented,
+    # deliberate fallback for payloads already labeled as their format).
+    if format is not None:
+        text, diags = normalize_buffer(fmt, content)
+        return _persist(fmt, text, diags)
+
+    # Omitted format defaults to JSON, but a seed that does not parse as JSON
+    # is far more likely an unlabeled YAML blob or prose/markdown than a broken
+    # JSON payload. Never silently persist a poisoned buffer that patch() and
+    # commit() would both reject later: try YAML, then fail with guidance.
+    text, diags = normalize_buffer("json", content)
+    if not any(d.get("severity") == "ERROR" for d in diags):
+        return _persist("json", text, diags)
+    if isinstance(content, str) and content.strip():
+        yd = _yaml_rt.load(content)
+        if isinstance(yd, dict):
+            return _persist("yaml", _yaml_rt.dump(yd), [])
+    return _bad(
+        "create_failed",
+        "content does not parse as a JSON payload (scratchpad sessions hold "
+        "JSON/YAML payloads only, not prose/markdown). Pass format='yaml' for "
+        "a YAML blob, or stage markdown note content via write_note.",
+        diagnostics=diags,
+        hint="scratchpad is a JSON/YAML payload workshop; markdown notes go through write_note.",
+    )
 
 
 def _patch(meta: ScratchpadMeta, content: str, *, ops: list[dict[str, Any]]) -> dict[str, Any]:
