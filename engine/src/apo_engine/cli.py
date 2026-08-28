@@ -188,7 +188,10 @@ def main(argv: list[str] | None = None) -> int:
 
     pd = sub.add_parser(
         "desk-project",
-        help="project desk policy body + guidance from ~/.apo/desk.yaml + vault contracts",
+        help=(
+            "project desk policy body + guidance from ~/.apo/desk.yaml + vault contracts "
+            "(same operation as the MCP tool's vault(action='project'))"
+        ),
     )
     pd.add_argument(
         "--vaults",

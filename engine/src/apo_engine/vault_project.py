@@ -107,8 +107,9 @@ def project_guidance() -> str:
     return (
         "Return-only desk policy. Place `body` in whichever instruction surface your "
         "agent host already uses (rule, skill, AGENTS section, etc.). Apo does not "
-        "prescribe paths or frontmatter. Re-run `vault(action=project)` after "
-        "`~/.apo/desk.yaml` or vault `system/contracts/` changes."
+        "prescribe paths or frontmatter. Re-run `vault(action=project)` (CLI: "
+        "`apo-engine desk-project` — same operation) after `~/.apo/desk.yaml` or "
+        "vault `system/contracts/` changes."
     )
 
 
