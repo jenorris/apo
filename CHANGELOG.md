@@ -4,6 +4,20 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.25.3] — 2026-08-28
+
+### Fixed
+
+- **`scratchpad(create)` no longer persists a poisoned buffer when `format`
+  is omitted.** Create defaulted to JSON; a prose/markdown seed normalized to
+  a `JSON_PARSE` diagnostic but was still saved as an `ACTIVE` session that
+  `patch()`/`commit()` would both later reject ("staging unavailable"). Now,
+  with `format` omitted: try JSON, auto-promote to a YAML session if the seed
+  cleanly parses as a YAML mapping, otherwise refuse with an actionable
+  `create_failed` (hint: scratchpad is JSON/YAML-only; markdown notes go
+  through `write_note`). An explicit `format` keeps the documented strict
+  contract (a broken payload is preserved as-is with diagnostics).
+
 ## [0.25.2] — 2026-08-27
 
 0.25.1 scoped qmd's fusion refinements to `search_expanded()` only, deliberately not
