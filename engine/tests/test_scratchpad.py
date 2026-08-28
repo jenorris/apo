@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from apo_engine import ops, scratchpad, vaults
-from apo_engine.scratchpad_store import load_session
+from apo_engine.scratchpad_store import _BUFFER_TRUNCATE, load_session, read_buffer_payload
 
 
 class ScratchpadWorkshopTests(unittest.TestCase):
@@ -74,6 +74,17 @@ class ScratchpadWorkshopTests(unittest.TestCase):
         raw = scratchpad.scratchpad_op("read", session_id=created["session_id"])
         self.assertIn("tip", raw)
         self.assertLess(len(raw["buffer"].encode("utf-8")), 9 * 1024)
+
+    def test_read_buffer_truncation_respects_multibyte_boundary(self):
+        # A char-count slice on a byte-count check can land mid-codepoint and
+        # drift the actual cut arbitrarily far from _BUFFER_TRUNCATE.
+        content = "é" * (9 * 1024)  # 2 bytes/char in UTF-8
+        out = read_buffer_payload(content)
+        self.assertIn("tip", out)
+        encoded = out["buffer"].encode("utf-8")
+        self.assertLessEqual(len(encoded), _BUFFER_TRUNCATE)
+        # No stray replacement/mangled tail from a mid-codepoint cut.
+        self.assertEqual(out["buffer"], out["buffer"].encode("utf-8").decode("utf-8"))
 
     def test_ill_formed_json_keeps_raw(self):
         created = scratchpad.scratchpad_op(

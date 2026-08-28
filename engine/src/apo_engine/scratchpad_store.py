@@ -130,10 +130,16 @@ def status_envelope(meta: ScratchpadMeta, **extra: Any) -> dict[str, Any]:
 
 
 def read_buffer_payload(content: str) -> dict[str, Any]:
-    """Return buffer text for read action; truncate large payloads."""
-    if len(content.encode("utf-8")) > _BUFFER_TRUNCATE:
+    """Return buffer text for read action; truncate large payloads.
+
+    Truncates on the same encoded-byte budget the length check uses — slicing
+    by character count instead let the cut point drift arbitrarily far from
+    ``_BUFFER_TRUNCATE`` for any buffer with multi-byte UTF-8 content.
+    """
+    encoded = content.encode("utf-8")
+    if len(encoded) > _BUFFER_TRUNCATE:
         return {
-            "buffer": content[:_BUFFER_TRUNCATE],
+            "buffer": encoded[:_BUFFER_TRUNCATE].decode("utf-8", errors="ignore"),
             "tip": "buffer truncated (>8KiB); patch surgically with set_field",
         }
     return {"buffer": content}

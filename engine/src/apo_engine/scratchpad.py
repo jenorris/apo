@@ -7,7 +7,7 @@ from typing import Any
 
 from apo_engine import vaults
 from apo_engine import yaml_rt as _yaml_rt
-from apo_engine.scratchpad_format import _diag, apply_ops_to_buffer, normalize_buffer
+from apo_engine.scratchpad_format import apply_ops_to_buffer, normalize_buffer
 from apo_engine.scratchpad_store import (
     Format,
     ScratchpadMeta,
