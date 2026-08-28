@@ -8,7 +8,7 @@ Vault: APO_NOTES_ROOT. Deferred queue: ~/.apo/deferred-<collection>.json
 import asyncio
 import json
 import os
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass, field as dc_field, replace as dc_replace
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -45,20 +45,38 @@ class VaultError(Exception):
 
 @dataclass
 class Vault:
-    name: str
-    root: Path
-    collection: str
-    index_path: Path
+    """A registered vault's live server-side state.
+
+    Wraps the registry's own ``apo_vaults.VaultBinding`` (kept whole, not
+    hand-copied field by field, so a field added there — e.g. ``read_only`` —
+    is never silently dropped here) plus the two things that aren't registry
+    data: the shared ``ingest_dir`` config value and this vault's mutable
+    deferred-queue set.
+    """
+
+    binding: apo_vaults.VaultBinding
     ingest_dir: str = "wiki"
     deferred: set[str] = dc_field(default_factory=set)
 
-    def binding(self) -> apo_vaults.VaultBinding:
-        return apo_vaults.VaultBinding(
-            name=self.name,
-            root=self.root,
-            index=self.index_path,
-            collection=self.collection,
-        )
+    @property
+    def name(self) -> str:
+        return self.binding.name
+
+    @property
+    def root(self) -> Path:
+        return self.binding.root
+
+    @property
+    def collection(self) -> str:
+        return self.binding.collection
+
+    @property
+    def index_path(self) -> Path:
+        return self.binding.index
+
+    @property
+    def read_only(self) -> bool:
+        return self.binding.read_only
 
 
 VAULTS: dict[str, Vault] = {}
@@ -127,10 +145,7 @@ def _load_vaults() -> None:
         if name == default_name:
             coll = _pick(overrides, "APO_COLLECTION", coll) or coll
         VAULTS[name] = Vault(
-            name=name,
-            root=b.root,
-            collection=coll,
-            index_path=b.index,
+            binding=dc_replace(b, collection=coll),
             ingest_dir=ingest,
             deferred=_load_deferred(coll),
         )
@@ -147,7 +162,7 @@ def _vault(name: str = "") -> Vault:
 
 def _bound(v: Vault):
     """Context manager: activate this vault's root+index for core.* calls."""
-    return apo_vaults.bind(v.binding())
+    return apo_vaults.bind(v.binding)
 
 
 def _safe_resolve(v: Vault, relative_path: str) -> Path:
