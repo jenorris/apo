@@ -12,6 +12,30 @@ def _path(env: str, default: str) -> Path:
     return Path(os.environ.get(env, default)).expanduser().resolve()
 
 
+ENV_TRUTHY = ("1", "true", "yes", "on")
+ENV_FALSY = ("0", "false", "no", "off")
+
+
+def env_bool(env: str, default: bool) -> bool:
+    """Parse a boolean env var with one settled word set (`ENV_TRUTHY`/`ENV_FALSY`).
+
+    Every boolean env var in the engine goes through this — three call sites
+    each hand-rolling their own truthy/falsy word list independently drifted
+    (one missing ``"off"``, one missing ``.strip()``) until an operator who
+    learned ``APO_RERANK=on`` works could set ``APO_WATCH_EVENTS=off`` and
+    have it silently no-op.
+    """
+    raw = os.environ.get(env)
+    if raw is None:
+        return default
+    val = raw.strip().lower()
+    if val in ENV_TRUTHY:
+        return True
+    if val in ENV_FALSY:
+        return False
+    return default
+
+
 # Vault to index.
 NOTES_ROOT: Path = _path("APO_NOTES_ROOT", "~/Notes")
 
@@ -104,7 +128,7 @@ WATCH_LOCK_BACKOFF_START: float = float(os.environ.get("APO_WATCH_LOCK_BACKOFF_S
 WATCH_LOCK_BACKOFF_MAX: float = float(os.environ.get("APO_WATCH_LOCK_BACKOFF_MAX", "60"))
 
 # Watcher: prefer filesystem events over poll-only scan.
-WATCH_USE_EVENTS: bool = os.environ.get("APO_WATCH_EVENTS", "1").lower() not in ("0", "false", "no")
+WATCH_USE_EVENTS: bool = env_bool("APO_WATCH_EVENTS", True)
 
 # Fallback poll interval when events are inactive (seconds).
 WATCH_POLL_INTERVAL: float = float(os.environ.get("WATCH_INTERVAL", "30"))
@@ -160,7 +184,7 @@ SEARCH_EXCLUDE_DEFAULT: list[str] = [
 # Optional local cross-encoder reranker over fused hybrid candidates (opt-in).
 # Requires the `rerank` extra (fastembed ONNX). First use downloads the model
 # to the local HF cache; scoring is CPU-only and never leaves the machine.
-RERANK: bool = os.environ.get("APO_RERANK", "0").strip().lower() in ("1", "true", "yes", "on")
+RERANK: bool = env_bool("APO_RERANK", False)
 RERANK_MODEL: str = os.environ.get("APO_RERANK_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2")
 # Fused candidates scored by the reranker before cutting to k.
 RERANK_POOL: int = int(os.environ.get("APO_RERANK_POOL", "24"))
@@ -169,7 +193,7 @@ RERANK_POOL: int = int(os.environ.get("APO_RERANK_POOL", "24"))
 # github.com/tobi/qmd) over a local Ollama chat model. Opt-in: an extra LLM call in
 # the search path. Disabled → core.search_expanded() still runs (lex+vec on the raw
 # query, RRF-fused, no LLM call) — the expansion step just adds nothing on top.
-QUERY_EXPAND: bool = os.environ.get("APO_QUERY_EXPAND", "0").strip().lower() in ("1", "true", "yes", "on")
+QUERY_EXPAND: bool = env_bool("APO_QUERY_EXPAND", False)
 # qmd's own fine-tuned expansion model (Qwen3-1.7B SFT'd on lex:/vec:/hyde: output),
 # not a general chat model prompted for JSON — see docs/models/qmd-query-expansion.md
 # for the one-time `ollama pull` + `ollama create apo-query-expand` setup this name

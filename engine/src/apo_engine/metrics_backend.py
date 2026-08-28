@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from apo_engine import telemetry_contract as tc
+from apo_engine.config import ENV_FALSY
 
 log = logging.getLogger(__name__)
 
@@ -164,7 +165,7 @@ def get_backend(vault_root: Path | None = None, *, force: bool = False) -> Metri
 
 def metrics_enabled(vault_root: Path | None = None) -> bool:
     raw = os.environ.get("APO_TOOL_METRICS")
-    if raw is not None and str(raw).strip().lower() in ("0", "false", "no", "off"):
+    if raw is not None and raw.strip().lower() in ENV_FALSY:
         return False
     cfg = resolve_store_config(vault_root)
     if cfg.backend == "none":

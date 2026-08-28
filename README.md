@@ -242,7 +242,8 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | `APO_INDEX` | `engine/index.db` | sqlite-vec database path — recommend `~/.apo/index.db` (survives clean checkouts; multi-vault defaults there) |
 | `APO_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace |
 | `APO_DEFERRED_DIR` | `~/.apo` | Runtime dir for queues + tool metrics (tests/sandboxes override) |
-| `APO_TOOL_METRICS` | `1` | Record MCP tool-use events in `~/.apo/metrics.duckdb` (`0` disables) |
+| `APO_TOOL_METRICS` | `1` | Record MCP tool-use events in `~/.apo/metrics.duckdb` (`0`/`false`/`no`/`off` disables) |
+| `APO_WATCH_EVENTS` | `1` | `apo-engine watch` uses filesystem events (`0`/`false`/`no`/`off` falls back to poll-only) |
 | `APO_SEARCH_EXCLUDE` | (empty) | **Deprecated** desk-wide fallback when a vault has no search-contract; prefer `system/contracts/search-contract.schema.yaml` |
 | `APO_RERANK` | `0` | Opt-in local cross-encoder reranker (`pip install -e '.[rerank]'`) |
 | `APO_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder id |
