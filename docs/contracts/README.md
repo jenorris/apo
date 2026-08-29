@@ -10,7 +10,7 @@
 
 Do **not** confuse templates here with a setting in MCP config. Opt-in means: put the machine-readable (and/or agent-facing) contract **in the vault**, then point agents at it.
 
-**Agent discovery:** MCP/RPC `vault(action=list|contracts|describe|merge|project)`. Prefer YAML under `system/contracts/`. Admin engine ops via `apo_admin(action=list|describe|invoke)` with `confirm=true` when destructive. `merge` / `contracts` / `describe` return summaries by default (`full=true` for YAML bodies). `merge` unions the registry with per-vault contracts and `~/.apo/desk.yaml`. `project` is return-only — host places Cursor index via `just desk-project-cursor`, Claude full via `just desk-project-claude`, optionally Hermes (`host=hermes|all`) — see [../examples/desk.example.yaml](../examples/desk.example.yaml) and [../hermes.md](../hermes.md); re-run after desk/contract changes.
+**Agent discovery:** MCP/RPC `vault(request={action: "list"|"contracts"|"describe"|"merge"|"project", …})`. Prefer YAML under `system/contracts/`. Admin engine ops via `apo_admin(action=list|describe|invoke)` with `confirm=true` when destructive. `merge` / `contracts` / `describe` return summaries by default (`full=true` for YAML bodies). `merge` unions the registry with per-vault contracts and `~/.apo/desk.yaml`. `project` is return-only — host places Cursor index via `just desk-project-cursor`, Claude full via `just desk-project-claude`, optionally Hermes (`host=hermes|all`) — see [../examples/desk.example.yaml](../examples/desk.example.yaml) and [../hermes.md](../hermes.md); re-run after desk/contract changes.
 
 ## Shipped templates
 
@@ -23,9 +23,9 @@ Do **not** confuse templates here with a setting in MCP config. Opt-in means: pu
 | [git.md](./git.md) | **Ship** | Vault backup / remote + `history(path=)` + optional `sync.enabled` commit/pull — [git-contract.schema.yaml](./git-contract.schema.yaml) |
 | [search-contract.schema.yaml](./search-contract.schema.yaml) | **Ship** | Per-vault default exclude globs for unscoped search + history browse — [search-contract.schema.yaml](./search-contract.schema.yaml) |
 | [usage-contract.schema.yaml](./usage-contract.schema.yaml) | **Ship** | Host-neutral vault usage IR for harness / `vault(project)` — **not** interpreted by the engine for search/write |
-| [read-contract.schema.yaml](./read-contract.schema.yaml) | **Ship** | Consumer-side read routing — purpose → `okf_type` query + join order, type authority/trust, lifecycle-read semantics; additive over okf-contract, projects a **Read routing** section, cross-checked by `vault(action=lint)` |
+| [read-contract.schema.yaml](./read-contract.schema.yaml) | **Ship** | Consumer-side read routing — purpose → `okf_type` query + join order, type authority/trust, lifecycle-read semantics; additive over okf-contract, projects a **Read routing** section, cross-checked by `vault(request={action: "lint"})` |
 | [telemetry-contract.schema.yaml](./telemetry-contract.schema.yaml) | **Ship** | Vault-defined tool-use telemetry privacy + agent `session_stats` access — [telemetry.md](./telemetry.md) |
-| [archival-contract.schema.yaml](./archival-contract.schema.yaml) | **Ship (suggest)** | Cold-note eligibility → `flaws[]` + `vault(action=lint)`; agent `place` — [archival.md](./archival.md) |
+| [archival-contract.schema.yaml](./archival-contract.schema.yaml) | **Ship (suggest)** | Cold-note eligibility → `flaws[]` + `vault(request={action: "lint"})`; agent `place` — [archival.md](./archival.md) |
 | [local-web-contract.schema.yaml](./local-web-contract.schema.yaml) | **Ship** | `just serve` read-only local HTML browser (bind/port/mode/exclude); desk projection emits a one-line pointer |
 
 **Existing vault:** [../onboard-prompt.md](../onboard-prompt.md) — infer first; do not force a contract.

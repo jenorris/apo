@@ -33,7 +33,7 @@ note goes idle (last_activity / status)
 
 Surfaces:
 
-- **`vault(action=lint)`** — folder-scoped sweep (`folder=`, `limit=`, `offset=`)
+- **`vault(request={action: "lint"})`** — folder-scoped sweep (`folder`, `limit`, `offset`)
 - **Post-write** — on successful write/append/patch of a path: emit `archive.eligible` or `archive.blocked_todos` only (`blocked_status` is lint-only)
 
 ## Why not “cold flag in place”?

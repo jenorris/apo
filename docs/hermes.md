@@ -21,7 +21,7 @@ and Claude Code keep stdio MCP.
 
 ```bash
 just desk-project
-# or: vault(action=project)
+# or: vault(request={action: "project"})
 ```
 
 Returns shared `body` + `guidance`. Same merge IR as any host (`~/.apo/desk.yaml` +

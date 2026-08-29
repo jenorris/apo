@@ -21,12 +21,16 @@ from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
 from apo_engine.mcp_backend import ApoStore
 from apo_engine.mcp_instructions import MCP_INSTRUCTIONS as _MCP_INSTRUCTIONS
+from apo_engine.mcp_action_schemas import (
+    SCRATCHPAD_ACTION_FIELD_DESC,
+    VAULT_ACTION_FIELD_DESC,
+    ScratchpadAction,
+    VaultAction,
+)
 from apo_engine.patch_ops import (
     OPS_FIELD_DESC,
-    SCRATCHPAD_OPS_FIELD_DESC,
     TABLE_OPS_FIELD_DESC,
     PatchNoteOp,
-    ScratchpadOp,
     TablePatchOp,
 )
 
@@ -977,64 +981,11 @@ async def history(
     },
 )
 async def scratchpad(
-    action: Annotated[
-        str,
-        Field(description="create | read | patch | commit | discard"),
-    ],
-    session_id: Annotated[
-        str | None,
-        Field(description="Spill session id (required except create)."),
-    ] = None,
-    format: Annotated[
-        str | None,
-        Field(description="create only: json | yaml (default json)."),
-    ] = None,
-    content: Annotated[
-        str | dict[str, Any] | list[Any] | None,
-        Field(
-            description=(
-                "create: seed buffer (string, or object/array for format=json). "
-                "When format is omitted, JSON is tried first then YAML is "
-                "auto-detected; prose/markdown is refused with guidance. "
-                "Prefer later patch ops over re-create."
-            ),
-        ),
-    ] = None,
-    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
-    schema_path: Annotated[
-        str | None,
-        Field(
-            description=(
-                "commit only: JSON Schema under system/schemas/ in the destination vault."
-            ),
-        ),
-    ] = None,
-    schema_type: Annotated[
-        str | None,
-        Field(description="commit only: okf type_profiles name (e.g. Plan)."),
-    ] = None,
-    ops: Annotated[
-        list[ScratchpadOp] | None,
-        Field(description=SCRATCHPAD_OPS_FIELD_DESC),
-    ] = None,
-    destination_path: Annotated[
-        str | None,
-        Field(description="commit: vault-relative destination path."),
-    ] = None,
+    request: Annotated[ScratchpadAction, Field(description=SCRATCHPAD_ACTION_FIELD_DESC)],
 ) -> dict:
     """Ephemeral JSON/YAML payload workshop: create → patch → commit."""
-    return await asyncio.to_thread(
-        apo_ops.scratchpad_op,
-        action,
-        session_id=session_id,
-        format=format,
-        content=content,
-        vault=vault,
-        schema_path=schema_path,
-        schema_type=schema_type,
-        ops=ops,
-        destination_path=destination_path,
-    )
+    kwargs = request.model_dump(mode="python", exclude={"action"})
+    return await asyncio.to_thread(apo_ops.scratchpad_op, request.action, **kwargs)
 
 
 @mcp.tool(
@@ -1046,123 +997,11 @@ async def scratchpad(
     },
 )
 async def vault(
-    action: Annotated[
-        str,
-        Field(
-            description=(
-                "list | contracts | describe | merge | project | stats | lint | clone"
-            ),
-        ),
-    ] = "list",
-    vault: Annotated[
-        str,
-        Field(
-            description=(
-                "Vault name from the discovery registry. Empty: list/merge/project=all; "
-                "contracts=all; describe/stats/lint=default vault."
-            ),
-        ),
-    ] = "",
-    vaults: Annotated[
-        list[str] | None,
-        Field(
-            description=(
-                "Scope every action to a named subset of the registry. "
-                "Do not combine with vault=. Not valid for lint."
-            ),
-        ),
-    ] = None,
-    full: Annotated[
-        bool,
-        Field(
-            description=(
-                "contracts / describe / merge: when false (default), return contract "
-                "summaries without YAML bodies. When true, include parsed data=."
-            ),
-        ),
-    ] = False,
-    days: Annotated[
-        int | None,
-        Field(description="stats only: rollup window in days (default 7)."),
-    ] = 7,
-    folder: Annotated[
-        str,
-        Field(
-            description=(
-                "lint only: folder scope (default empty = archival include_folders)."
-            ),
-        ),
-    ] = "",
-    limit: Annotated[
-        int | None,
-        Field(description="lint only: max flaws returned (default 50)."),
-    ] = 50,
-    offset: Annotated[
-        int,
-        Field(description="lint only: skip this many flaws (default 0)."),
-    ] = 0,
-    fix: Annotated[
-        bool,
-        Field(
-            description=(
-                "lint only: apply mechanical auto remediations (trailing whitespace). "
-                "Default false — findings only."
-            ),
-        ),
-    ] = False,
-    known_skills: Annotated[
-        list[str] | None,
-        Field(
-            description=(
-                "lint only: skill names that actually exist in the caller's environment. "
-                "When set, flags any `foo` skill / \"the foo skill\" prose mention in the "
-                "swept corpus that isn't in this list (flaws[], code link.unknown_skill). "
-                "Omit to skip the check."
-            ),
-        ),
-    ] = None,
-    to: Annotated[
-        str,
-        Field(
-            description=(
-                "clone only: destination vault id (must already exist in the registry — "
-                "clone does not create/register vaults). Required for clone."
-            ),
-        ),
-    ] = "",
-    dry_run: Annotated[
-        bool,
-        Field(description="clone only: preview the file list without writing. Default false."),
-    ] = False,
-    mode: Annotated[
-        str,
-        Field(
-            description=(
-                "project only: full (default) = complete desk body; index = compact "
-                "always-loaded pointer surface — tells the agent to call project again "
-                "scoped to one vault (vaults=[<id>]) for that vault's full detail. "
-                "Bake index into a static always-loaded file; call full on demand."
-            ),
-        ),
-    ] = "full",
+    request: Annotated[VaultAction, Field(description=VAULT_ACTION_FIELD_DESC)],
 ) -> dict:
     """Vault registry, contracts, desk projection, habit KPIs, corpus lint, and system/ scaffold clone."""
-    return await asyncio.to_thread(
-        apo_ops.vault_op,
-        action,
-        vault=vault,
-        vaults=vaults,
-        full=full,
-        days=days,
-        folder=folder,
-        limit=limit,
-        offset=offset,
-        fix=fix,
-        known_skills=known_skills,
-        to=to,
-        dry_run=dry_run,
-        mode=mode,
-    )
+    kwargs = request.model_dump(mode="python", exclude={"action"})
+    return await asyncio.to_thread(apo_ops.vault_op, request.action, **kwargs)
 
 
 @mcp.tool(annotations=_RO)

@@ -46,7 +46,7 @@ Successful responses may include a non-fatal **`tip`** field:
 
 ## Corpus `flaws[]` (library scribe)
 
-Successful write / `vault(action=lint)` / opt-in `read_note(lint=true)` responses may include **`flaws[]`** (corpus quality — **not** habits):
+Successful write / `vault(request={action: "lint"})` / opt-in `read_note(lint=true)` responses may include **`flaws[]`** (corpus quality — **not** habits):
 
 | Field | Meaning |
 |-------|---------|
@@ -59,7 +59,7 @@ Successful write / `vault(action=lint)` / opt-in `read_note(lint=true)` response
 - `remediation: human` → surface; do not invent taxonomy
 - Soft OKF may **dual-emit** prose `warnings` and structured `flaws` during the compat window — prefer `flaws`
 - `format.trailing_ws` is auto-fixed on write (`status: fixed`); lint sweep `fix=true` for mechanical fixes only
-- `vault(action=lint, folder=, limit=, offset=)` for backlog — do not unbounded lint→fix loops
+- `vault(request={action: "lint", folder: …, limit: …, offset: …})` for backlog — do not unbounded lint→fix loops
 
 See [library-scribe.md](library-scribe.md).
 
@@ -107,7 +107,7 @@ See [tables.md](tables.md) and [toc-navigation.md](toc-navigation.md) for the fu
 
 ## Habit KPI gate (optional)
 
-Agents may self-check via **`vault(action=stats, days=7)`** (habit rollups from embedded `~/.apo/metrics.duckdb`).
+Agents may self-check via **`vault(request={action: "stats", days: 7})`** (habit rollups from embedded `~/.apo/metrics.duckdb`).
 
 Targets (rolling 7d, primary collection):
 

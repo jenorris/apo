@@ -106,8 +106,9 @@ patch_note(ops=[{op: place, src: "lyra:areas/comfyui/set-design/foo.md",
 ```
 
 **Clone a vault's scaffold** (contracts, config, schemas — not vault content — from one existing
-vault into another, e.g. bootstrapping a new persona vault from a template): `vault(action=clone,
-vault=<from>, to=<to>)`. Copies every file under `from`'s `system/` into `to`'s `system/`,
+vault into another, e.g. bootstrapping a new persona vault from a template):
+`vault(request={action: "clone", vault: <from>, to: <to>})`. Copies every file under `from`'s
+`system/` into `to`'s `system/`,
 preserving relative paths; existing destination files are always skipped (never overwritten —
 remove/rename first to replace one). `dry_run=true` previews the copy/skip list without writing.
 Both `vault=` and `to=` must already be registered vaults — `clone` does not create or register a

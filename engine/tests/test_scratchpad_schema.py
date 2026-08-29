@@ -1,4 +1,4 @@
-"""scratchpad MCP schema size ceilings — prevent PatchOp union creep."""
+"""scratchpad MCP schema — discriminated union on `action`, PatchOp union creep guard."""
 
 from __future__ import annotations
 
@@ -7,13 +7,20 @@ import unittest
 
 from apo_engine.mcp_instructions import MCP_INSTRUCTIONS
 
-from test_patch_note_schema import _list_tools_lean, _ops_schema, _tool_params
+from test_patch_note_schema import _list_tools_lean, _tool_params
 
 
 SCRATCHPAD_TOOL_CHAR_CEILING = 3000
-SCRATCHPAD_PROPERTY_CEILING = 10
 SCRATCHPAD_OP_VARIANTS = 2
 SCRATCHPAD_BLURB_CHAR_CEILING = 220
+
+EXPECTED_ACTION_FIELDS = {
+    "create": {"action", "format", "content"},
+    "read": {"action", "session_id"},
+    "patch": {"action", "session_id", "ops"},
+    "commit": {"action", "session_id", "vault", "schema_path", "schema_type", "destination_path"},
+    "discard": {"action", "session_id"},
+}
 
 
 def _scratchpad_tool():
@@ -29,6 +36,18 @@ def _tool_chars(tool) -> int:
     desc = tool.description or ""
     params_json = json.dumps(params, separators=(",", ":"), ensure_ascii=False)
     return len(tool.name) + len(desc) + len(params_json)
+
+
+def _action_variants(tool) -> dict[str, dict]:
+    """Map action name -> that action's variant schema, from the `request` oneOf."""
+    props = _tool_params(tool)
+    variants = props["request"]["oneOf"]
+    out = {}
+    for v in variants:
+        action = (v.get("properties") or {}).get("action", {}).get("const")
+        assert action is not None, f"variant missing action const: {v}"
+        out[action] = v
+    return out
 
 
 def _scratchpad_blurb_chars() -> int:
@@ -50,33 +69,30 @@ class ScratchpadSchemaTest(unittest.TestCase):
         )
 
     def test_scratchpad_ops_are_two_variant_union(self):
-        ops = _ops_schema(_scratchpad_tool())
-        items = ops.get("items") or {}
-        variants = items.get("oneOf") or items.get("anyOf") or []
+        variants = _action_variants(_scratchpad_tool())
+        ops = variants["patch"]["properties"]["ops"]
+        op_variants = ops.get("items", {}).get("oneOf") or ops.get("items", {}).get("anyOf") or []
         op_names = set()
-        for v in variants:
+        for v in op_variants:
             props = v.get("properties") or {}
             op_schema = props.get("op") or {}
             if "const" in op_schema:
                 op_names.add(op_schema["const"])
-        self.assertEqual(len(variants), SCRATCHPAD_OP_VARIANTS)
+        self.assertEqual(len(op_variants), SCRATCHPAD_OP_VARIANTS)
         self.assertEqual(op_names, {"set_field", "delete_field"})
 
-    def test_scratchpad_property_count(self):
-        props = _tool_params(_scratchpad_tool())
-        self.assertLessEqual(len(props), SCRATCHPAD_PROPERTY_CEILING)
-        expected = {
-            "action",
-            "session_id",
-            "format",
-            "content",
-            "ops",
-            "vault",
-            "destination_path",
-            "schema_path",
-            "schema_type",
-        }
-        self.assertTrue(expected <= set(props.keys()))
+    def test_each_action_variant_has_only_its_own_fields(self):
+        """The whole point of the discriminated union: no action sees another
+        action's params (e.g. `create` can't accept `session_id`, `patch` can't
+        accept `format`) — pydantic/FastMCP reject them, this pins the schema
+        that makes that true."""
+        variants = _action_variants(_scratchpad_tool())
+        self.assertEqual(set(variants), set(EXPECTED_ACTION_FIELDS))
+        for action, expected_fields in EXPECTED_ACTION_FIELDS.items():
+            with self.subTest(action=action):
+                variant = variants[action]
+                self.assertEqual(set(variant["properties"].keys()), expected_fields)
+                self.assertFalse(variant.get("additionalProperties", True))
 
     def test_no_scratchpad_param_on_sibling_tools(self):
         _mod, tools = _list_tools_lean(collection="scratchpad_sibling_test")

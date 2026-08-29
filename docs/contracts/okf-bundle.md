@@ -84,7 +84,7 @@ just okf export   --vault meta /tmp/bundle --okf-version 0.2
 just okf ingest   /tmp/foreign-bundle --name foreign   # mount read-only
 ```
 
-Corpus lint on MCP: `vault(action=lint)` — see [library-scribe.md](../library-scribe.md).
+Corpus lint on MCP: `vault(request={action: "lint"})` — see [library-scribe.md](../library-scribe.md).
 
 ## Agent behaviors
 

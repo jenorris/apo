@@ -14,7 +14,7 @@ Opt-in per vault. When present under `<vault>/system/contracts/`, Apo adjusts **
 | `agent_access.expose_paths` | Habit rollups may include path-scoped flags when allowed |
 | `agent_access.scope` | `session` (conversation_id) · `collection` · `desk` (operator) |
 | `privacy.allow.dimensions` | Includes `apo_version` (engine semver per row) for cross-version burn-down |
-| `efficiency` | KPI thresholds for `vault(action=stats)` tips |
+| `efficiency` | KPI thresholds for `vault(request={action: "stats"})` tips |
 
 ## Default without contract
 
@@ -28,7 +28,7 @@ Ship `paths: vault_relative` + `expose_paths: true` so habit rollups can identif
 
 | Surface | Role |
 |---------|------|
-| **`vault(action=stats)`** | **Agent MCP** — habit KPI rollups (`folder_scoped_pct`, chunk-read ratio, validation tips) |
+| **`vault(request={action: "stats"})`** | **Agent MCP** — habit KPI rollups (`folder_scoped_pct`, chunk-read ratio, validation tips) |
 | **OTLP spans → collector** | **Session / tool traces** — emitted by the engine itself (`store.backend: otlp`), fanned out to Jaeger + otlp-mcp |
 
 RPC: `POST /v1/vault` with `action=stats` (+ optional `days=`). `POST /v1/telemetry` and `POST /v1/session_stats` are **deprecated** (delegate to `stats` or return `bad_action`).

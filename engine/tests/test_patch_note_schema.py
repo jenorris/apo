@@ -144,8 +144,19 @@ class PatchNoteSchemaTest(unittest.TestCase):
         self.assertIn("sort", filter_params)
         self.assertIn("order", filter_params)
 
+        # vault is a discriminated union on `action` (mcp_action_schemas.VaultAction):
+        # one top-level `request` param whose `oneOf` variants each carry their own
+        # `action` const + only the fields that action uses.
         vault_params = _tool_params(by_name["vault"])
-        self.assertIn("action", vault_params)
+        self.assertIn("request", vault_params)
+        variants = vault_params["request"].get("oneOf") or []
+        variant_actions = {
+            (v.get("properties") or {}).get("action", {}).get("const") for v in variants
+        }
+        self.assertEqual(
+            variant_actions,
+            {"list", "contracts", "describe", "merge", "project", "stats", "lint", "clone"},
+        )
 
         instr = getattr(mod.mcp, "instructions", None) or ""
         self.assertIn("append_note", instr)

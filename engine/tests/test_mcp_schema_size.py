@@ -10,7 +10,15 @@ from apo_engine.mcp_instructions import MCP_INSTRUCTIONS
 from test_patch_note_schema import _list_tools_lean, _tool_params
 
 # Baseline after 0.23.0 patch_note slim + patch_table split (2026-08-26).
-TOTAL_TOOLS_CHAR_CEILING = 30_000
+# Raised 2026-08-28: vault/scratchpad became discriminated unions on `action`
+# (mcp_action_schemas.py) instead of one flat param bag with "lint only:"/
+# "clone only:" prose — each action now gets only the params it uses, which
+# JSON Schema's `oneOf` renders as N fully-inlined variant objects (no $ref
+# dedup across siblings, confirmed empirically). That structural cost floors
+# around +500 chars even with every optional description trimmed to the
+# point of terseness; the alternative (silently-ignored fields on the wrong
+# action) was worse. See mcp_action_schemas.py's own docstring.
+TOTAL_TOOLS_CHAR_CEILING = 31_000
 PATCH_NOTE_CHAR_CEILING = 6_000
 PATCH_TABLE_CHAR_CEILING = 5_500
 MCP_INSTRUCTIONS_CHAR_CEILING = 900

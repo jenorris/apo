@@ -1,10 +1,15 @@
 # Scratchpad (JSON/YAML payload workshop)
 
-Ephemeral buffer for **JSON/YAML catalog payloads** before a vault write. One MCP/RPC tool:
+Ephemeral buffer for **JSON/YAML catalog payloads** before a vault write. One MCP/RPC tool.
+
+MCP: one `request` param, a discriminated union on `action` — each action's own params, only:
 
 ```text
-scratchpad(action=create|read|patch|commit|discard, …)
+scratchpad(request={action: create|read|patch|commit|discard, …})
 ```
+
+RPC/HTTP keeps the flat body (`POST /v1/scratchpad`, see [local-rpc.md](./local-rpc.md)):
+`{action, session_id?, format?, content?, ops?, vault?, destination_path?, schema_path?, schema_type?}`.
 
 Spill lives under `~/.apo/scratchpads/<session_id>/` (override with `APO_SCRATCHPADS_ROOT`). Default TTL is 24h.
 
@@ -14,11 +19,11 @@ Agents burn tokens regenerating whole JSON/YAML MCP payloads. Scratchpad keeps a
 
 ## Loop
 
-1. `scratchpad(action=create, format=json|yaml, content=…)` — vault-free
-2. `scratchpad(action=patch, session_id=…, ops=[{op:set_field, field, value}, …])`
-3. Optional: `scratchpad(action=read, session_id=…)` — returns truncated `buffer` when large
-4. `scratchpad(action=commit, session_id=…, vault=…, destination_path=…, schema_path=?, schema_type=?)`
-5. Or `scratchpad(action=discard, session_id=…)`
+1. `scratchpad(request={action: "create", format: json|yaml, content: …})` — vault-free
+2. `scratchpad(request={action: "patch", session_id: …, ops: [{op: set_field, field, value}, …]})`
+3. Optional: `scratchpad(request={action: "read", session_id: …})` — returns truncated `buffer` when large
+4. `scratchpad(request={action: "commit", session_id: …, vault: …, destination_path: …, schema_path?, schema_type?})`
+5. Or `scratchpad(request={action: "discard", session_id: …})`
 
 **Formats:** `json` (default) and `yaml` only. Markdown / `.mmd` → use `write_note` / `patch_note` directly.
 
@@ -39,9 +44,9 @@ Prefer `ops=[{op:set_field, field, value}]` with **native JSON values** over reg
 ## Example
 
 ```text
-scratchpad(action=create, format=json, content={"status":"draft","todos":[…]})
-scratchpad(action=patch, session_id=<id>, ops=[{op:set_field, field=todos[0].status, value=completed}])
-scratchpad(action=commit, session_id=<id>, vault=work, destination_path=inbox/plan.json, schema_type=Plan)
+scratchpad(request={action: "create", format: json, content: {"status":"draft","todos":[…]}})
+scratchpad(request={action: "patch", session_id: <id>, ops: [{op:set_field, field=todos[0].status, value=completed}]})
+scratchpad(request={action: "commit", session_id: <id>, vault: work, destination_path: inbox/plan.json, schema_type: Plan})
 ```
 
 ## Related

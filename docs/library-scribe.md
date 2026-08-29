@@ -1,6 +1,6 @@
 # Library scribe & self-correcting vaults
 
-**Status:** Shipped (2026-08-15) — `flaws[]` on write + `vault(action=lint)` + trailing-WS auto-fix.
+**Status:** Shipped (2026-08-15) — `flaws[]` on write + `vault(request={action: "lint"})` + trailing-WS auto-fix.
 **Metaphor:** Apo is the **library scribe** — catalogue, format, keep shelves honest; few decisions of its own.
 **Goal:** Raise **agentic contribution quality** and **vault longevity**. Agents absorb operational KM; humans keep ownership, ontology, and permanence.
 
@@ -80,7 +80,7 @@ agent (budget N per turn)
 ```
 
 **Inline:** successful writes attach `flaws` for that path (OKF soft + format; archival when contracted).
-**Sweep:** `vault(action=lint)` — folder/vault backlog, paginated (archival + note_lint detectors).
+**Sweep:** `vault(request={action: "lint"})` — folder/vault backlog, paginated (archival + note_lint detectors).
 **Opt-in read:** `read_note(path, lint=true)`.
 **Batch:** existing `vault-tools` OKF lint/fix share detector themes; MCP uses dotted `code`s.
 
@@ -107,9 +107,9 @@ agent (budget N per turn)
 | Phase | Deliverable |
 |-------|-------------|
 | 0 | This doc + PKB decision |
-| **B** | Archival suggest: `flaws[]` + `vault(action=lint)` — [contracts/archival.md](contracts/archival.md) |
+| **B** | Archival suggest: `flaws[]` + `vault(request={action: "lint"})` — [contracts/archival.md](contracts/archival.md) |
 | **1** | Soft OKF → structured `flaws` (dual-emit `warnings`) |
-| **2** | General lint detectors + merged `vault(action=lint)` |
+| **2** | General lint detectors + merged `vault(request={action: "lint"})` |
 | **3** | Mechanical `format.trailing_ws` auto-fix + `status: fixed` |
 | **4** | Links / dialect / layout / usage floor detectors |
 | **5** | Habit KPIs (`flaws_emitted`, `flaws_auto_fixed` on `vault(stats)`) |

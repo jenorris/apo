@@ -68,7 +68,7 @@ filter_notes(where={"todos": {"$elemMatch": {"status": "pending"}}}, folder="pro
 
 No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall.
 
-**Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard and `apo-engine okf validate|fix|export|ingest`. Legacy `system/config/` still resolves. Templates: [docs/contracts/](docs/contracts/). Desk: `vault(action=merge|project)` + `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
+**Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard and `apo-engine okf validate|fix|export|ingest`. Legacy `system/config/` still resolves. Templates: [docs/contracts/](docs/contracts/). Desk: `vault(request={action: "merge"|"project"})` + `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
 
 **Multi-vault:** set `APO_COLLECTION_ROOT` (parent directory of vaults, autoconfigure) and/or `APO_VAULT_PATHS` (explicit roots) plus `APO_DEFAULT_VAULT`. Tools take `vault=`; watch runs one thread per vault. Foreign OKF bundles can register as **read-only** vaults. `APO_VAULTS` (JSON registry) still loads as a legacy roots-only compat shim. See [docs/multi-vault.md](docs/multi-vault.md).
 
@@ -213,7 +213,7 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 Counts are contract-tested (`engine/tests/test_apo_admin.py`) — if this table drifts from the code, CI fails.
 
-Habit KPIs (optional): **`vault(action=stats)`**. Operator traces: OTel → Jaeger (Workbench `harness/observability/`).
+Habit KPIs (optional): **`vault(request={action: "stats"})`**. Operator traces: OTel → Jaeger (Workbench `harness/observability/`).
 
 ### Transport
 
@@ -282,7 +282,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/toc-navigation.md](docs/toc-navigation.md) | `read_note(mode=toc)`, sibling hops, hash staleness, pagination |
 | [docs/patch-note-ops.md](docs/patch-note-ops.md) | `patch_note` wire contract (typed ops, aliases, error codes) |
 | [docs/search-quality.md](docs/search-quality.md) | Eval harness, measured hit@k / MRR, reranker guidance |
-| [docs/library-scribe.md](docs/library-scribe.md) | Library scribe: `flaws[]`, trailing-WS auto-fix, `vault(action=lint)` |
+| [docs/library-scribe.md](docs/library-scribe.md) | Library scribe: `flaws[]`, trailing-WS auto-fix, `vault(request={action: "lint"})` |
 | [docs/contracts/archival.md](docs/contracts/archival.md) | Archival contract (suggest shipped; auto deferred) |
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
 | [docs/contracts/okf-bundle.md](docs/contracts/okf-bundle.md) | OKF conformance table, `apo-engine okf` CLI, type/provenance policies |

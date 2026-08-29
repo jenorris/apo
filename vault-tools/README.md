@@ -22,7 +22,7 @@ discovers contracts the same way Apo does:
 
 OKF tools require an OKF contract (`okf-contract` or legacy `okf-profile`).
 
-MCP interactive twin: Apo engine `note_lint` + `vault(action=lint)` emit dotted
+MCP interactive twin: Apo engine `note_lint` + `vault(request={action: "lint"})` emit dotted
 detector codes (`okf.missing_field`, `link.broken`, `format.trailing_ws`, …) —
 see [docs/library-scribe.md](../docs/library-scribe.md). Batch OKF lint remains
 the offline chokepoint; share themes with those codes where they overlap.
