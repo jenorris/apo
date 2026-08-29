@@ -114,7 +114,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
         self.assertEqual(len(lines), 3)
         self.assertIn("folder=", lines[0])
         self.assertIn("patch_note", lines[1])
-        self.assertIn("vault(action=", lines[2])
+        self.assertIn("request={action:", lines[2])
 
     def test_render_write_habit_lines_dialect_specific_ids(self):
         lines = vault_project._render_write_habit_lines(
@@ -314,12 +314,12 @@ class WriteHabitsProjectTest(unittest.TestCase):
         self.assertLess(len(index_body), len(full_body))
         # The tool-call directive is the load-bearing line — must be present
         # and front-loaded (before the vault table), not buried.
-        directive_pos = index_body.find('vault(action=project, vaults=["<id>"])')
+        directive_pos = index_body.find('vault(request={"action": "project", "vaults": ["<id>"]})')
         table_pos = index_body.find("## Desk vaults")
         self.assertGreater(directive_pos, -1)
         self.assertGreater(table_pos, -1)
         self.assertLess(directive_pos, table_pos)
-        self.assertIn("vault(action=stats", index_body)
+        self.assertIn('vault(request={"action": "stats"', index_body)
         self.assertIn("`atlas`", index_body)
         self.assertIn("personal PARA", index_body)
         # Sections that belong to Tier 2 only, not the compact index.
@@ -987,8 +987,8 @@ class VaultOpTest(unittest.TestCase):
         self.assertEqual(indexed["mode"], "index")
         self.assertLess(indexed["bytes"], full["bytes"])
         self.assertIn("`alpha`", indexed["body"])
-        self.assertIn('vault(action=project, vaults=["<id>"])', indexed["body"])
-        self.assertIn("vault(action=stats", indexed["body"])
+        self.assertIn('vault(request={"action": "project", "vaults": ["<id>"]})', indexed["body"])
+        self.assertIn('vault(request={"action": "stats"', indexed["body"])
         # default_vault/desk_meta are attached the same way regardless of mode.
         self.assertEqual(indexed["default_vault"], full["default_vault"])
 

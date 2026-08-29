@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Place the compact desk index into the Claude Code apo-desk skill file.
-# Full per-vault policy: vault(action=project, vaults=["<id>"]) on demand.
+# Full per-vault policy: vault(request={action: "project", vaults: ["<id>"]}) on demand.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -17,7 +17,7 @@ print(json.load(sys.stdin)['body'], end='')
   echo "name: apo-desk"
   echo "description: >-"
   echo "  Apo desk compact index (vault table + project directive)."
-  echo "  Call vault(action=project, vaults=[id]) before writing. Use with mcp-apo."
+  echo "  Call vault(request={action: project, vaults: [id]}) before writing. Use with mcp-apo."
   echo "---"
   echo
   printf '%s' "$BODY"

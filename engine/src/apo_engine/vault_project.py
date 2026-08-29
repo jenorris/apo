@@ -1,4 +1,4 @@
-"""Project desk policy markdown from ``vault(action=merge)`` IR.
+"""Project desk policy markdown from ``vault(request={action: "merge"})`` IR.
 
 Deterministic — no LLM. Returns shared ``body`` + optional ``guidance`` for placement.
 """
@@ -22,7 +22,7 @@ _WRITE_HABIT_LINES: dict[str, str] = {
     "folder_on_search": (
         "- **Hard gate:** first `search_notes` in a turn **must** include `folder=` when PARA "
         "bucket is inferable (threads → `areas/threads`, config → `system/config`, etc.). "
-        "Target ≥80% `folder_set/search_notes` in 7d rollups (`vault(action=stats)`)."
+        "Target ≥80% `folder_set/search_notes` in 7d rollups (`vault(request={action: \"stats\"})`)."
     ),
     "expected_mtime_on_followup": (
         "- On **second+** write to the same path in one session, pass `expected_mtime` from the "
@@ -46,8 +46,8 @@ _WRITE_HABIT_LINES: dict[str, str] = {
         "batch facets with `folder=` or widen `limit=` instead."
     ),
     "vault_api_routing": (
-        "- **`vault` tool:** `vault(action=list|contracts|describe|merge|project|stats|lint)` — never "
-        "`vault(name=…)` (`unexpected_keyword_argument:name`)."
+        "- **`vault` tool:** one `request={action: list|contracts|describe|merge|project|stats|lint, "
+        "…}` — not flat kwargs, and not `vault(name=…)`."
     ),
     "end_of_turn_domain_writes": (
         "- **End-of-turn gate:** on consequential turns (decisions, status changes, new/corrected "
@@ -59,14 +59,14 @@ _WRITE_HABIT_LINES: dict[str, str] = {
         "`append_note` to `vault=sessions` unless desk `dual_write.enabled` is explicitly true."
     ),
     "address_flaws_on_write": (
-        "- After successful writes / `vault(action=lint)`, inspect **`flaws[]`** (corpus quality — "
+        "- After successful writes / `vault(request={action: \"lint\"})`, inspect **`flaws[]`** (corpus quality — "
         "not `tip`/`warning`). For `remediation: llm`, apply `suggested_op` once per finding per "
         "turn (`value: null` means supply content). For `human`, surface to operator. "
         "Stop if the same `code`+`path`+`evidence` reappears. Soft OKF may dual-emit prose "
         "`warnings` during the compat window — prefer branching on `flaws[].code`."
     ),
     "lint_before_conclude": (
-        "- Before concluding a large vault hygiene pass, run `vault(action=lint, folder=…)` "
+        "- Before concluding a large vault hygiene pass, run `vault(request={action: \"lint\", folder: …})` "
         "and drain `remediation: llm` findings within budget — do not unbounded lint→fix loops."
     ),
     "task_router_threads": (
@@ -107,7 +107,7 @@ def project_guidance() -> str:
     return (
         "Return-only desk policy. Place `body` in whichever instruction surface your "
         "agent host already uses (rule, skill, AGENTS section, etc.). Apo does not "
-        "prescribe paths or frontmatter. Re-run `vault(action=project)` (CLI: "
+        "prescribe paths or frontmatter. Re-run `vault(request={action: \"project\"})` (CLI: "
         "`apo-engine desk-project` — same operation) after `~/.apo/desk.yaml` or "
         "vault `system/contracts/` changes."
     )
@@ -672,8 +672,8 @@ def render_desk_index(merge: dict[str, Any]) -> str:
     Meant to be baked into a static, always-loaded surface (AGENTS.md,
     .claude/rules/apo-desk.md). Carries only the vault table (live merge
     data, so it can't drift the way hand-written text can) plus one
-    directive telling the agent to call ``vault(action=project,
-    vaults=[<id>])`` (``render_desk_body``, Tier 2) for a given vault's
+    directive telling the agent to call ``vault(request={"action": "project",
+    "vaults": [<id>]})`` (``render_desk_body``, Tier 2) for a given vault's
     frontmatter floor, write directives, OKF routing, and git safety before
     writing there. Keeps the always-loaded surface small regardless of how
     large Tier 2 grows for any one vault.
@@ -686,14 +686,14 @@ def render_desk_index(merge: dict[str, Any]) -> str:
     lines.append("")
     lines.append(
         "Before writing to a vault for the first time this session, call "
-        '`vault(action=project, vaults=["<id>"])` to load its current '
+        '`vault(request={"action": "project", "vaults": ["<id>"]})` to load its current '
         "frontmatter floor, write directives, OKF type routing, and git "
         "safety, and write from that."
     )
     lines.append("")
     lines.append(
         "Full policy / engine API: skill **`mcp-apo`**. Habit check: "
-        "`vault(action=stats, days=7)` (folder scoping, expected_mtime). "
+        '`vault(request={"action": "stats", "days": 7})` (folder scoping, expected_mtime). '
         "Return-only — re-run after `~/.apo/desk.yaml` or vault `system/contracts/` changes."
     )
     lines.append("")
@@ -745,9 +745,10 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     lines.append("# Apo desk (generated)")
     lines.append("")
     lines.append(
-        "Generated by `vault(action=project)`. Source: `~/.apo/desk.yaml` + the vault discovery registry "
-        "+ per-vault `system/contracts/`. **Return-only** — agent places `body`; "
-        "re-run `just desk-project` or `vault(action=project)` after desk/contract changes."
+        'Generated by `vault(request={"action": "project"})`. Source: `~/.apo/desk.yaml` + the '
+        "vault discovery registry + per-vault `system/contracts/`. **Return-only** — agent places "
+        "`body`; re-run `just desk-project` or `vault(request={\"action\": \"project\"})` after "
+        "desk/contract changes."
     )
     lines.append("")
     lines.append("Engine API / throughput / diagnose: skill **`mcp-apo`** (stable product skill).")
@@ -1265,5 +1266,8 @@ def maybe_reproject(
             "ok": True,
             "changed": True,
             "reason": reason or ("force" if force else "auto"),
-            "tip": "Run `just desk-project` or vault(action=project) and place the rendered text",
+            "tip": (
+                'Run `just desk-project` or vault(request={"action": "project"}) and place '
+                "the rendered text"
+            ),
         }

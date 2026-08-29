@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Place the return-only vault(action=project, mode=index) body into the Cursor
-# always-on apo-desk rule. Re-run after ~/.apo/desk.yaml or vault contract changes.
+# Place the return-only vault(request={action: "project", mode: "index"}) body into the
+# Cursor always-on apo-desk rule. Re-run after ~/.apo/desk.yaml or vault contract changes.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 

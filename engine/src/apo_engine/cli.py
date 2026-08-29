@@ -190,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         "desk-project",
         help=(
             "project desk policy body + guidance from ~/.apo/desk.yaml + vault contracts "
-            "(same operation as the MCP tool's vault(action='project'))"
+            "(same operation as the MCP tool's vault(request={action: 'project'}))"
         ),
     )
     pd.add_argument(
