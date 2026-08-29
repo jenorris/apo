@@ -4,6 +4,50 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-08-29
+
+Follow-up "deslopify" pass: hidden inefficiencies, naming/interface consistency, and
+cognitive load across the MCP tool surface and supporting config code.
+
+### Changed
+
+- **BREAKING (MCP only): `vault` and `scratchpad` take one typed `request`, not flat
+  kwargs.** `vault(action=X, ...)` → `vault(request={action: X, ...})`; same for
+  `scratchpad`. Backed by a discriminated union on `action`
+  (`apo_engine.mcp_action_schemas`, mirroring `patch_note`'s op-union pattern) with one
+  request model per action carrying only the fields that action actually reads — a
+  field that belongs to a different action (e.g. `to=` on `lint`) is now a schema-level
+  rejection instead of a silently-ignored no-op. `apo_admin` is unchanged (its own,
+  less severe shape) and out of scope. RPC/HTTP (`POST /v1/vault`, `POST /v1/scratchpad`)
+  is **unchanged** — it calls the same internal functions with flat kwargs directly,
+  untouched by this MCP-schema-only change; `docs/scratchpad.md` now documents both
+  shapes since they've diverged. **Upgrade:** quit and restart every MCP host (Claude
+  Code, Cursor, each Hermes gateway) so tool schemas reload; any saved call examples for
+  `vault`/`scratchpad` need the new `request={...}` wrapper.
+- `config.env_bool()` — one settled truthy/falsy word set for every boolean env var.
+  `APO_WATCH_EVENTS`, `APO_RERANK`, `APO_QUERY_EXPAND`, and `APO_TOOL_METRICS` had each
+  hand-rolled their own word list and drifted: `APO_WATCH_EVENTS` didn't accept `"off"`
+  and didn't strip whitespace, so a form that works for `APO_RERANK` silently no-opped
+  for the watcher. Also documents `APO_WATCH_EVENTS` in the README env var table (it was
+  missing entirely).
+- `mcp/server.py`'s `Vault` now wraps `apo_vaults.VaultBinding` whole (composition, not
+  a hand-copied field list) — it was missing `read_only` entirely since that field was
+  added to `VaultBinding` after `Vault` was written, a silent-drop risk for any future
+  field. `_memory_status_sync`, `_reindex_sync`/`_reindex_deferred_sync`, and
+  `note_resource` all go through this registry.
+- `.serena/` and `.claude/` (local tool caches) added to `engine/.gitignore`.
+- Committed `engine/deploy/10-memory-guard.conf`, the apo-engine systemd memory-guard
+  drop-in from the 2026-08-15 OOM triage — it had sat untracked since.
+- Cross-referenced the CLI's `desk-project` and the MCP `vault` tool's `project` action
+  (same operation, previously unrelated-looking names on the two surfaces) in
+  `project_guidance()`'s return text and the CLI's `--help`.
+
+### Removed
+
+- `vaults.compute_vault_id` — a dead "historical name" alias for
+  `compute_collection_id` with no production callers left, kept alive only by test call
+  sites.
+
 ## [0.25.4] — 2026-08-28
 
 Follow-up from a full-repo review (architecture, correctness, tests, config/security,
