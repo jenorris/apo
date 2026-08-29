@@ -4,6 +4,20 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.26.1] — 2026-08-29
+
+### Fixed
+
+- 0.26.0 changed the MCP call shape for `vault`/`scratchpad` but missed the runtime
+  strings an agent actually reads to learn it: `vault_project.py`'s rendered
+  desk-projection body (baked into `AGENTS.md` / apo-desk skills / Cursor rules every
+  session), `mcp_instructions.py`'s `MCP_INSTRUCTIONS` handshake (sent to every
+  connecting client), the `desk-project` CLI help text, and the two global skill/rule
+  generator scripts (`write-claude-skill.sh`, `write-cursor-rule.sh`) — all still said
+  `vault(action=project, vaults=[...])`. Every one of these updated; this workspace's
+  own `AGENTS.md`/`.claude/rules/apo-desk.md` and the global apo-desk skill/rule files
+  regenerated so no session is left operating off the stale call shape.
+
 ## [0.26.0] — 2026-08-29
 
 Follow-up "deslopify" pass: hidden inefficiencies, naming/interface consistency, and
