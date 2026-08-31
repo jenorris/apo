@@ -4,6 +4,24 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.26.4] — 2026-08-31
+
+Thread ``exclude=`` through ``search_expanded`` lex/vec sub-queries — same widen-and-filter
+semantics as :func:`search`, not a post-fusion cut only.
+
+### Changed
+
+- **`search_lex_only` / `search_vector_only`** — accept ``exclude``; use
+  :func:`_hybrid_candidate_pools` for fetch sizing and filter excluded paths before
+  returning.
+- **`search_expanded()`** — passes ``exclude`` to every sub-query; widens ``pool_n`` when
+  exclude is active; scans full fused rank list when exclude would under-fill ``k``.
+
+### Added
+
+- **`test_search_expanded_threads_exclude_glob`** — expand path honors explicit exclude
+  globs on sub-queries.
+
 ## [0.26.3] — 2026-08-31
 
 Completes the retrieval pilot P0/P1 backlog plus graph-aware rank and index-time
