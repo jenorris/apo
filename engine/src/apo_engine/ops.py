@@ -827,6 +827,7 @@ def _search_one_vault(
     stamp_vault: bool,
     expand: bool = False,
     intent: str = "",
+    explain: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str], bool, list[str] | None]:
     """Run hybrid search in one vault. Returns (rows, warnings, reranked, default_exclude)."""
     warnings: list[str] = []
@@ -857,22 +858,19 @@ def _search_one_vault(
                 snippet_chars=snippet_chars,
                 exclude=effective_exclude,
                 hybrid=hybrid,
+                explain=explain,
             )
-        results = shape_search_hits(hits)
+        layout = vaults.read_usage_layout(root)
+        results = shape_search_hits(hits, layout=layout, explain=explain)
         rr = core.last_search_rerank()
         degraded = core.last_search_degraded()
     if stamp_vault:
         for row in results:
             row["vault"] = b.name
-    layout = vaults.read_usage_layout(root)
     for row in results:
         src = str(row.get("source") or "")
         if src:
             row["qualified_path"] = _qualified_path(b.name, src)
-            if layout:
-                ctx = layout.get(src.split("/", 1)[0])
-                if ctx:
-                    row["folder_context"] = ctx
     reranked = False
     if rr is not None:
         if rr.get("applied"):
@@ -1040,6 +1038,7 @@ def search(
     ref: str = "",
     expand: bool = False,
     intent: str = "",
+    explain: bool = False,
 ) -> dict[str, Any]:
     ref_s = (ref or "").strip()
     if ref_s and expand:
@@ -1120,6 +1119,7 @@ def search(
                 stamp_vault=fanout_vaults or fanout_folders,
                 expand=expand,
                 intent=intent,
+                explain=explain,
             )
             if applied_default:
                 if fanout_vaults:
@@ -2084,6 +2084,120 @@ def backlinks(path: str, *, limit: int = 100, offset: int = 0, vault: str = "") 
     if offset:
         out["offset"] = offset
     return _stamp_qualified(out, vault=b.name, path=path)
+
+
+def graph_neighbors(
+    path: str,
+    *,
+    depth: int = 1,
+    direction: str = "both",
+    limit: int = 50,
+    offset: int = 0,
+    vault: str = "",
+) -> dict[str, Any]:
+    """Index-backed link graph: inbound backlinks and/or outbound wiki-links."""
+    direction = (direction or "both").strip().lower()
+    if direction not in {"in", "out", "both"}:
+        return _err(error="bad_request", message="direction must be in|out|both")
+    if depth < 1 or depth > 3:
+        return _err(error="bad_request", message="depth must be 1..3")
+    try:
+        b, rel_path = _resolve_binding_and_rel(path, vault)
+        root = b.resolved().root
+        _safe_resolve(root, rel_path)
+    except OpsError as e:
+        return _err(path=path, error=e.code, message=e.message)
+    except ValueError as e:
+        return _err(path=path, error="bad_path", message=str(e))
+
+    rel = str(Path(rel_path.replace("\\", "/")))
+    if not rel.endswith(".md"):
+        rel_md = f"{rel}.md"
+    else:
+        rel_md = rel
+    stem = Path(rel_md).stem.lower()
+    targets = {Path(rel_md.removesuffix(".md")).as_posix().lower(), stem}
+
+    seen_nodes: set[str] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
+    edges: list[dict[str, Any]] = []
+    frontier: set[str] = {rel_md}
+    visited: set[str] = set()
+
+    with vaults.bind(b):
+        for hop in range(depth):
+            next_frontier: set[str] = set()
+            for node in sorted(frontier):
+                if node in visited:
+                    continue
+                visited.add(node)
+                seen_nodes.add(node)
+                node_stem = Path(node).stem.lower()
+                node_targets = {node.replace("\\", "/").removesuffix(".md").lower(), node_stem}
+
+                if direction in {"in", "both"}:
+                    for src, line, text in core.list_backlinks(node_targets, limit=limit * 2):
+                        edge_key = (src, "in", node)
+                        if edge_key in seen_edges:
+                            continue
+                        seen_edges.add(edge_key)
+                        tgt = src if src.endswith(".md") else f"{src}.md"
+                        edges.append(
+                            {
+                                "from": src,
+                                "to": node,
+                                "direction": "in",
+                                "hop": hop + 1,
+                                "line": line,
+                                "text": text,
+                                "qualified_from": _qualified_path(b.name, src),
+                                "qualified_to": _qualified_path(b.name, node),
+                            }
+                        )
+                        seen_nodes.add(src)
+                        if hop + 1 < depth:
+                            next_frontier.add(tgt)
+
+                if direction in {"out", "both"}:
+                    for tgt_key, line, text in core.list_outlinks(node, limit=limit * 2):
+                        tgt = tgt_key if tgt_key.endswith(".md") else f"{tgt_key}.md"
+                        edge_key = (node, "out", tgt)
+                        if edge_key in seen_edges:
+                            continue
+                        seen_edges.add(edge_key)
+                        edges.append(
+                            {
+                                "from": node,
+                                "to": tgt,
+                                "direction": "out",
+                                "hop": hop + 1,
+                                "line": line,
+                                "text": text,
+                                "qualified_from": _qualified_path(b.name, node),
+                                "qualified_to": _qualified_path(b.name, tgt),
+                            }
+                        )
+                        seen_nodes.add(tgt)
+                        if hop + 1 < depth:
+                            next_frontier.add(tgt)
+            frontier = next_frontier - visited
+
+    has_more = len(edges) > offset + limit
+    page = edges[offset : offset + limit]
+    out = {
+        "ok": True,
+        "path": rel_path,
+        "depth": depth,
+        "direction": direction,
+        "nodes": sorted(seen_nodes),
+        "edges": page,
+        "total_edges": len(edges),
+        "has_more": has_more,
+        "vault": b.name,
+    }
+    if offset:
+        out["offset"] = offset
+    return _stamp_qualified(out, vault=b.name, path=rel_path)
 
 
 _HISTORY_TZ = ZoneInfo("America/New_York")

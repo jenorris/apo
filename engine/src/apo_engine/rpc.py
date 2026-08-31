@@ -227,6 +227,21 @@ def _backlinks(body: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+@_route("POST", "/v1/graph_neighbors")
+def _graph_neighbors(body: dict[str, Any]) -> dict[str, Any]:
+    path = body.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return {"ok": False, "error": "bad_request", "message": "`path` string required"}
+    return ops.graph_neighbors(
+        path,
+        depth=int(body.get("depth") or 1),
+        direction=str(body.get("direction") or "both"),
+        limit=int(body.get("limit") or 50),
+        offset=int(body.get("offset") or 0),
+        vault=str(body.get("vault") or ""),
+    )
+
+
 @_route("POST", "/v1/history")
 def _history(body: dict[str, Any]) -> dict[str, Any]:
     """Browse by mtime or file-level git history when path= is set."""

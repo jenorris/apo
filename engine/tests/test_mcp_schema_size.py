@@ -18,7 +18,8 @@ from test_patch_note_schema import _list_tools_lean, _tool_params
 # around +500 chars even with every optional description trimmed to the
 # point of terseness; the alternative (silently-ignored fields on the wrong
 # action) was worse. See mcp_action_schemas.py's own docstring.
-TOTAL_TOOLS_CHAR_CEILING = 31_000
+# Raised 2026-08-31: graph_neighbors tool + search_notes explain= param.
+TOTAL_TOOLS_CHAR_CEILING = 31_600
 PATCH_NOTE_CHAR_CEILING = 6_000
 PATCH_TABLE_CHAR_CEILING = 5_500
 MCP_INSTRUCTIONS_CHAR_CEILING = 900

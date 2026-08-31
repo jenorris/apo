@@ -266,6 +266,20 @@ def read_usage_layout(root: Path) -> dict[str, str]:
     return out
 
 
+def build_path_context(path: str, layout: dict[str, str]) -> list[dict[str, str]]:
+    """Hierarchical path segments with layout labels (qmd-style context tree)."""
+    norm = path.replace("\\", "/").strip("/")
+    parts = norm.split("/")
+    tree: list[dict[str, str]] = []
+    for i, seg in enumerate(parts):
+        if i == len(parts) - 1:
+            label = Path(seg).stem.replace("-", " ").replace("_", " ").strip() or seg
+        else:
+            label = layout.get(seg, seg.replace("-", " "))
+        tree.append({"segment": seg, "label": label})
+    return tree
+
+
 def _index_file_count(path: Path) -> int | None:
     """Return files-table row count, or None if unreadable / missing table."""
     try:

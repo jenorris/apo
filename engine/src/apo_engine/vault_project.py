@@ -666,6 +666,26 @@ def _render_write_habit_lines(habits: list[tuple[str, str | None]]) -> list[str]
     return lines
 
 
+_MEMORY_VERB_MAP: list[tuple[str, str]] = [
+    ("recall / meaning search", "`search_notes` (+ `folder=`; `explain=true` for rank breakdown)"),
+    ("catalog / typed lookup", "`filter_notes(where={…})`"),
+    ("read known path", "`read_note(path=…)`"),
+    ("append fact", "`append_note`"),
+    ("surgical edit", "`patch_note`"),
+    ("new note", "`write_note`"),
+    ("inbound links", "`backlinks(path=…)`"),
+    ("link graph", "`graph_neighbors(path=…, depth=1..3)`"),
+    ("registry / contracts", "`vault(request={action: project, vaults: [id]})`"),
+]
+
+
+def _render_memory_verb_map() -> list[str]:
+    lines = ["## Memory verbs (Apo MCP)", "", "| Intent | Tool |", "|--------|------|"]
+    for intent, tool in _MEMORY_VERB_MAP:
+        lines.append(f"| {intent} | {tool} |")
+    return lines
+
+
 def render_desk_index(merge: dict[str, Any]) -> str:
     """Compact always-loaded index — Tier 1 of the two-tier desk projection.
 
@@ -714,6 +734,8 @@ def render_desk_index(merge: dict[str, Any]) -> str:
         lines.append(f"| `{name}` | {role} | {is_def} | {read_only} | `{root}` | {id_s} |")
     lines.append("")
     lines.append("Pass `vault=` for non-default. Never cross-pollinate OKF/layout between vaults.")
+    lines.append("")
+    lines.extend(_render_memory_verb_map())
     lines.append("")
 
     lines.append("## Safety essentials")
@@ -917,6 +939,9 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.append("")
         lines.extend(layout_lines)
         lines.append("")
+
+    lines.extend(_render_memory_verb_map())
+    lines.append("")
 
     lines.append("<vault-directives>")
     if directive_lines:

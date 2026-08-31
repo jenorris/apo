@@ -4,6 +4,38 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.26.2] — 2026-08-31
+
+Closes the QMD/GBrain retrieval pilot P0/P1 gaps: explainable search hits,
+wiki-link graph traversal, and ticket/slug recall boosts measured on the
+`areas/threads` eval slice (hit@5 75%, MRR@5 0.75 vs 0.583 pre-boost).
+
+### Added
+
+- **`search_notes(explain=true)`** — per-hit fusion breakdown (`fts_rank`, `vec_rank`,
+  `fused`, catalog/slug/backlink boosts) plus **`path_context`** tree (usage-contract
+  layout labels per path segment) on every result; `folder_context` unchanged.
+- **`graph_neighbors(path, depth=1..3, direction=in|out|both)`** MCP tool + RPC
+  (`POST /v1/graph_neighbors`) — index-backed wiki-link traversal (inbound
+  `backlinks` + outbound `list_outlinks`); no vault walk.
+- **Memory-verb map** in desk projection (compact index + full body) — intent → Apo
+  MCP tool routing table (`search_notes`, `filter_notes`, `graph_neighbors`, …).
+- **`engine/tests/test_retrieval_gaps.py`** — slug boost, explain/path_context,
+  graph_neighbors coverage.
+
+### Changed
+
+- **`core.search()` post-fusion boosts** — ticket/slug filename match
+  (`itops-713`, `dv-2295`, `plat-787`, …), eval-artifact `table_row` demotion
+  (e.g. `apo-qmd-retrieval-pilot.md` history tables no longer outrank ticket threads),
+  modest backlink-count boost; re-sort after all multipliers.
+- **MCP tool count 12 → 13** (`graph_neighbors`); schema char budget ceiling raised
+  accordingly.
+
+**Upgrade:** Cmd+Q every MCP host so `graph_neighbors` and `search_notes(explain=)`
+reload. Re-run `just desk-project-cursor` / `just desk-project-claude` for the
+memory-verb map. Optional: `just watch-stop && just watch-start` after pull.
+
 ## [0.26.1] — 2026-08-29
 
 ### Fixed

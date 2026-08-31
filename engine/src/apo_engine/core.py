@@ -1649,6 +1649,7 @@ class Hit:
     chunk_kind: str = "section"
     row_key: str = ""
     table_id: str = ""
+    explain: dict[str, Any] = field(default_factory=dict)
 
 
 def count_chunks() -> int:
@@ -2168,6 +2169,95 @@ _ARCH_QUERY_RE = re.compile(
 
 def _is_architecture_query(query: str) -> bool:
     return bool(_ARCH_QUERY_RE.search(query or ""))
+
+
+_TICKET_PREFIXES = frozenset(
+    {"itops", "plat", "dv", "qa", "harmon", "core-api", "ngi", "devops"}
+)
+_TICKET_ID_RE = re.compile(r"\b([a-z][a-z0-9-]*?)[-\s]+(\d{2,6})\b", re.I)
+_EVAL_ARTIFACT_STEMS = frozenset({"apo-qmd-retrieval-pilot", "search-eval"})
+
+
+def _slug_ticket_boost(path: str, query: str) -> float:
+    """Boost when query ticket/slug tokens match the note filename stem."""
+    stem = Path(path).stem.lower()
+    q = (query or "").lower()
+    best = 1.0
+    for m in _TICKET_ID_RE.finditer(q):
+        prefix = m.group(1).lower().rstrip("-")
+        num = m.group(2)
+        if prefix not in _TICKET_PREFIXES and not any(prefix.startswith(p) for p in _TICKET_PREFIXES):
+            continue
+        needle = f"{prefix}-{num}"
+        if needle in stem or stem.startswith(needle + "-") or stem == needle:
+            best = max(best, 1.38)
+    if best > 1.0:
+        return best
+    q_tokens = {t for t in re.findall(r"[a-z0-9]+", q) if len(t) > 1}
+    stem_tokens = set(re.split(r"[-_]", stem))
+    if len(q_tokens) >= 2:
+        overlap = len(q_tokens & stem_tokens) / len(q_tokens)
+        if overlap >= 0.6:
+            best = max(best, 1.0 + 0.22 * overlap)
+    return best
+
+
+def _eval_table_demotion(path: str, chunk_kind: str, query: str) -> float:
+    """Demote table_row hits from eval/meta notes when filename doesn't match ticket ids."""
+    if chunk_kind != "table_row":
+        return 1.0
+    stem = Path(path).stem.lower()
+    if _slug_ticket_boost(path, query) > 1.0:
+        return 1.0
+    if stem in _EVAL_ARTIFACT_STEMS or stem.endswith("-eval"):
+        return 0.62
+    return 1.0
+
+
+_backlink_count_cache: dict[str, tuple[float, int]] = {}
+_backlink_count_lock = threading.Lock()
+
+
+def _backlink_count(path: str) -> int:
+    """Distinct inbound wiki-link sources for a path (cached briefly per search)."""
+    rel = path.replace("\\", "/").removesuffix(".md")
+    key = rel.lower()
+    now = time.monotonic()
+    with _backlink_count_lock:
+        cached = _backlink_count_cache.get(key)
+        if cached is not None and (now - cached[0]) < 30.0:
+            return cached[1]
+    stem = Path(rel).name.lower()
+    targets = {key, stem}
+    rows = list_backlinks(targets, limit=500)
+    count = len({r[0] for r in rows})
+    with _backlink_count_lock:
+        _backlink_count_cache[key] = (now, count)
+    return count
+
+
+def _backlink_search_boost(path: str) -> float:
+    """Modest boost for well-linked notes (GBrain-style backlink signal, index-only)."""
+    n = _backlink_count(path)
+    if n <= 0:
+        return 1.0
+    import math
+
+    return 1.0 + min(0.18, 0.04 * math.log1p(n))
+
+
+def _path_retrieval_boost(
+    path: str,
+    chunk_kind: str,
+    query: str,
+) -> tuple[float, dict[str, float]]:
+    """Post-fusion multipliers for slug/ticket recall and backlink rank."""
+    slug = _slug_ticket_boost(path, query)
+    demote = _eval_table_demotion(path, chunk_kind, query)
+    bl = _backlink_search_boost(path)
+    combined = slug * demote * bl
+    detail = {"slug_boost": slug, "table_demotion": demote, "backlink_boost": bl}
+    return combined, detail
 
 
 def _catalog_retrieval_boost(
@@ -2719,6 +2809,8 @@ def search(
     folder: str = "",
     hybrid: bool = True,
     snippet_chars: int = 0,
+    *,
+    explain: bool = False,
 ) -> list[Hit]:
     """Hybrid retrieval: dense KNN + FTS5 BM25 fused with reciprocal-rank fusion.
 
@@ -2804,8 +2896,11 @@ def search(
 
     for rank, (rid, _) in enumerate(vrows):
         fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
+    fts_rank_by_id: dict[int, int] = {}
     for rank, (rid,) in enumerate(frows):
         fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)
+        fts_rank_by_id[rid] = rank
+    vec_rank_by_id: dict[int, int] = {rid: rank for rank, (rid, _) in enumerate(vrows)}
     fts_rowid_set = {r[0] for r in frows}
 
     if not fused:
@@ -2874,9 +2969,22 @@ def search(
             continue
         if _path_excluded(path, excl_prefixes, excl_globs):
             continue
-        score = (fused[rid] / top) * _catalog_retrieval_boost(
+        fused_norm = fused[rid] / top
+        catalog_mult = _catalog_retrieval_boost(
             path, chunk_kind or "section", folder_prefix, query=query
         )
+        path_mult, path_detail = _path_retrieval_boost(path, chunk_kind or "section", query)
+        score = fused_norm * catalog_mult * path_mult
+        hit_explain: dict[str, Any] = {}
+        if explain:
+            hit_explain = {
+                "fts_rank": fts_rank_by_id.get(rid),
+                "vec_rank": vec_rank_by_id.get(rid),
+                "fused": round(fused_norm, 4),
+                "catalog_boost": catalog_mult,
+                **path_detail,
+                "final_score": round(score, 4),
+            }
         out_text = _build_snippet(
             text,
             snippet_chars,
@@ -2904,20 +3012,21 @@ def search(
                 chunk_kind=chunk_kind or "section",
                 row_key=row_key or "",
                 table_id=table_id or "",
+                explain=hit_explain,
             )
         )
         full_texts.append(text)
         if len(hits) >= collect_n:
             break
-    # Re-sort after path/chunk boosts (catalog-scoped or vault-wide architecture).
-    catalog_folder = bool(
-        folder_prefix and "mermaid-catalog" in folder_prefix.replace("\\", "/")
-    )
-    if hits and (catalog_folder or vault_wide_arch):
+    # Re-sort after path/chunk boosts (catalog, slug/ticket, backlink, eval demotion).
+    if hits:
         paired = sorted(zip(hits, full_texts), key=lambda p: p[0].score, reverse=True)
         hits = [p[0] for p in paired]
         full_texts = [p[1] for p in paired]
-        if vault_wide_arch and not rerank_on and k > 0:
+        catalog_folder = bool(
+            folder_prefix and "mermaid-catalog" in folder_prefix.replace("\\", "/")
+        )
+        if vault_wide_arch and not rerank_on and k > 0 and catalog_folder:
             hits = hits[:k]
             full_texts = full_texts[:k]
     if rerank_on and hits:
@@ -3423,6 +3532,19 @@ def frontmatter_field(rel_path: str, field: str) -> Any:
     except json.JSONDecodeError:
         return None
     return fm.get(field) if isinstance(fm, dict) else None
+
+
+def list_outlinks(source: str, *, limit: int = 100) -> list[tuple[str, int, str]]:
+    """(target_key, line, line text) for [[wiki-links]] emitted from source."""
+    rel = source.replace("\\", "/").strip("/")
+    if not rel.endswith(".md"):
+        rel = f"{rel}.md"
+    db = reader_connect()
+    return db.execute(
+        """SELECT target_key, line, text FROM backlinks
+           WHERE source = ? ORDER BY line LIMIT ?""",
+        (rel, limit),
+    ).fetchall()
 
 
 def list_backlinks(

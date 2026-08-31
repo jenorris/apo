@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from apo_engine.core import _content_hash
-from . import core
+from . import core, vaults
 
 # Flattened row snippets stay short — full-row bloat is what we're avoiding.
 _ROW_SNIPPET_CHARS = 240
@@ -24,9 +24,13 @@ class ApoStore:
 
 def shape_search_hits(
     hits: list[core.Hit],
+    *,
+    layout: dict[str, str] | None = None,
+    explain: bool = False,
 ) -> list[dict]:
     """Vault-relative rows for MCP / RPC — no Path.resolve() on the event loop."""
     rows: list[dict] = []
+    layout = layout or {}
     for h in hits:
         mtime = h.mtime or 0.0
         modified = (
@@ -65,5 +69,12 @@ def shape_search_hits(
             table_id = getattr(h, "table_id", "") or ""
             if table_id:
                 row["table_id"] = table_id
+        if layout:
+            ctx = layout.get(h.path.split("/", 1)[0])
+            if ctx:
+                row["folder_context"] = ctx
+            row["path_context"] = vaults.build_path_context(h.path, layout)
+        if explain and getattr(h, "explain", None):
+            row["explain"] = h.explain
         rows.append(row)
     return rows

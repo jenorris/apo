@@ -794,6 +794,15 @@ async def search_notes(
         Field(description="RRF-fuse lex+vec sub-queries (+ LLM hyde if APO_QUERY_EXPAND=1). No ref="),
     ] = False,
     intent: Annotated[str, Field(description="Disambiguation context for expand=")] = "",
+    explain: Annotated[
+        bool,
+        Field(
+            description=(
+                "Include per-hit fusion breakdown (fts/vec ranks, boosts) and "
+                "path_context tree on every result."
+            ),
+        ),
+    ] = False,
 ) -> dict:
     """Hybrid search. Hits include chunk_hash — read more via read_note(chunk_hash=).
 
@@ -813,6 +822,31 @@ async def search_notes(
         ref=ref,
         expand=expand,
         intent=intent,
+        explain=explain,
+    )
+
+
+@mcp.tool(annotations=_RO)
+async def graph_neighbors(
+    path: Annotated[str, Field(description=_VAULT_REL_PATH_DESC)],
+    depth: Annotated[int, Field(description="Traversal hops (1–3).")] = 1,
+    direction: Annotated[
+        str,
+        Field(description="Link direction: in (backlinks), out (outlinks), or both."),
+    ] = "both",
+    limit: int = 50,
+    offset: int = 0,
+    vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
+) -> dict:
+    """Wiki-link graph traversal from a note — index-backed, no vault walk."""
+    return await asyncio.to_thread(
+        apo_ops.graph_neighbors,
+        path,
+        depth=depth,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+        vault=vault,
     )
 
 

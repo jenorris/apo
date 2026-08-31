@@ -50,6 +50,7 @@ APO_MCP_TOOL_NAMES = frozenset(
         "patch_note",
         "filter_notes",
         "backlinks",
+        "graph_neighbors",
         "history",
         "vault",
         "apo_admin",
