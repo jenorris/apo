@@ -849,6 +849,8 @@ def _search_one_vault(
                 k=k,
                 folder=folder_clean,
                 snippet_chars=snippet_chars,
+                exclude=effective_exclude,
+                explain=explain,
             )
         else:
             hits = core.search(

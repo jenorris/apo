@@ -7,7 +7,9 @@ Everything below runs through `ops.search` — the exact path MCP/RPC clients us
 
 ```bash
 cp docs/examples/search-eval.example.yaml ~/.apo/search-eval.yaml   # then label it
+cp docs/examples/search-eval-threads.example.yaml ~/.apo/search-eval-threads.yaml
 just search-eval --file ~/.apo/search-eval.yaml
+just search-eval --file ~/.apo/search-eval-threads.yaml --json   # thread ticket recall slice
 just search-eval --file ~/.apo/search-eval.yaml --json              # machine-readable
 ```
 

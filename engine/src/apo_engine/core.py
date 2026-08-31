@@ -562,6 +562,50 @@ def _extract_wikilinks(text: str) -> list[tuple[int, str, str, str]]:
     return rows
 
 
+def _stem_index_add(idx: dict[str, list[str]], path: str) -> None:
+    norm = path.replace("\\", "/")
+    if not norm.endswith(".md"):
+        return
+    stem = Path(norm).stem.lower()
+    if norm not in idx.get(stem, []):
+        idx.setdefault(stem, []).append(norm)
+
+
+def _build_stem_index(db: sqlite3.Connection, extra_paths: list[str] | None = None) -> dict[str, list[str]]:
+    """Basename → vault-relative paths for unique [[stem]] wikilink resolution."""
+    idx: dict[str, list[str]] = {}
+    try:
+        for (path,) in db.execute("SELECT path FROM files"):
+            _stem_index_add(idx, path)
+    except sqlite3.OperationalError:
+        pass
+    for path in extra_paths or []:
+        _stem_index_add(idx, path)
+    return idx
+
+
+def _resolve_basename_wikilink(target: str, stem_index: dict[str, list[str]]) -> str:
+    """Resolve bare ``[[stem]]`` to a unique vault path when unambiguous."""
+    if "/" in target:
+        return target
+    matches = stem_index.get(target.lower(), [])
+    if len(matches) == 1:
+        return matches[0].removesuffix(".md").lower()
+    return target
+
+
+def _resolve_wikilinks_for_index(
+    wikilinks: list[tuple[int, str, str, str]],
+    stem_index: dict[str, list[str]],
+) -> list[tuple[int, str, str, str]]:
+    out: list[tuple[int, str, str, str]] = []
+    for ln, tk, ts, tx in wikilinks:
+        resolved = _resolve_basename_wikilink(tk, stem_index)
+        new_stem = resolved.rsplit("/", 1)[-1] if "/" in resolved else ts
+        out.append((ln, resolved, new_stem, tx))
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Frontmatter query matching (filter_notes)
 # --------------------------------------------------------------------------- #
@@ -1569,9 +1613,11 @@ def _index_vault_impl(
                 )
             pending.append(row)
         if wikilinks:
+            stem_index = _build_stem_index(db, extra_paths=list(on_disk))
+            resolved = _resolve_wikilinks_for_index(wikilinks, stem_index)
             db.executemany(
                 "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
-                [(rel, tk, ts, ln, tx) for ln, tk, ts, tx in wikilinks],
+                [(rel, tk, ts, ln, tx) for ln, tk, ts, tx in resolved],
             )
         file_stamps.append((rel, st.st_mtime, h, fm_json, st.st_size))
 
@@ -2028,9 +2074,13 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
         if not (prev is not None and prev[1] == ""):
             db.execute("DELETE FROM files WHERE path=?", (plan.rel,))
         if plan.wikilinks:
+            stem_index = _build_stem_index(
+                db, extra_paths=[p.rel for p in active if p.wikilinks]
+            )
+            resolved = _resolve_wikilinks_for_index(plan.wikilinks, stem_index)
             db.executemany(
                 "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
-                [(plan.rel, tk, ts, ln, tx) for ln, tk, ts, tx in plan.wikilinks],
+                [(plan.rel, tk, ts, ln, tx) for ln, tk, ts, tx in resolved],
             )
     db.commit()
 
@@ -2258,6 +2308,75 @@ def _path_retrieval_boost(
     combined = slug * demote * bl
     detail = {"slug_boost": slug, "table_demotion": demote, "backlink_boost": bl}
     return combined, detail
+
+
+def _neighbor_paths_for(top_paths: list[str], *, limit: int = 80) -> set[str]:
+    """1-hop wiki-link neighbors of top-ranked note paths (index-only)."""
+    neighbors: set[str] = set()
+    for raw in top_paths[:5]:
+        rel = raw.replace("\\", "/")
+        if not rel.endswith(".md"):
+            rel = f"{rel}.md"
+        stem = Path(rel).stem.lower()
+        keys = {rel.removesuffix(".md").lower(), stem}
+        for src, _, _ in list_backlinks(keys, limit=limit):
+            neighbors.add(src.replace("\\", "/"))
+        for tgt, _, _ in list_outlinks(rel, limit=limit):
+            t = tgt.replace("\\", "/")
+            neighbors.add(t if t.endswith(".md") else f"{t}.md")
+    return neighbors
+
+
+def _neighbor_rank_boost(
+    hits: list[Hit],
+    query: str,
+    *,
+    explain: bool = False,
+) -> list[Hit]:
+    """Promote 1-hop link neighbors of top hits (GBrain-style graph signal, lite)."""
+    if len(hits) < 2:
+        return hits
+    top_paths = list(dict.fromkeys(h.path for h in hits[:5]))
+    neighbor_paths = _neighbor_paths_for(top_paths)
+    if not neighbor_paths:
+        return hits
+    top_set = set(top_paths)
+    boosted = False
+    for h in hits:
+        if h.path in top_set or h.path not in neighbor_paths:
+            continue
+        overlap = _slug_ticket_boost(h.path, query)
+        mult = 1.14 if overlap > 1.0 else 1.08
+        h.score = round(h.score * mult, 4)
+        if explain:
+            h.explain = h.explain or {}
+            h.explain["neighbor_boost"] = mult
+        boosted = True
+    if boosted:
+        hits.sort(key=lambda x: x.score, reverse=True)
+    return hits
+
+
+def _apply_path_boosts_to_hits(
+    hits: list[Hit],
+    query: str,
+    *,
+    explain: bool = False,
+    neighbor: bool = True,
+) -> list[Hit]:
+    if not hits:
+        return hits
+    for h in hits:
+        mult, detail = _path_retrieval_boost(h.path, h.chunk_kind or "section", query)
+        h.score = round(h.score * mult, 4)
+        if explain:
+            h.explain = h.explain or {}
+            h.explain.update(detail)
+            h.explain["final_score"] = h.score
+    hits.sort(key=lambda x: x.score, reverse=True)
+    if neighbor:
+        hits = _neighbor_rank_boost(hits, query, explain=explain)
+    return hits
 
 
 def _catalog_retrieval_boost(
@@ -2707,6 +2826,8 @@ def search_expanded(
     k: int = 8,
     folder: str = "",
     snippet_chars: int = 0,
+    exclude: list[str] | None = None,
+    explain: bool = False,
 ) -> list[Hit]:
     """RRF-fuse typed sub-queries, each routed to exactly one backend.
 
@@ -2777,13 +2898,24 @@ def search_expanded(
     collect_n = max(k, config.RERANK_POOL) if rerank_on else k
     cut = ranked[:collect_n] if collect_n > 0 else ranked
     top = max(fused.values())  # re-max after the bonus so 1.0 still means "pool best"
+    primary_query = (query or "").strip() or str((queries[0] or {}).get("query") or "")
+    excl_prefixes, excl_globs = _compile_excludes(exclude)
     out: list[Hit] = []
     for chash in cut:
         h = hit_by_hash[chash]
         h.score = round(fused[chash] / top, 4)
+        if exclude and _path_excluded(h.path, excl_prefixes, excl_globs):
+            continue
         if snippet_chars > 0:
             h.text = _truncate_word_boundary(h.text, snippet_chars)
+        if explain:
+            h.explain = {
+                "fused": round(fused[chash] / top, 4),
+                "subquery_best_rank": best_rank.get(chash),
+            }
         out.append(h)
+
+    out = _apply_path_boosts_to_hits(out, primary_query, explain=explain)
 
     if rerank_on and out:
         rerank_query = str((queries[0] or {}).get("query") or query)
@@ -3029,6 +3161,7 @@ def search(
         if vault_wide_arch and not rerank_on and k > 0 and catalog_folder:
             hits = hits[:k]
             full_texts = full_texts[:k]
+    hits = _neighbor_rank_boost(hits, query, explain=explain)
     if rerank_on and hits:
         # Position-aware blend, not a full override — see docs/search-quality.md for
         # the eval (0.795 -> 0.826 MRR@5 vs. the old rerank.rerank_hits() reorder).

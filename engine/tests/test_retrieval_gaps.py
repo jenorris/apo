@@ -124,6 +124,37 @@ class RetrievalGapsTest(unittest.TestCase):
         self.assertEqual(tree[0]["label"], "standing work areas")
         self.assertEqual(tree[-1]["segment"], "foo.md")
 
+    def test_basename_wikilink_resolves_unique_stem(self):
+        target = self.vault / "areas" / "threads" / "unique-target-thread.md"
+        target.write_text("---\ntitle: Target\n---\n\n# Target\n", encoding="utf-8")
+        source = self.vault / "areas" / "threads" / "linker-note.md"
+        source.write_text(
+            "---\ntitle: Linker\n---\n\nSee [[unique-target-thread]].\n",
+            encoding="utf-8",
+        )
+        core.index_files([target, source], verbose=False)
+        out = ops.backlinks("areas/threads/unique-target-thread.md")
+        self.assertTrue(out["ok"])
+        paths = [b["path"] for b in out["backlinks"]]
+        self.assertIn("areas/threads/linker-note.md", paths)
+
+    def test_search_expanded_applies_slug_boost(self):
+        with mock.patch.object(
+            core,
+            "expand_query",
+            return_value=[{"type": "lex", "query": "itops 713 rippling stripe scim"}],
+        ):
+            out = ops.search(
+                "itops 713 rippling stripe scim",
+                folder="areas/threads",
+                expand=True,
+                hybrid=False,
+                limit=5,
+            )
+        self.assertTrue(out["ok"])
+        tops = [r["source"] for r in out["results"]]
+        self.assertEqual(tops[0], "areas/threads/itops-713-rippling-stripe-scim.md")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,12 @@ default_exclude:
 
 # Folder-scoped excludes (applied when folder= matches; skipped if unless_query tokens appear).
 # folder_exclude:
+#   - folder: areas/threads
+#     exclude:
+#       - areas/threads/apo-qmd-retrieval-pilot.md
+#     unless_query:
+#       - qmd
+#       - retrieval pilot
 #   - folder: diagrams/mermaid-catalog
 #     exclude:
 #       - diagrams/mermaid-catalog/pages/**

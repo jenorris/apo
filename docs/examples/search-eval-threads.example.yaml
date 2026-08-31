@@ -1,0 +1,57 @@
+# Thread recall eval — copy outside the repo (e.g. ~/.apo/search-eval-threads.yaml)
+# Run: APO_VAULT_PATHS=~/Notes/Work APO_DEFAULT_VAULT=work \
+#        just search-eval --file ~/.apo/search-eval-threads.yaml
+#
+# Labeled queries for areas/threads ticket/slug recall. Paths are vault-relative.
+
+vault: work
+k: 5
+
+queries:
+  - query: "itops 713 rippling stripe scim integration"
+    folder: areas/threads
+    expect: ["areas/threads/itops-713-rippling-stripe-scim.md"]
+
+  - query: "plat 787 pci audit 2026 thread"
+    folder: areas/threads
+    expect: ["areas/threads/plat-787-pci-audit-2026.md"]
+
+  - query: "dv 2295 frontend bundle bloat ticket"
+    folder: areas/threads
+    expect: ["areas/threads/dv-2295-frontend-bundle-bloat.md"]
+
+  - query: "nightwatch quota sampling plat thread"
+    folder: areas/threads
+    expect: ["areas/threads/plat-790-nightwatch-request-context.md"]
+
+  - query: "plat 790 nightwatch request context"
+    folder: areas/threads
+    expect: ["areas/threads/plat-790-nightwatch-request-context.md"]
+
+  - query: "itops 716 wazuh agent reenroll"
+    folder: areas/threads
+    expect: ["areas/threads/itops-716-wazuh-agent-reenroll.md"]
+
+  - query: "dv 2213 bossman school strangler"
+    folder: areas/threads
+    expect: ["areas/threads/dv-2213-bossman-school-strangler.md"]
+
+  - query: "snowflake mfa enforcement gradguard"
+    folder: areas/threads
+    expect: ["areas/threads/snowflake-mfa-enforcement.md"]
+
+  - query: "mosyle apple push certificate renewal"
+    folder: areas/threads
+    expect: ["areas/threads/mosyle-apple-push-cert-renewal.md"]
+
+  - query: "github pull request review queue routing"
+    folder: areas/threads
+    expect: ["areas/threads/github-pr-review-queue.md"]
+
+  - query: "core api rippling scim feasibility"
+    folder: areas/threads
+    expect: ["areas/threads/core-api-rippling-scim.md"]
+
+  - query: "plat 995 tiktok capi integration"
+    folder: areas/threads
+    expect: ["areas/threads/plat-995-tiktok-capi.md"]

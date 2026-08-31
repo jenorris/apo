@@ -4,6 +4,39 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.26.3] — 2026-08-31
+
+Completes the retrieval pilot P0/P1 backlog plus graph-aware rank and index-time
+wikilink resolution. Thread eval fixture (12 queries) now **hit@5 91.7%**, **MRR@5
+0.917** (was 75% / 0.75 in 0.26.2).
+
+### Added
+
+- **`docs/examples/search-eval-threads.example.yaml`** — 12 labeled thread queries for
+  `apo-engine search-eval`; nightwatch expect fixed to
+  `plat-790-nightwatch-request-context.md`.
+- **1-hop neighbor promotion** — notes linked to top slug/ticket hits get a modest rank
+  boost in `search()` and `search_expanded()` via `_neighbor_paths_for` /
+  `_neighbor_rank_boost`.
+- **Basename wikilink resolution at index time** — `[[slug]]` / `[[ticket-id]]` without
+  path resolve against a vault stem index during batch index and `index_files()` wikilink
+  insert; edges land in `backlinks` / outlinks for graph traversal and neighbor boost.
+- **`engine/tests/test_retrieval_gaps.py`** — basename resolution + expanded-path boost
+  coverage.
+
+### Changed
+
+- **`search_expanded()`** — accepts `exclude` and `explain`; applies the same
+  `_path_retrieval_boost` / neighbor promotion as core search via
+  `_apply_path_boosts_to_hits`.
+- **`docs/search-quality.md`** — documents thread eval fixture and 0.26.3 metrics.
+- **`docs/contracts/search-contract.schema.yaml`** — documents optional `folder_exclude`
+  (example for pilot thread demotion).
+
+**Upgrade:** Cmd+Q MCP hosts after pull. Re-index work vault if basename wikilinks were
+previously unresolved (`just index --vault work`). Optional:
+`just watch-stop && just watch-start`.
+
 ## [0.26.2] — 2026-08-31
 
 Closes the QMD/GBrain retrieval pilot P0/P1 gaps: explainable search hits,
