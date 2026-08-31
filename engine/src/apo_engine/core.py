@@ -2678,7 +2678,13 @@ def _hits_for_ids(
     return hits
 
 
-def search_lex_only(query: str, k: int = 8, folder: str = "", snippet_chars: int = 0) -> list[Hit]:
+def search_lex_only(
+    query: str,
+    k: int = 8,
+    folder: str = "",
+    snippet_chars: int = 0,
+    exclude: list[str] | None = None,
+) -> list[Hit]:
     """Pure BM25/FTS5 ranked hits — no vector fusion.
 
     Building block for typed query-expansion routing (:func:`search_expanded`): a
@@ -2686,12 +2692,20 @@ def search_lex_only(query: str, k: int = 8, folder: str = "", snippet_chars: int
     """
     db = reader_connect()
     folder_prefix = folder.replace("\\", "/").strip("/")
+    excl_prefixes, excl_globs = _compile_excludes(exclude)
     match = _fts_query(query)
     if not match:
         return []
     fts_ready = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
     if not (fts_ready and fts_ready[0] == "1"):
         return []
+    total_chunks = int(db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] or 0)
+    fetch_n, _ = _hybrid_candidate_pools(
+        k,
+        exclude=bool(exclude),
+        folder_prefix=folder_prefix,
+        total_chunks=total_chunks,
+    )
     try:
         if folder_prefix:
             frows = db.execute(
@@ -2701,23 +2715,37 @@ def search_lex_only(query: str, k: int = 8, folder: str = "", snippet_chars: int
                    WHERE chunks_fts MATCH ?
                      AND c.path LIKE ? ESCAPE '\\'
                    ORDER BY rank LIMIT ?""",
-                (match, _escape_like(folder_prefix) + "/%", k),
+                (match, _escape_like(folder_prefix) + "/%", fetch_n),
             ).fetchall()
         else:
             frows = db.execute(
                 "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
-                (match, k),
+                (match, fetch_n),
             ).fetchall()
     except sqlite3.OperationalError:
         return []
     ids = [r[0] for r in frows]
-    return _hits_for_ids(
+    hits = _hits_for_ids(
         db, ids, folder_prefix, match=match, fts_rowid_set=set(ids), snippet_chars=snippet_chars
     )
+    if not exclude:
+        return hits[:k]
+    out: list[Hit] = []
+    for h in hits:
+        if _path_excluded(h.path, excl_prefixes, excl_globs):
+            continue
+        out.append(h)
+        if len(out) >= k:
+            break
+    return out
 
 
 def search_vector_only(
-    qvec: list[float], k: int = 8, folder: str = "", snippet_chars: int = 0
+    qvec: list[float],
+    k: int = 8,
+    folder: str = "",
+    snippet_chars: int = 0,
+    exclude: list[str] | None = None,
 ) -> list[Hit]:
     """Pure dense-KNN ranked hits — no FTS fusion.
 
@@ -2726,17 +2754,35 @@ def search_vector_only(
     """
     db = reader_connect()
     folder_prefix = folder.replace("\\", "/").strip("/")
+    excl_prefixes, excl_globs = _compile_excludes(exclude)
+    total_chunks = int(db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] or 0)
+    _, fetch_n = _hybrid_candidate_pools(
+        k,
+        exclude=bool(exclude),
+        folder_prefix=folder_prefix,
+        total_chunks=total_chunks,
+    )
     if folder_prefix:
-        vrows = _scoped_vector_hits(db, qvec, folder_prefix, k, prefer_ids=None)
+        vrows = _scoped_vector_hits(db, qvec, folder_prefix, fetch_n, prefer_ids=None)
     else:
         vrows = db.execute(
             "SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance",
-            (sqlite_vec.serialize_float32(qvec), k),
+            (sqlite_vec.serialize_float32(qvec), fetch_n),
         ).fetchall()
     ids = [r[0] for r in vrows]
-    return _hits_for_ids(
+    hits = _hits_for_ids(
         db, ids, folder_prefix, match=None, fts_rowid_set=set(), snippet_chars=snippet_chars
     )
+    if not exclude:
+        return hits[:k]
+    out: list[Hit] = []
+    for h in hits:
+        if _path_excluded(h.path, excl_prefixes, excl_globs):
+            continue
+        out.append(h)
+        if len(out) >= k:
+            break
+    return out
 
 
 _EXPAND_LINE_RE = re.compile(r"^\s*(lex|vec|hyde)\s*:\s*(.+?)\s*$", re.IGNORECASE)
@@ -2859,7 +2905,17 @@ def search_expanded(
     """
     if queries is None:
         queries = expand_query(query, intent=intent)
-    pool_n = max(k * 3, config.SEARCH_CANDIDATES)
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    excl_prefixes, excl_globs = _compile_excludes(exclude)
+    db = reader_connect()
+    total_chunks = int(db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] or 0)
+    pool_n, _ = _hybrid_candidate_pools(
+        k,
+        exclude=bool(exclude),
+        folder_prefix=folder_prefix,
+        total_chunks=total_chunks,
+    )
+    pool_n = max(pool_n, k * 3, config.SEARCH_CANDIDATES)
     fused: dict[str, float] = {}
     best_rank: dict[str, int] = {}
     hit_by_hash: dict[str, Hit] = {}
@@ -2871,12 +2927,24 @@ def search_expanded(
             continue
         weight = float(sq.get("weight", 1.0))
         if qtype == "lex":
-            sub_hits = search_lex_only(qtext, k=pool_n, folder=folder, snippet_chars=0)
+            sub_hits = search_lex_only(
+                qtext,
+                k=pool_n,
+                folder=folder,
+                snippet_chars=0,
+                exclude=exclude,
+            )
         else:
             qvec = query_embed(qtext)
             if qvec is None:
                 continue
-            sub_hits = search_vector_only(qvec, k=pool_n, folder=folder, snippet_chars=0)
+            sub_hits = search_vector_only(
+                qvec,
+                k=pool_n,
+                folder=folder,
+                snippet_chars=0,
+                exclude=exclude,
+            )
         for rank, h in enumerate(sub_hits):
             fused[h.chunk_hash] = fused.get(h.chunk_hash, 0.0) + weight / (RRF_K + rank)
             if rank < best_rank.get(h.chunk_hash, rank + 1):
@@ -2896,12 +2964,11 @@ def search_expanded(
     ranked = sorted(fused, key=lambda ch: fused[ch], reverse=True)
     rerank_on = config.RERANK and k > 0
     collect_n = max(k, config.RERANK_POOL) if rerank_on else k
-    cut = ranked[:collect_n] if collect_n > 0 else ranked
+    scan = ranked if exclude else (ranked[:collect_n] if collect_n > 0 else ranked)
     top = max(fused.values())  # re-max after the bonus so 1.0 still means "pool best"
     primary_query = (query or "").strip() or str((queries[0] or {}).get("query") or "")
-    excl_prefixes, excl_globs = _compile_excludes(exclude)
     out: list[Hit] = []
-    for chash in cut:
+    for chash in scan:
         h = hit_by_hash[chash]
         h.score = round(fused[chash] / top, 4)
         if exclude and _path_excluded(h.path, excl_prefixes, excl_globs):
@@ -2914,6 +2981,8 @@ def search_expanded(
                 "subquery_best_rank": best_rank.get(chash),
             }
         out.append(h)
+        if len(out) >= collect_n:
+            break
 
     out = _apply_path_boosts_to_hits(out, primary_query, explain=explain)
 

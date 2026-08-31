@@ -155,6 +155,26 @@ class RetrievalGapsTest(unittest.TestCase):
         tops = [r["source"] for r in out["results"]]
         self.assertEqual(tops[0], "areas/threads/itops-713-rippling-stripe-scim.md")
 
+    def test_search_expanded_threads_exclude_glob(self):
+        """expand=true must honor exclude= on lex/vec sub-queries, not post-filter only."""
+        with mock.patch.object(
+            core,
+            "expand_query",
+            return_value=[{"type": "lex", "query": "itops 713 rippling stripe scim"}],
+        ):
+            out = ops.search(
+                "itops 713 rippling stripe scim",
+                folder="areas/threads",
+                expand=True,
+                hybrid=False,
+                limit=5,
+                exclude=["**/apo-qmd-retrieval-pilot.md"],
+            )
+        self.assertTrue(out["ok"])
+        tops = [r["source"] for r in out["results"]]
+        self.assertNotIn("areas/threads/apo-qmd-retrieval-pilot.md", tops)
+        self.assertEqual(tops[0], "areas/threads/itops-713-rippling-stripe-scim.md")
+
 
 if __name__ == "__main__":
     unittest.main()

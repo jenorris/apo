@@ -840,9 +840,6 @@ def _search_one_vault(
     )
     with vaults.bind(b):
         if expand:
-            # Typed lex/vec/hyde sub-query RRF fusion (core.search_expanded) — a
-            # different retrieval path from the single-query hybrid one below, so
-            # `exclude=` (glob post-filter) isn't threaded through it yet.
             hits = core.search_expanded(
                 query,
                 intent=intent,
