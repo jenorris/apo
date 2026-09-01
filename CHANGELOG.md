@@ -4,6 +4,27 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.26.5] — 2026-08-31
+
+Closes retrieval pilot P0/P1 backlog: phrase/title rank boosts, 22-query eval,
+CI gate, OKF stamper skip for contract schemas, corpus lint batch script.
+**QMD sidecar retired** — Apo-only thread recall (no adjacent QMD).
+
+### Added
+
+- **`_phrase_stem_boost` / `_title_frontmatter_boost`** — hyphenated phrase match
+  on filename stem + gated title/permalink overlap from index frontmatter.
+- **`is_contract_schema_path()`** — OKF stamp skips ``system/contracts/*.schema.yaml``.
+- **`engine/scripts/lint_batch.py`** — paginated ``vault(action=lint, fix=true)`` sweep.
+- **22-query thread eval** fixture (`docs/examples/search-eval-threads.example.yaml`).
+- **CI gate:** ``test_thread_eval_fixture_hit_rate`` in ``test_retrieval_gaps.py``.
+- **`engine/tests/test_okf_contract_schema.py`**.
+
+### Changed
+
+- Thread eval target **100% hit@5** on 22 queries (was 91.7% / 11/12 at 0.26.3).
+- ``docs/search-quality.md`` — CI gate + lint batch docs.
+
 ## [0.26.4] — 2026-08-31
 
 Thread ``exclude=`` through ``search_expanded`` lex/vec sub-queries — same widen-and-filter
