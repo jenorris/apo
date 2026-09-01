@@ -4,6 +4,20 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.26.6] — 2026-08-31
+
+Phrase-stem **candidate injection** when hybrid search misses filename matches; lex
+fallback when folder exclude empties the hit pool.
+
+### Added
+
+- **`_inject_phrase_stem_hits`** — pulls stem phrase matches into the ranked pool.
+- Lex fallback when exclude filters all fused candidates in folder-scoped search.
+
+### Changed
+
+- Thread eval queries: disambiguate nightwatch + soc2 labels (avoid generic ``thread`` token).
+
 ## [0.26.5] — 2026-08-31
 
 Closes retrieval pilot P0/P1 backlog: phrase/title rank boosts, 22-query eval,

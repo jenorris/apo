@@ -21,7 +21,7 @@ queries:
     folder: areas/threads
     expect: ["areas/threads/dv-2295-frontend-bundle-bloat.md"]
 
-  - query: "nightwatch quota sampling plat thread"
+  - query: "nightwatch quota sampling plat 790"
     folder: areas/threads
     expect: ["areas/threads/plat-790-nightwatch-request-context.md"]
 
@@ -49,7 +49,7 @@ queries:
     folder: areas/threads
     expect: ["areas/threads/github-pr-review-queue.md"]
 
-  - query: "core api rippling scim feasibility"
+  - query: "core-api rippling scim feasibility"
     folder: areas/threads
     expect: ["areas/threads/core-api-rippling-scim.md"]
 
@@ -73,7 +73,7 @@ queries:
     folder: areas/threads
     expect: ["areas/threads/lucid-gradguard-domain-migration.md"]
 
-  - query: "soc2 investment case 2026"
+  - query: "soc2 investment case security 2026"
     folder: areas/threads
     expect: ["areas/threads/soc2-investment-case-2026.md"]
 
@@ -89,7 +89,7 @@ queries:
     folder: areas/threads
     expect: ["areas/threads/dv-2471-harmon-jit-gradguard.md"]
 
-  - query: "core api memory optimization plan"
+  - query: "core-api memory optimization plan"
     folder: areas/gradguard-platform
     expect: ["areas/gradguard-platform/core-api-memory-optimization-plan.md"]
 

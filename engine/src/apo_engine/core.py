@@ -2226,6 +2226,9 @@ _TICKET_PREFIXES = frozenset(
 )
 _TICKET_ID_RE = re.compile(r"\b([a-z][a-z0-9-]*?)[-\s]+(\d{2,6})\b", re.I)
 _EVAL_ARTIFACT_STEMS = frozenset({"apo-qmd-retrieval-pilot", "search-eval"})
+_STEM_PHRASE_STOP = frozenset(
+    {"core", "api", "thread", "plat", "the", "and", "for", "gradguard", "integration", "feasibility"}
+)
 
 
 def _phrase_stem_boost(path: str, query: str) -> float:
@@ -2237,9 +2240,12 @@ def _phrase_stem_boost(path: str, query: str) -> float:
     best = 1.0
     for n in (4, 3, 2):
         for i in range(len(words) - n + 1):
-            hyphen = "-".join(words[i : i + n])
+            phrase_words = words[i : i + n]
+            if sum(1 for w in phrase_words if w not in _STEM_PHRASE_STOP) < 1:
+                continue
+            hyphen = "-".join(phrase_words)
             if hyphen in stem:
-                best = max(best, 1.0 + 0.11 * n)
+                best = max(best, 1.0 + 0.14 * n)
     return best
 
 
@@ -2370,6 +2376,112 @@ def _backlink_search_boost(path: str) -> float:
     return 1.0 + min(0.18, 0.04 * math.log1p(n))
 
 
+def _phrase_stem_paths_in_folder(query: str, folder_prefix: str, *, limit: int = 12) -> list[str]:
+    """Paths under folder whose stem contains a hyphenated phrase from the query."""
+    folder_clean = folder_prefix.replace("\\", "/").strip("/")
+    if not folder_clean:
+        return []
+    words = re.findall(r"[a-z0-9]+", (query or "").lower())
+    if len(words) < 2:
+        return []
+    db = reader_connect()
+    prefix = _escape_like(folder_clean) + "/%"
+    rows = db.execute(
+        "SELECT path FROM files WHERE path LIKE ? ESCAPE '\\' AND path LIKE '%.md'",
+        (prefix,),
+    ).fetchall()
+    scored: list[tuple[float, str]] = []
+    for (path,) in rows:
+        boost = _phrase_stem_boost(path, query)
+        if boost > 1.05:
+            scored.append((boost, path))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [p for _, p in scored[:limit]]
+
+
+def _inject_phrase_stem_hits(
+    hits: list[Hit],
+    query: str,
+    folder_prefix: str,
+    *,
+    explain: bool = False,
+    full_texts: list[str] | None = None,
+) -> tuple[list[Hit], list[str] | None]:
+    """Ensure phrase-stem filename matches enter the pool when hybrid search missed them."""
+    existing = {h.path for h in hits}
+    paths = _phrase_stem_paths_in_folder(query, folder_prefix)
+    if not paths:
+        return hits, full_texts
+    db = reader_connect()
+    top_score = hits[0].score if hits else 0.55
+    added_texts: list[str] = []
+    for path in paths:
+        if path in existing:
+            continue
+        row = db.execute(
+            """SELECT c.path, c.heading, c.text, c.chunk_hash, c.heading_level,
+                      c.start_line, c.end_line, f.mtime, COALESCE(f.bytes, 0),
+                      COALESCE(c.section_bytes, LENGTH(c.text)),
+                      COALESCE(c.content_hash, ''),
+                      COALESCE(c.chunk_kind, 'section'),
+                      COALESCE(c.row_key, ''), COALESCE(c.table_id, '')
+               FROM chunks c LEFT JOIN files f ON f.path = c.path
+               WHERE c.path = ? ORDER BY c.heading_level ASC, c.start_line ASC LIMIT 1""",
+            (path,),
+        ).fetchone()
+        if not row:
+            continue
+        (
+            path,
+            heading,
+            text,
+            chunk_hash,
+            hlevel,
+            start_line,
+            end_line,
+            mtime,
+            file_bytes,
+            section_bytes,
+            content_hash,
+            chunk_kind,
+            row_key,
+            table_id,
+        ) = row
+        path_mult, path_detail = _path_retrieval_boost(path, chunk_kind or "section", query)
+        score = round(top_score * 0.92 * path_mult, 4)
+        hit_explain: dict[str, Any] = {}
+        if explain:
+            hit_explain = {"phrase_stem_inject": True, **path_detail, "final_score": score}
+        hits.append(
+            Hit(
+                path=path,
+                heading=heading or "",
+                text=text,
+                score=score,
+                chunk_hash=chunk_hash or "",
+                heading_level=int(hlevel or 0),
+                start_line=int(start_line or 1),
+                end_line=int(end_line or 1),
+                source=str(vaults.notes_root() / path),
+                mtime=float(mtime or 0.0),
+                file_bytes=int(file_bytes or 0),
+                section_bytes=int(section_bytes or 0),
+                content_hash=content_hash or "",
+                chunk_kind=chunk_kind or "section",
+                row_key=row_key or "",
+                table_id=table_id or "",
+                explain=hit_explain,
+            )
+        )
+        added_texts.append(text)
+        existing.add(path)
+    if added_texts and full_texts is not None:
+        full_texts = full_texts + added_texts
+    if added_texts:
+        hits.sort(key=lambda h: h.score, reverse=True)
+    return hits, full_texts
+
+
 def _path_retrieval_boost(
     path: str,
     chunk_kind: str,
@@ -2445,9 +2557,13 @@ def _apply_path_boosts_to_hits(
     *,
     explain: bool = False,
     neighbor: bool = True,
+    folder: str = "",
 ) -> list[Hit]:
     if not hits:
         return hits
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    if folder_prefix:
+        hits, _ = _inject_phrase_stem_hits(hits, query, folder_prefix, explain=explain)
     for h in hits:
         mult, detail = _path_retrieval_boost(h.path, h.chunk_kind or "section", query)
         h.score = round(h.score * mult, 4)
@@ -3066,7 +3182,7 @@ def search_expanded(
         if len(out) >= collect_n:
             break
 
-    out = _apply_path_boosts_to_hits(out, primary_query, explain=explain)
+    out = _apply_path_boosts_to_hits(out, primary_query, explain=explain, folder=folder)
 
     if rerank_on and out:
         rerank_query = str((queries[0] or {}).get("query") or query)
@@ -3301,6 +3417,24 @@ def search(
         full_texts.append(text)
         if len(hits) >= collect_n:
             break
+    hits, full_texts = _inject_phrase_stem_hits(
+        hits, query, folder_prefix, explain=explain, full_texts=full_texts
+    )
+    if not hits and folder_prefix:
+        lex_fallback = search_lex_only(
+            query,
+            k=max(collect_n * 2, config.SEARCH_CANDIDATES),
+            folder=folder_prefix,
+            exclude=exclude,
+        )
+        if lex_fallback:
+            hits = lex_fallback[:collect_n]
+            full_texts = [h.text for h in hits]
+            for h in hits:
+                mult, detail = _path_retrieval_boost(h.path, h.chunk_kind or "section", query)
+                h.score = round(h.score * mult, 4)
+                if explain:
+                    h.explain = {**(h.explain or {}), **detail, "lex_fallback": True}
     # Re-sort after path/chunk boosts (catalog, slug/ticket, backlink, eval demotion).
     if hits:
         paired = sorted(zip(hits, full_texts), key=lambda p: p[0].score, reverse=True)
