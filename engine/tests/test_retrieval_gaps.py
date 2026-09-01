@@ -49,6 +49,14 @@ class RetrievalGapsTest(unittest.TestCase):
             "---\ntitle: DV-2295 bundle\n---\n\n# DV-2295\n\nfrontend bundle bloat ticket\n",
             encoding="utf-8",
         )
+        (threads / "github-pr-review-queue.md").write_text(
+            "---\ntitle: GitHub — human PR review queue (org-wide)\npermalink: github-pr-review-queue\n---\n\n# Review queue\n\norg-wide human review backlog routing\n",
+            encoding="utf-8",
+        )
+        (threads / "github-jenorris-open-prs.md").write_text(
+            "---\ntitle: GitHub — Jeremy open PRs (merge / review queue)\npermalink: github-jenorris-open-prs\n---\n\n# Jeremy PRs\n\nauthor open pull requests\n",
+            encoding="utf-8",
+        )
         (self.vault / "system" / "contracts").mkdir(parents=True)
         (self.vault / "system" / "contracts" / "usage-contract.schema.yaml").write_text(
             "layout:\n  areas: standing work areas\n",
@@ -72,6 +80,7 @@ class RetrievalGapsTest(unittest.TestCase):
             patch.stop()
         vaults._usage_layout_cache.clear()
         core._backlink_count_cache.clear()
+        core._frontmatter_boost_cache.clear()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_slug_boost_ranks_ticket_thread_first(self):
@@ -174,6 +183,36 @@ class RetrievalGapsTest(unittest.TestCase):
         tops = [r["source"] for r in out["results"]]
         self.assertNotIn("areas/threads/apo-qmd-retrieval-pilot.md", tops)
         self.assertEqual(tops[0], "areas/threads/itops-713-rippling-stripe-scim.md")
+
+    def test_github_review_queue_beats_jenorris_open_prs(self):
+        out = ops.search(
+            "github pull request review queue routing",
+            folder="areas/threads",
+            hybrid=False,
+            limit=5,
+        )
+        self.assertTrue(out["ok"])
+        tops = [r["source"] for r in out["results"]]
+        self.assertEqual(tops[0], "areas/threads/github-pr-review-queue.md")
+
+    def test_thread_eval_fixture_hit_rate(self):
+        """CI gate: embedded thread eval must stay at 100% on the mini corpus."""
+        from apo_engine import search_eval
+
+        fixture = self.tmp / "search-eval-mini.yaml"
+        fixture.write_text(
+            "k: 5\nqueries:\n"
+            '  - query: "itops 713 rippling stripe scim integration"\n'
+            '    folder: areas/threads\n'
+            '    expect: ["areas/threads/itops-713-rippling-stripe-scim.md"]\n'
+            '  - query: "github pull request review queue routing"\n'
+            '    folder: areas/threads\n'
+            '    expect: ["areas/threads/github-pr-review-queue.md"]\n',
+            encoding="utf-8",
+        )
+        report = search_eval.run_eval(fixture, k=5)
+        self.assertTrue(report["ok"])
+        self.assertGreaterEqual(report["hit_at_k"], 1.0)
 
 
 if __name__ == "__main__":

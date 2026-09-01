@@ -3,6 +3,7 @@
 #        just search-eval --file ~/.apo/search-eval-threads.yaml
 #
 # Labeled queries for areas/threads ticket/slug recall. Paths are vault-relative.
+# CI gate: engine/tests/test_retrieval_gaps.py::RetrievalGapsTest::test_thread_eval_fixture_hit_rate
 
 vault: work
 k: 5
@@ -55,3 +56,43 @@ queries:
   - query: "plat 995 tiktok capi integration"
     folder: areas/threads
     expect: ["areas/threads/plat-995-tiktok-capi.md"]
+
+  - query: "plat 980 aws email migration"
+    folder: areas/threads
+    expect: ["areas/threads/plat-980-aws-email-migration.md"]
+
+  - query: "tailscale credits renewal"
+    folder: areas/threads
+    expect: ["areas/threads/tailscale-credits-renewal.md"]
+
+  - query: "knowbe4 overdue security training"
+    folder: areas/threads
+    expect: ["areas/threads/knowbe4-overdue-training.md"]
+
+  - query: "lucid gradguard domain migration"
+    folder: areas/threads
+    expect: ["areas/threads/lucid-gradguard-domain-migration.md"]
+
+  - query: "soc2 investment case 2026"
+    folder: areas/threads
+    expect: ["areas/threads/soc2-investment-case-2026.md"]
+
+  - query: "stripe amtrust payment method domains"
+    folder: areas/threads
+    expect: ["areas/threads/stripe-amtrust-payment-method-domains.md"]
+
+  - query: "graphify skypad pilot"
+    folder: areas/threads
+    expect: ["areas/threads/graphify-skypad-pilot.md"]
+
+  - query: "dv 2471 harmon jit gradguard"
+    folder: areas/threads
+    expect: ["areas/threads/dv-2471-harmon-jit-gradguard.md"]
+
+  - query: "core api memory optimization plan"
+    folder: areas/gradguard-platform
+    expect: ["areas/gradguard-platform/core-api-memory-optimization-plan.md"]
+
+  - query: "floci opentofu pre deploy testing plan"
+    folder: areas/gradguard-platform
+    expect: ["areas/gradguard-platform/floci-opentofu-pre-deploy-testing-plan.md"]

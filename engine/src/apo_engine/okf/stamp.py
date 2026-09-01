@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from apo_engine.note_format import is_note_path
+from apo_engine.note_format import is_note_path, is_contract_schema_path
 from apo_engine.okf.contract import (
     OkfContract,
     PathRule,
@@ -99,6 +99,9 @@ def process_concept(
 
     rel = rel_path.replace("\\", "/").lstrip("/")
     if not is_note_path(rel):
+        return OkfResult(content=content, enforcement="off")
+
+    if is_contract_schema_path(rel):
         return OkfResult(content=content, enforcement="off")
 
     rule = match_rule(contract, rel)

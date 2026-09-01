@@ -2228,6 +2228,80 @@ _TICKET_ID_RE = re.compile(r"\b([a-z][a-z0-9-]*?)[-\s]+(\d{2,6})\b", re.I)
 _EVAL_ARTIFACT_STEMS = frozenset({"apo-qmd-retrieval-pilot", "search-eval"})
 
 
+def _phrase_stem_boost(path: str, query: str) -> float:
+    """Boost when consecutive query words appear hyphenated in the filename stem."""
+    stem = Path(path).stem.lower()
+    words = re.findall(r"[a-z0-9]+", (query or "").lower())
+    if len(words) < 2:
+        return 1.0
+    best = 1.0
+    for n in (4, 3, 2):
+        for i in range(len(words) - n + 1):
+            hyphen = "-".join(words[i : i + n])
+            if hyphen in stem:
+                best = max(best, 1.0 + 0.11 * n)
+    return best
+
+
+_frontmatter_boost_cache: dict[str, tuple[float, dict[str, str]]] = {}
+_frontmatter_boost_lock = threading.Lock()
+
+
+def _frontmatter_boost_fields(path: str) -> dict[str, str]:
+    """Cached title/permalink/description from index frontmatter for rank boosts."""
+    key = path.replace("\\", "/")
+    now = time.monotonic()
+    with _frontmatter_boost_lock:
+        cached = _frontmatter_boost_cache.get(key)
+        if cached is not None and (now - cached[0]) < 30.0:
+            return cached[1]
+    db = reader_connect()
+    row = db.execute("SELECT frontmatter FROM files WHERE path=?", (key,)).fetchone()
+    fields: dict[str, str] = {}
+    if row and row[0]:
+        try:
+            fm = json.loads(row[0])
+            if isinstance(fm, dict):
+                for k in ("title", "permalink", "description"):
+                    v = fm.get(k)
+                    if isinstance(v, str) and v.strip():
+                        fields[k] = v.strip()
+        except (json.JSONDecodeError, TypeError):
+            pass
+    with _frontmatter_boost_lock:
+        _frontmatter_boost_cache[key] = (now, fields)
+    return fields
+
+
+def _title_frontmatter_boost(path: str, query: str) -> float:
+    """Boost when cached title/permalink tokens align with the query (beyond filename)."""
+    q_lower = (query or "").lower()
+    q_tokens = {t for t in re.findall(r"[a-z0-9]+", q_lower) if len(t) > 2}
+    if len(q_tokens) < 2:
+        return 1.0
+    stem_tokens = set(re.split(r"[-_]", Path(path).stem.lower()))
+    stem_overlap = len(q_tokens & stem_tokens) / len(q_tokens)
+    if stem_overlap < 0.30:
+        return 1.0
+    fm = _frontmatter_boost_fields(path)
+    best = 1.0
+    q_words = re.findall(r"[a-z0-9]+", q_lower)
+    for key in ("title", "permalink", "description"):
+        text = (fm.get(key) or "").lower()
+        if not text:
+            continue
+        t_tokens = {t for t in re.findall(r"[a-z0-9]+", text) if len(t) > 2}
+        if t_tokens:
+            overlap = len(q_tokens & t_tokens) / len(q_tokens)
+            if overlap >= 0.45:
+                best = max(best, 1.0 + 0.16 * overlap)
+        for n in (3, 2):
+            for i in range(len(q_words) - n + 1):
+                if "-".join(q_words[i : i + n]) in text.replace("_", "-"):
+                    best = max(best, 1.0 + 0.10 * n)
+    return best
+
+
 def _slug_ticket_boost(path: str, query: str) -> float:
     """Boost when query ticket/slug tokens match the note filename stem."""
     stem = Path(path).stem.lower()
@@ -2303,10 +2377,18 @@ def _path_retrieval_boost(
 ) -> tuple[float, dict[str, float]]:
     """Post-fusion multipliers for slug/ticket recall and backlink rank."""
     slug = _slug_ticket_boost(path, query)
+    phrase = _phrase_stem_boost(path, query)
+    title_fm = _title_frontmatter_boost(path, query)
     demote = _eval_table_demotion(path, chunk_kind, query)
     bl = _backlink_search_boost(path)
-    combined = slug * demote * bl
-    detail = {"slug_boost": slug, "table_demotion": demote, "backlink_boost": bl}
+    combined = slug * phrase * title_fm * demote * bl
+    detail = {
+        "slug_boost": slug,
+        "phrase_stem_boost": phrase,
+        "title_frontmatter_boost": title_fm,
+        "table_demotion": demote,
+        "backlink_boost": bl,
+    }
     return combined, detail
 
 

@@ -52,6 +52,22 @@ def suffix_of(path: str | Path) -> str:
     return Path(str(path).replace("\\", "/")).suffix.lower()
 
 
+def is_contract_schema_path(path: str | Path) -> bool:
+    """True for machine contract/schema YAML under system/contracts or system/config."""
+    rel = str(path).replace("\\", "/").lstrip("/")
+    if not is_yaml_note(rel):
+        return False
+    if not (rel.startswith("system/contracts/") or rel.startswith("system/config/")):
+        return False
+    name = Path(rel).name.lower()
+    return (
+        name.endswith(".schema.yaml")
+        or name.endswith(".schema.yml")
+        or "-contract.schema." in name
+        or name.startswith("okf-profile.schema.")
+    )
+
+
 def is_note_path(path: str | Path) -> bool:
     return suffix_of(path) in NOTE_SUFFIXES
 

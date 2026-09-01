@@ -13,6 +13,16 @@ just search-eval --file ~/.apo/search-eval-threads.yaml --json   # thread ticket
 just search-eval --file ~/.apo/search-eval.yaml --json              # machine-readable
 ```
 
+**CI gate:** `engine/tests/test_retrieval_gaps.py::RetrievalGapsTest::test_thread_eval_fixture_hit_rate`
+runs the mini labeled fixture on every push (must stay at 100% hit@5 on the embedded corpus).
+
+**Corpus lint batch:** paginated mechanical fix (trailing whitespace):
+
+```bash
+APO_VAULT_PATHS=~/Notes/Work APO_DEFAULT_VAULT=work \\
+  python engine/scripts/lint_batch.py --vault work
+```
+
 The eval file lives **outside the repo** (it names your vault's paths). Label
 20–30 queries you actually ask, phrased how you'd ask them — not title copies.
 Metrics: **hit@k** (any expected path in top k) and **MRR@k**.
