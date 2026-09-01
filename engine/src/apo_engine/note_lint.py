@@ -7,6 +7,8 @@ See docs/library-scribe.md.
 from __future__ import annotations
 
 import re
+import threading
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Literal
@@ -333,6 +335,25 @@ def _wiki_targets(content: str) -> list[tuple[str, int]]:
     return out
 
 
+_wiki_index_cache: dict[str, tuple[float, dict[str, list[str]]]] = {}
+_wiki_index_cache_lock = threading.Lock()
+WIKI_INDEX_CACHE_TTL = 120.0
+
+
+def get_wiki_index(vault_root: Path) -> dict[str, list[str]]:
+    """Cached wiki link index for a vault root (lint sweeps + read_note lint)."""
+    key = str(vault_root.expanduser().resolve())
+    now = time.monotonic()
+    with _wiki_index_cache_lock:
+        hit = _wiki_index_cache.get(key)
+        if hit is not None and now - hit[0] < WIKI_INDEX_CACHE_TTL:
+            return hit[1]
+    idx = _build_wiki_index(vault_root)
+    with _wiki_index_cache_lock:
+        _wiki_index_cache[key] = (now, idx)
+    return idx
+
+
 def _build_wiki_index(vault_root: Path) -> dict[str, list[str]]:
     """Map lowercased stem / relative key → list of vault-relative paths."""
     index: dict[str, list[str]] = {}
@@ -379,7 +400,7 @@ def detect_broken_links(
     :func:`_build_wiki_index` walk of the *foreign* vault on every call in a
     sweep where many notes link into the same foreign vault.
     """
-    idx = wiki_index if wiki_index is not None else _build_wiki_index(vault_root)
+    idx = wiki_index if wiki_index is not None else get_wiki_index(vault_root)
     if foreign_idx_cache is None:
         foreign_idx_cache = {}
     flaws: list[Flaw] = []
@@ -710,7 +731,7 @@ def lint_folder(
             "warning": f"folder not found: {folder_n}" if folder_n else None,
         }
 
-    wiki_index = _build_wiki_index(vault_root) if include_links else None
+    wiki_index = get_wiki_index(vault_root) if include_links else None
     # Shared across every note in this sweep — without it, each note linking into the
     # same foreign vault re-walks that vault's entire file tree from scratch.
     foreign_idx_cache: dict[str, dict[str, list[str]]] = {}

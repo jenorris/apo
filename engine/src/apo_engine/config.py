@@ -156,13 +156,21 @@ EXCLUDE_CANDIDATE_FLOOR: int = int(os.environ.get("APO_EXCLUDE_CANDIDATE_FLOOR",
 # exclude floor — exact KNN over a large corpus dominates search p90.
 EXCLUDE_VEC_K: int = int(os.environ.get("APO_EXCLUDE_VEC_K", "64"))
 
+# Unscoped hybrid: cap global vec0 KNN neighbors (exact KNN over large indexes dominates p90).
+UNSCOPED_VEC_K: int = int(os.environ.get("APO_UNSCOPED_VEC_K", "48"))
+
 # Folder-scoped vector scan: above this chunk count, hybrid search scores FTS hits only
 # (avoids O(folder) Python L2 on huge folders). Override via APO_SCOPED_VECTOR_FULL_SCAN_MAX.
 SCOPED_VECTOR_FULL_SCAN_MAX: int = int(os.environ.get("APO_SCOPED_VECTOR_FULL_SCAN_MAX", "500"))
 
 # Cache identical query embeddings (seconds TTL; 0 disables).
-QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "120"))
-QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "64"))
+QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "600"))
+QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "128"))
+# Persist query embeddings in index meta across MCP process restarts (0 disables).
+QUERY_EMBED_DISK_CACHE: bool = env_bool("APO_QUERY_EMBED_DISK_CACHE", True)
+
+# Index embed batch size (Ollama input array length per request).
+EMBED_COMMIT_BATCH: int = int(os.environ.get("APO_EMBED_COMMIT_BATCH", "64"))
 
 # Cache vault registry discovery (dir walk + per-vault usage-contract YAML parse +
 # index-file resolution) for this many seconds; 0 disables. Invalidated immediately

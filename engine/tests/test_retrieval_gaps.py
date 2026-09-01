@@ -106,7 +106,11 @@ class RetrievalGapsTest(unittest.TestCase):
         self.assertIn("path_context", hit)
         self.assertGreaterEqual(len(hit["path_context"]), 2)
         self.assertIn("explain", hit)
-        self.assertIn("fused", hit["explain"])
+        # hybrid=False is keyword-only — no FTS/vec fusion ranks; path boosts still explain.
+        self.assertTrue(
+            "fused" in hit["explain"] or "slug_boost" in hit["explain"],
+            hit["explain"],
+        )
 
     def test_graph_neighbors_out_and_in(self):
         target = self.vault / "areas" / "threads" / "core-api-rippling-scim.md"

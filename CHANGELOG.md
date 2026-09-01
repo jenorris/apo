@@ -4,6 +4,36 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.26.7] — 2026-09-01
+
+Search and index performance: keyword-only routing, embed disk cache, vec0 caps,
+lint sweep cache, streaming index embed.
+
+### Fixed
+
+- **`hybrid=False`** — routes to keyword-only search (no query embed, no folder
+  vector scan); fixes ~25× regression on folder-scoped lex queries.
+- **Lex fallback** — only runs when `hybrid=True` (hybrid fusion path).
+
+### Added
+
+- **Query embed disk cache** — persists in index `meta` across MCP restarts
+  (`APO_QUERY_EMBED_DISK_CACHE`, default on; TTL 600s).
+- **`UNSCOPED_VEC_K`** — caps global vec0 KNN on large vaults (default 48).
+- **Large-folder vector approx** — global vec0 oversample + path filter when
+  folder chunk count exceeds `SCOPED_VECTOR_FULL_SCAN_MAX`.
+- **Vault lint sweep cache** — paginated `vault(lint)` reuses merged payload 120s.
+- **Wiki index cache** — shared across lint sweeps and broken-link detection.
+- **`APO_EMBED_COMMIT_BATCH`** — configurable index embed batch size.
+- Tests: `test_search_perf.py`, updated pool/hybrid tests.
+
+### Changed
+
+- Index embed commits stream batch-by-batch (lower peak memory on large rebuilds).
+- Stem index built once per `index_vault` / `index_files` batch (not per file).
+- Phrase-stem folder scan prefilter skips obvious non-matches.
+- CLI `--no-hybrid` help: keyword-only (was incorrectly labeled vector-only).
+
 ## [0.26.6] — 2026-08-31
 
 Phrase-stem **candidate injection** when hybrid search misses filename matches; lex

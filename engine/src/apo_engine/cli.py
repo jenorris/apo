@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("-k", type=int, default=8, help="number of results")
     ps.add_argument("--exclude", nargs="*", default=[], help="glob(s) of paths to drop (e.g. 'private/*')")
     ps.add_argument("--json", action="store_true")
-    ps.add_argument("--no-hybrid", action="store_true", help="vector-only (skip FTS5 BM25 fusion)")
+    ps.add_argument("--no-hybrid", action="store_true", help="keyword-only (skip vector fusion and query embed)")
     ps.add_argument("--vault", default="", help="usage-contract vault_id")
     ps.set_defaults(func=_cmd_search)
 

@@ -73,8 +73,12 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.*)")
 _WIKILINK = re.compile(r"\[\[([^\]#|]+)(?:[#|][^\]]*)?\]\]")
 _FM_KEY_SAFE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-# How many embeddings to commit per batch during vault index (matches Ollama batch).
-_EMBED_COMMIT_BATCH = 64
+def _embed_commit_batch() -> int:
+    try:
+        n = int(getattr(config, "EMBED_COMMIT_BATCH", 64))
+    except (TypeError, ValueError):
+        n = 64
+    return max(1, n)
 
 
 def _hybrid_candidate_pools(
@@ -96,6 +100,9 @@ def _hybrid_candidate_pools(
         fts_n = min(total_chunks, max(base, config.EXCLUDE_CANDIDATE_FLOOR))
         vec_n = min(total_chunks, config.EXCLUDE_VEC_K)
         return fts_n, vec_n
+    if not folder_prefix:
+        vec_cap = int(getattr(config, "UNSCOPED_VEC_K", 48))
+        return base, min(total_chunks, base, vec_cap)
     return base, base
 
 
@@ -384,7 +391,8 @@ def _embed_batch_resilient(texts: list[str], poisoned: list[int]) -> list[list[f
     return _embed_batch_resilient(texts[:mid], poisoned) + _embed_batch_resilient(texts[mid:], poisoned)
 
 
-def _embed_ollama(texts: list[str], batch: int = 64, verbose: bool = False) -> list[list[float] | None]:
+def _embed_ollama(texts: list[str], batch: int | None = None, verbose: bool = False) -> list[list[float] | None]:
+    batch = batch or _embed_commit_batch()
     out: list[list[float] | None] = []
     poisoned: list[int] = []
     for i in range(0, len(texts), batch):
@@ -424,6 +432,56 @@ def _normalize_query(query: str) -> str:
     return " ".join(query.split())
 
 
+def _query_embed_meta_key(norm_query: str) -> str:
+    model = (config.MODEL_NAME or "").strip()
+    digest = hashlib.blake2b(f"{model}\0{norm_query}".encode(), digest_size=16).hexdigest()
+    return f"qemb:{digest}"
+
+
+def _load_query_embed_disk(norm_query: str) -> list[float] | None:
+    if not norm_query or not getattr(config, "QUERY_EMBED_DISK_CACHE", False):
+        return None
+    ttl = config.QUERY_EMBED_TTL
+    if ttl <= 0:
+        return None
+    try:
+        db = reader_connect()
+        row = db.execute(
+            "SELECT value FROM meta WHERE key=?",
+            (_query_embed_meta_key(norm_query),),
+        ).fetchone()
+        if not row or not row[0]:
+            return None
+        payload = json.loads(row[0])
+        if payload.get("model") != config.MODEL_NAME:
+            return None
+        if time.time() - float(payload.get("at") or 0) > ttl:
+            return None
+        vec = payload.get("vec")
+        return vec if isinstance(vec, list) and vec else None
+    except (OSError, sqlite3.Error, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _save_query_embed_disk(norm_query: str, vec: list[float]) -> None:
+    if not norm_query or not vec or not getattr(config, "QUERY_EMBED_DISK_CACHE", False):
+        return
+    if config.QUERY_EMBED_TTL <= 0:
+        return
+    try:
+        db = writer_connect()
+        db.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+            (
+                _query_embed_meta_key(norm_query),
+                json.dumps({"model": config.MODEL_NAME, "vec": vec, "at": time.time()}),
+            ),
+        )
+        db.commit()
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        pass
+
+
 def query_embed(query: str) -> list[float]:
     """Embed a search query with a short TTL cache for repeated agent lookups.
 
@@ -440,6 +498,14 @@ def query_embed(query: str) -> list[float]:
             if hit is not None and now - hit[0] < ttl:
                 _query_embed_cache.move_to_end(key)
                 return hit[1]
+        disk = _load_query_embed_disk(key)
+        if disk is not None:
+            with _query_embed_lock:
+                _query_embed_cache[key] = (now, disk)
+                _query_embed_cache.move_to_end(key)
+                while len(_query_embed_cache) > config.QUERY_EMBED_CACHE_SIZE:
+                    _query_embed_cache.popitem(last=False)
+            return disk
     prefix = getattr(config, "QUERY_PREFIX", "") or ""
     vec = embed([prefix + query if prefix else query])[0]
     if ttl > 0 and key and vec is not None:
@@ -448,12 +514,19 @@ def query_embed(query: str) -> list[float]:
             _query_embed_cache.move_to_end(key)
             while len(_query_embed_cache) > config.QUERY_EMBED_CACHE_SIZE:
                 _query_embed_cache.popitem(last=False)
+        _save_query_embed_disk(key, vec)
     return vec
 
 
 def clear_query_embed_cache() -> None:
     with _query_embed_lock:
         _query_embed_cache.clear()
+    try:
+        db = writer_connect()
+        db.execute("DELETE FROM meta WHERE key LIKE 'qemb:%'")
+        db.commit()
+    except (OSError, sqlite3.Error):
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -1271,29 +1344,25 @@ def _embed_and_store_pending(
     if not pending:
         return 0, set()
     total = len(pending)
+    batch = _embed_commit_batch()
     if verbose:
         print(
             f"  embedding {total} chunks via {config.EMBED_BACKEND}:{config.MODEL_NAME} ...",
             flush=True,
         )
-    # Embed everything first so we know which paths failed before writing any chunks.
-    all_vectors: list[list[float] | None] = []
-    batch = _EMBED_COMMIT_BATCH
-    for i in range(0, total, batch):
-        part = pending[i : i + batch]
-        all_vectors.extend(embed([_pending_index_text(t) for t in part], verbose=False))
-        if verbose:
-            print(f"  … embedded {min(i + batch, total)}/{total}", flush=True)
-
-    dropped = {row[0] for row, vec in zip(pending, all_vectors) if vec is None}
+    dropped: set[str] = set()
     stored = 0
     for i in range(0, total, batch):
         part = pending[i : i + batch]
-        part_v = all_vectors[i : i + batch]
-        # Skip every chunk for a dropped path so we never leave a partial note indexed.
+        part_vectors = embed([_pending_index_text(t) for t in part], verbose=False)
+        if verbose:
+            print(f"  … embedded {min(i + batch, total)}/{total}", flush=True)
+        for row, vec in zip(part, part_vectors):
+            if vec is None:
+                dropped.add(row[0])
         filtered_p: list = []
         filtered_v: list = []
-        for row, vec in zip(part, part_v):
+        for row, vec in zip(part, part_vectors):
             if row[0] in dropped or vec is None:
                 continue
             filtered_p.append(row)
@@ -1533,6 +1602,7 @@ def _index_vault_impl(
     file_stamps: list[tuple[str, float, str, str | None]] = []
     stats = IndexStats()
     mtime_refreshed = False
+    stem_index = _build_stem_index(db)
 
     # Stream paths — avoid materializing the full vault path list in memory.
     notes_iter = _iter_notes(root, ignore)
@@ -1613,7 +1683,7 @@ def _index_vault_impl(
                 )
             pending.append(row)
         if wikilinks:
-            stem_index = _build_stem_index(db, extra_paths=list(on_disk))
+            _stem_index_add(stem_index, rel)
             resolved = _resolve_wikilinks_for_index(wikilinks, stem_index)
             db.executemany(
                 "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
@@ -1837,6 +1907,43 @@ def _l2_sq_batch(qvec: list[float], id_blob_pairs: list[tuple[int, bytes]]) -> l
     return out
 
 
+def _folder_vector_via_global_knn(
+    db: sqlite3.Connection,
+    qvec: list[float],
+    folder_prefix: str,
+    n: int,
+) -> list[tuple[int, float]]:
+    """Approximate folder KNN via global vec0 oversample + path filter (large folders)."""
+    oversample = max(n * 12, n)
+    try:
+        vrows = db.execute(
+            "SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+            (sqlite_vec.serialize_float32(qvec), oversample),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    if not vrows:
+        return []
+    ids = [r[0] for r in vrows]
+    placeholders = ",".join("?" * len(ids))
+    paths = {
+        row[0]: row[1]
+        for row in db.execute(
+            f"SELECT id, path FROM chunks WHERE id IN ({placeholders})",
+            ids,
+        )
+    }
+    prefix = folder_prefix.replace("\\", "/").strip("/") + "/"
+    out: list[tuple[int, float]] = []
+    for rid, dist in vrows:
+        path = paths.get(rid)
+        if path and path.startswith(prefix):
+            out.append((rid, dist))
+        if len(out) >= n:
+            break
+    return out
+
+
 def _scoped_vector_hits(
     db: sqlite3.Connection,
     qvec: list[float],
@@ -1864,17 +1971,27 @@ def _scoped_vector_hits(
         scored.extend(_l2_sq_batch(qvec, rows))
 
     max_full = int(getattr(config, "SCOPED_VECTOR_FULL_SCAN_MAX", 500))
+    folder_like = _escape_like(folder_prefix) + "/%"
     skip_full = bool(prefer_ids) and len(prefer_ids) >= n
+    folder_cnt = 0
     if not skip_full:
         # Cheap count: if folder is huge and we already have FTS prefs, stay prefiltered.
-        folder_like = _escape_like(folder_prefix) + "/%"
         if prefer_ids:
-            cnt = db.execute(
+            folder_cnt = db.execute(
                 "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL AND path LIKE ? ESCAPE '\\'",
                 (folder_like,),
             ).fetchone()[0]
-            if cnt > max_full:
+            if folder_cnt > max_full:
                 skip_full = True
+        elif not prefer_ids:
+            folder_cnt = db.execute(
+                "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL AND path LIKE ? ESCAPE '\\'",
+                (folder_like,),
+            ).fetchone()[0]
+            if folder_cnt > max_full:
+                approx = _folder_vector_via_global_knn(db, qvec, folder_prefix, n)
+                if approx:
+                    return approx
 
     if not skip_full:
         seen = {rid for _, rid in scored}
@@ -2068,15 +2185,14 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
 
     for rel in purge_rels:
         _delete_path_by_rel(db, rel)
+    stem_index = _build_stem_index(db, extra_paths=[p.rel for p in active if p.wikilinks])
     for plan in active:
         prev = known.get(plan.rel)
         _delete_path(db, plan.rel)
         if not (prev is not None and prev[1] == ""):
             db.execute("DELETE FROM files WHERE path=?", (plan.rel,))
         if plan.wikilinks:
-            stem_index = _build_stem_index(
-                db, extra_paths=[p.rel for p in active if p.wikilinks]
-            )
+            _stem_index_add(stem_index, plan.rel)
             resolved = _resolve_wikilinks_for_index(plan.wikilinks, stem_index)
             db.executemany(
                 "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
@@ -2126,10 +2242,11 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
     }
     # Notes with no chunks never appear in all_vectors — they are not dropped.
     if all_pending:
-        for i in range(0, len(all_pending), _EMBED_COMMIT_BATCH):
-            part_p = all_pending[i : i + _EMBED_COMMIT_BATCH]
-            part_v = all_vectors[i : i + _EMBED_COMMIT_BATCH]
-            part_o = pending_owner[i : i + _EMBED_COMMIT_BATCH]
+        for i in range(0, len(all_pending), _embed_commit_batch()):
+            batch = _embed_commit_batch()
+            part_p = all_pending[i : i + batch]
+            part_v = all_vectors[i : i + batch]
+            part_o = pending_owner[i : i + batch]
             keep_p: list = []
             keep_v: list = []
             for row, vec, owner in zip(part_p, part_v, part_o):
@@ -2142,7 +2259,7 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
                 db.commit()
             if verbose and texts_to_embed:
                 print(
-                    f"  … stored {min(i + _EMBED_COMMIT_BATCH, len(all_pending))}/{len(all_pending)} chunks",
+                    f"  … stored {min(i + batch, len(all_pending))}/{len(all_pending)} chunks",
                     flush=True,
                 )
     quarantined: set[str] = set()
@@ -2392,6 +2509,10 @@ def _phrase_stem_paths_in_folder(query: str, folder_prefix: str, *, limit: int =
     ).fetchall()
     scored: list[tuple[float, str]] = []
     for (path,) in rows:
+        stem = Path(path).stem.lower()
+        # Cheap prefilter before hyphenated phrase scan (O(folder) but skips regex work).
+        if not any(len(w) > 2 and w in stem for w in words):
+            continue
         boost = _phrase_stem_boost(path, query)
         if boost > 1.05:
             scored.append((boost, path))
@@ -3201,6 +3322,48 @@ def search_expanded(
     return out
 
 
+def _search_lex_boosted(
+    query: str,
+    k: int,
+    *,
+    exclude: list[str] | None = None,
+    folder: str = "",
+    snippet_chars: int = 0,
+    explain: bool = False,
+) -> list[Hit]:
+    """Keyword-only search with retrieval boosts (no query embed, no vector scan)."""
+    folder_prefix = folder.replace("\\", "/").strip("/")
+    rerank_on = config.RERANK and k > 0
+    collect_n = max(k, config.RERANK_POOL) if rerank_on else k
+    hits = search_lex_only(
+        query,
+        k=max(collect_n * 2, config.SEARCH_CANDIDATES),
+        folder=folder_prefix,
+        snippet_chars=snippet_chars,
+        exclude=exclude,
+    )
+    full_texts = [h.text for h in hits]
+    hits = _apply_path_boosts_to_hits(
+        hits, query, explain=explain, neighbor=True, folder=folder_prefix
+    )
+    full_texts = [h.text for h in hits]
+    if rerank_on and hits:
+        scores, status = rerank.rerank_scores(query, full_texts)
+        if scores is not None:
+            lo, hi = min(scores), max(scores)
+            span = hi - lo
+            for rrf_rank, h in enumerate(hits):
+                rr_norm = (scores[rrf_rank] - lo) / span if span > 0 else 1.0
+                w = 0.75 if rrf_rank < 3 else 0.60 if rrf_rank < 10 else 0.40
+                h.score = round(w * h.score + (1 - w) * rr_norm, 4)
+            hits.sort(key=lambda h: h.score, reverse=True)
+        _search_rerank.set(status)
+        hits = hits[:k] if k > 0 else hits
+    elif k > 0:
+        hits = hits[:k]
+    return hits
+
+
 def search(
     query: str,
     k: int = 8,
@@ -3230,6 +3393,15 @@ def search(
     """
     _search_degraded.set(None)
     _search_rerank.set(None)
+    if not hybrid:
+        return _search_lex_boosted(
+            query,
+            k,
+            exclude=exclude,
+            folder=folder,
+            snippet_chars=snippet_chars,
+            explain=explain,
+        )
     db = reader_connect()
     if db.execute("SELECT value FROM meta WHERE key='dim'").fetchone() is None:
         raise SystemExit("Index is empty — run `apo-engine index` first.")
@@ -3420,7 +3592,7 @@ def search(
     hits, full_texts = _inject_phrase_stem_hits(
         hits, query, folder_prefix, explain=explain, full_texts=full_texts
     )
-    if not hits and folder_prefix:
+    if hybrid and not hits and folder_prefix:
         lex_fallback = search_lex_only(
             query,
             k=max(collect_n * 2, config.SEARCH_CANDIDATES),

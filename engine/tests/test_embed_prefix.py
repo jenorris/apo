@@ -52,6 +52,7 @@ class EmbedPrefixTest(unittest.TestCase):
 
         with mock.patch.object(config, "QUERY_PREFIX", _PREFIX), \
              mock.patch.object(config, "QUERY_EMBED_TTL", 120), \
+             mock.patch.object(config, "QUERY_EMBED_DISK_CACHE", False), \
              mock.patch.object(core, "embed", _capture):
             core.query_embed("same query")
             core.query_embed("same query")

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import time
 from datetime import datetime, time as dt_time
 from pathlib import Path
@@ -85,6 +86,86 @@ class OpsError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+_lint_sweep_cache: dict[tuple[str, str, bool], tuple[float, dict[str, Any]]] = {}
+_lint_sweep_cache_lock = threading.Lock()
+_LINT_SWEEP_CACHE_TTL = 120.0
+
+
+def _lint_cache_fingerprint(root: Path) -> str:
+    parts: list[str] = []
+    for rel in (
+        "system/contracts/read-contract.schema.yaml",
+        "system/contracts/archival-contract.schema.yaml",
+    ):
+        p = root / rel
+        if p.is_file():
+            try:
+                parts.append(f"{rel}:{p.stat().st_mtime_ns}")
+            except OSError:
+                parts.append(rel)
+    return "|".join(parts) or "none"
+
+
+def _vault_lint_merged_payload(
+    b: vaults.VaultBinding,
+    *,
+    folder_s: str,
+    fix: bool,
+    known_skills: list[str] | None,
+) -> dict[str, Any]:
+    """Full merged lint payload — cached across paginated vault(lint) calls."""
+    root = b.resolved().root
+    cache_key = (b.name, folder_s, bool(fix), _lint_cache_fingerprint(root))
+    now = time.monotonic()
+    if not fix:
+        with _lint_sweep_cache_lock:
+            hit = _lint_sweep_cache.get(cache_key)
+            if hit is not None and now - hit[0] < _LINT_SWEEP_CACHE_TTL:
+                return hit[1]
+    data = archival_contract.load_archival_contract(root)
+    arch = archival_contract.lint_vault(
+        root,
+        data,
+        folder=folder_s,
+        limit=100_000,
+        offset=0,
+        vault_name=b.name,
+    )
+    notes = note_lint.lint_folder(
+        root,
+        folder=folder_s,
+        limit=100_000,
+        offset=0,
+        vault_name=b.name,
+        include_links=True,
+        known_skills=known_skills,
+        fix=bool(fix),
+    )
+    merged_flaws: list[dict[str, Any]] = []
+    for part in (arch, notes):
+        for f in part.get("flaws") or []:
+            if isinstance(f, dict):
+                merged_flaws.append(f)
+    merged_flaws.extend(
+        f.as_dict()
+        for f in note_lint.detect_read_contract_type_mismatches(root, vault=b.name)
+    )
+    counts: dict[str, int] = {}
+    for f in merged_flaws:
+        code = str(f.get("code") or "?")
+        counts[code] = counts.get(code, 0) + 1
+    payload = {
+        "merged_flaws": merged_flaws,
+        "counts_by_code": counts,
+        "arch": arch,
+        "notes": notes,
+    }
+    if not fix:
+        with _lint_sweep_cache_lock:
+            _lint_sweep_cache[cache_key] = (now, payload)
+    return payload
 
 
 def _err(**kw: Any) -> dict[str, Any]:
@@ -4364,43 +4445,19 @@ def vault_op(
             return _err(error="bad_request", message="limit must be >= 0 or null")
         if offset < 0:
             return _err(error="bad_request", message="offset must be >= 0")
-        root = b.resolved().root
         folder_s = (folder or "").strip()
         lim = 50 if limit is None else int(limit)
         off = int(offset)
-        # Collect full detector sets then paginate once (stable merge).
-        data = archival_contract.load_archival_contract(root)
-        arch = archival_contract.lint_vault(
-            root,
-            data,
-            folder=folder_s,
-            limit=100_000,
-            offset=0,
-            vault_name=b.name,
-        )
-        notes = note_lint.lint_folder(
-            root,
-            folder=folder_s,
-            limit=100_000,
-            offset=0,
-            vault_name=b.name,
-            include_links=True,
-            known_skills=known_skills,
+        merged = _vault_lint_merged_payload(
+            b,
+            folder_s=folder_s,
             fix=bool(fix),
+            known_skills=known_skills,
         )
-        merged_flaws: list[dict[str, Any]] = []
-        for part in (arch, notes):
-            for f in part.get("flaws") or []:
-                if isinstance(f, dict):
-                    merged_flaws.append(f)
-        merged_flaws.extend(
-            f.as_dict()
-            for f in note_lint.detect_read_contract_type_mismatches(root, vault=b.name)
-        )
-        counts: dict[str, int] = {}
-        for f in merged_flaws:
-            code = str(f.get("code") or "?")
-            counts[code] = counts.get(code, 0) + 1
+        merged_flaws = merged["merged_flaws"]
+        counts = merged["counts_by_code"]
+        arch = merged["arch"]
+        notes = merged["notes"]
         sliced = merged_flaws[off : off + lim]
         out: dict[str, Any] = {
             "ok": True,

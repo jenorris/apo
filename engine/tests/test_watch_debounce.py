@@ -124,7 +124,9 @@ class QueryEmbedCacheTest(unittest.TestCase):
         self.calls = 0
         core.clear_query_embed_cache()
         self._ttl = config.QUERY_EMBED_TTL
+        self._disk = getattr(config, "QUERY_EMBED_DISK_CACHE", False)
         config.QUERY_EMBED_TTL = 60.0
+        config.QUERY_EMBED_DISK_CACHE = False
 
         def counting(texts, **kwargs):
             self.calls += 1
@@ -135,6 +137,7 @@ class QueryEmbedCacheTest(unittest.TestCase):
     def tearDown(self):
         core.embed = self._embed
         config.QUERY_EMBED_TTL = self._ttl
+        config.QUERY_EMBED_DISK_CACHE = self._disk
         core.clear_query_embed_cache()
 
     def test_cache_hit(self):

@@ -51,7 +51,16 @@ class HybridCandidatePoolsTest(unittest.TestCase):
         )
         base = max(5 * 4, config.SEARCH_CANDIDATES)
         self.assertEqual(fts_n, base)
-        self.assertEqual(vec_n, base)
+        self.assertEqual(vec_n, min(33516, base, config.UNSCOPED_VEC_K))
+
+    def test_unscoped_no_exclude_caps_vec(self):
+        _, vec_n = core._hybrid_candidate_pools(
+            8,
+            exclude=False,
+            folder_prefix="",
+            total_chunks=73228,
+        )
+        self.assertLessEqual(vec_n, config.UNSCOPED_VEC_K)
 
     def test_exclude_vec_k_env_override(self):
         with mock.patch.object(config, "EXCLUDE_VEC_K", 48):

@@ -158,12 +158,12 @@ class MissingFolderWarningTest(unittest.TestCase):
         self.assertTrue(out["results"], out)
         self.assertIn("keyword-only", out.get("warning", ""))
 
-    def test_embed_down_no_hybrid_returns_empty_with_warning(self):
-        with mock.patch.object(core, "query_embed", lambda q: None):
+    def test_embed_down_no_hybrid_still_lex_with_warning(self):
+        with mock.patch.object(core, "query_embed", side_effect=AssertionError("no embed")):
             out = ops.search("alpha widget", limit=3, hybrid=False)
         self.assertTrue(out["ok"], out)
-        self.assertEqual(out["results"], [])
-        self.assertIn("embedding failed", out.get("warning", ""))
+        self.assertTrue(out["results"], out)
+        self.assertNotIn("embedding failed", out.get("warning", ""))
 
 
 if __name__ == "__main__":
