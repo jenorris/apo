@@ -4,6 +4,23 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.26.9] — 2026-09-01
+
+Unscoped exclude search latency — cap hit hydration and push prefix excludes into FTS.
+
+### Fixed
+
+- **Unscoped + default exclude** — no longer hydrates the entire fused pool (~500 hits);
+  capped at ``EXCLUDE_HIT_SCAN_MAX`` (default 96) and iterates ``ids`` not full ``ranked``.
+- **Architecture queries** — promotion pool capped at ``ARCH_PROMOTE_POOL`` (48); cut to ``k``
+  after reorder (was returning 48 hits to ops).
+- **FTS exclude pushdown** — prefix globs (``archives/*``, etc.) applied in FTS SQL via
+  ``JOIN chunks`` so excluded paths never enter the fused pool.
+
+### Added
+
+- Config: ``APO_EXCLUDE_HIT_SCAN_MAX``, ``APO_ARCH_PROMOTE_POOL``.
+
 ## [0.26.8] — 2026-09-01
 
 Corpus hygiene automation, expanded thread eval, and search boost batch prefetch.

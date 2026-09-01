@@ -2832,6 +2832,18 @@ def _path_excluded(path: str, prefixes: list[str], globs: list[re.Pattern[str]])
     return any(g.fullmatch(path) is not None for g in globs)
 
 
+def _sql_path_prefix_excludes(prefixes: list[str]) -> tuple[str, list[Any]]:
+    """SQL ``AND c.path NOT LIKE …`` fragments for prefix-style exclude globs."""
+    parts: list[str] = []
+    params: list[Any] = []
+    for pref in prefixes:
+        parts.append("c.path NOT LIKE ? ESCAPE '\\'")
+        params.append(_escape_like(pref) + "%")
+    if not parts:
+        return "", []
+    return " AND " + " AND ".join(parts), params
+
+
 # --------------------------------------------------------------------------- #
 # Snippet construction — signal-density-per-character compression, not
 # retrieval. Reranking (below) always scores full_texts; snippet_chars only
@@ -3494,21 +3506,26 @@ def search(
         if fts_ready and fts_ready[0] == "1":
             match = _fts_query(query)
             if match:
+                excl_sql, excl_params = _sql_path_prefix_excludes(excl_prefixes)
                 try:
                     if folder_prefix:
                         frows = db.execute(
-                            """SELECT chunks_fts.rowid
+                            f"""SELECT chunks_fts.rowid
                                FROM chunks_fts
                                JOIN chunks c ON c.id = chunks_fts.rowid
                                WHERE chunks_fts MATCH ?
-                                 AND c.path LIKE ? ESCAPE '\\'
+                                 AND c.path LIKE ? ESCAPE '\\'{excl_sql}
                                ORDER BY rank LIMIT ?""",
-                            (match, _escape_like(folder_prefix) + "/%", fts_n),
+                            (match, _escape_like(folder_prefix) + "/%", *excl_params, fts_n),
                         ).fetchall()
                     else:
                         frows = db.execute(
-                            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
-                            (match, fts_n),
+                            f"""SELECT chunks_fts.rowid
+                               FROM chunks_fts
+                               JOIN chunks c ON c.id = chunks_fts.rowid
+                               WHERE chunks_fts MATCH ?{excl_sql}
+                               ORDER BY rank LIMIT ?""",
+                            (match, *excl_params, fts_n),
                         ).fetchall()
                 except sqlite3.OperationalError:
                     frows = []
@@ -3553,7 +3570,8 @@ def search(
     # fetch all fused candidates so we don't under-fill k after filtering.
     vault_wide_arch = (not folder_prefix) and _is_architecture_query(query)
     if exclude:
-        fetch_n = len(ranked)
+        scan_cap = int(getattr(config, "EXCLUDE_HIT_SCAN_MAX", 96))
+        fetch_n = min(len(ranked), max(collect_n * 4, scan_cap))
     else:
         fetch_n = min(len(ranked), max(collect_n * 2, collect_n + 8))
         # Wider pool so vault-wide mermaid boosts can promote diagrams that
@@ -3562,7 +3580,8 @@ def search(
             fetch_n = min(len(ranked), max(fetch_n, 48))
     # Collect enough candidates for post-fusion boost reordering (then cut to k).
     if vault_wide_arch and not rerank_on and k > 0:
-        collect_n = fetch_n
+        promote = int(getattr(config, "ARCH_PROMOTE_POOL", 48))
+        collect_n = min(fetch_n, promote)
     ids = ranked[:fetch_n]
     by_id: dict[int, tuple] = {}
     if ids:
@@ -3585,7 +3604,7 @@ def search(
 
     hits: list[Hit] = []
     full_texts: list[str] = []  # non-snippet bodies for the reranker
-    for rid in ranked:
+    for rid in ids:
         row = by_id.get(rid)
         if row is None:
             continue
@@ -3681,10 +3700,7 @@ def search(
         paired = sorted(zip(hits, full_texts), key=lambda p: p[0].score, reverse=True)
         hits = [p[0] for p in paired]
         full_texts = [p[1] for p in paired]
-        catalog_folder = bool(
-            folder_prefix and "mermaid-catalog" in folder_prefix.replace("\\", "/")
-        )
-        if vault_wide_arch and not rerank_on and k > 0 and catalog_folder:
+        if vault_wide_arch and not rerank_on and k > 0:
             hits = hits[:k]
             full_texts = full_texts[:k]
     hits = _neighbor_rank_boost(hits, query, explain=explain)

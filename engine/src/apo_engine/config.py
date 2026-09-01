@@ -156,6 +156,12 @@ EXCLUDE_CANDIDATE_FLOOR: int = int(os.environ.get("APO_EXCLUDE_CANDIDATE_FLOOR",
 # exclude floor — exact KNN over a large corpus dominates search p90.
 EXCLUDE_VEC_K: int = int(os.environ.get("APO_EXCLUDE_VEC_K", "64"))
 
+# Unscoped + exclude: max fused candidates to hydrate for post-filter (not full ranked scan).
+EXCLUDE_HIT_SCAN_MAX: int = int(os.environ.get("APO_EXCLUDE_HIT_SCAN_MAX", "96"))
+
+# Vault-wide architecture queries: cap post-fusion promotion pool (mermaid catalog boost).
+ARCH_PROMOTE_POOL: int = int(os.environ.get("APO_ARCH_PROMOTE_POOL", "48"))
+
 # Unscoped hybrid: cap global vec0 KNN neighbors (exact KNN over large indexes dominates p90).
 UNSCOPED_VEC_K: int = int(os.environ.get("APO_UNSCOPED_VEC_K", "48"))
 
