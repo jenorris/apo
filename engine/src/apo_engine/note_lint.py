@@ -376,6 +376,68 @@ def _build_wiki_index(vault_root: Path) -> dict[str, list[str]]:
     return index
 
 
+def _wikilink_candidates(
+    target: str,
+    idx: dict[str, list[str]],
+    root: Path,
+    *,
+    exclude_path: str | None = None,
+) -> list[str]:
+    """Resolve a wikilink target against one vault's wiki index."""
+    key = target.replace("\\", "/").strip().lower()
+    candidates = idx.get(key) or idx.get(key.rsplit("/", 1)[-1]) or []
+    uniq = sorted(set(candidates))
+    if exclude_path:
+        uniq = [c for c in uniq if c != exclude_path]
+    if not uniq:
+        root_res = root.resolve()
+        for rel in (
+            f"{target}.md" if not target.endswith(".md") else target,
+            target,
+        ):
+            rel_n = rel.replace("\\", "/")
+            try:
+                p = (root / rel_n).resolve()
+                p.relative_to(root_res)
+            except (ValueError, OSError):
+                continue
+            if p.is_file():
+                return [rel_n]
+    return uniq
+
+
+def resolve_foreign_wikilink(
+    raw_target: str,
+    *,
+    current_vault: str,
+    vault_roots: dict[str, Path],
+    foreign_idx_cache: dict[str, dict[str, list[str]]] | None = None,
+) -> tuple[str, str] | None:
+    """Return ``(vault_id, rel_path)`` when *raw_target* resolves uniquely in a sibling vault."""
+    if _VAULT_PREFIX_RE.match(raw_target):
+        return None
+    if foreign_idx_cache is None:
+        foreign_idx_cache = {}
+    key = raw_target.replace("\\", "/").strip().lower()
+    is_system = key.startswith("system/")
+    vault_ids = sorted(vault_roots.keys())
+    if is_system and "atlas" in vault_roots and "atlas" != current_vault:
+        vault_ids = ["atlas"] + [v for v in vault_ids if v != "atlas"]
+    matches: list[tuple[str, str]] = []
+    for vid in vault_ids:
+        if vid == current_vault:
+            continue
+        root = vault_roots[vid]
+        if vid not in foreign_idx_cache:
+            foreign_idx_cache[vid] = _build_wiki_index(root)
+        uniq = _wikilink_candidates(raw_target, foreign_idx_cache[vid], root)
+        if len(uniq) == 1:
+            matches.append((vid, uniq[0]))
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def detect_broken_links(
     content: str,
     *,
@@ -440,16 +502,46 @@ def detect_broken_links(
             use_idx = idx
             use_root = vault_root
 
-        key = target.replace("\\", "/").strip().lower()
-        candidates = use_idx.get(key) or use_idx.get(key.rsplit("/", 1)[-1]) or []
-        # unique paths
-        uniq = sorted(set(candidates))
-        # exclude self (only meaningful for same-vault links)
-        if target_vault is None:
-            uniq = [c for c in uniq if c != path]
+        exclude = path if target_vault is None else None
+        uniq = _wikilink_candidates(target, use_idx, use_root, exclude_path=exclude)
         if not uniq:
-            # also try exact file
-            if (use_root / f"{target}.md").is_file() or (use_root / target).is_file():
+            foreign = None
+            if target_vault is None and vault_roots:
+                foreign = resolve_foreign_wikilink(
+                    raw_target,
+                    current_vault=vault or "",
+                    vault_roots=vault_roots,
+                    foreign_idx_cache=foreign_idx_cache,
+                )
+            if foreign is not None:
+                vid, rel = foreign
+                new_target = f"{vid}:{raw_target}"
+                flaws.append(
+                    Flaw(
+                        code="link.broken",
+                        severity="warn",
+                        path=path,
+                        vault=vault or None,
+                        evidence={
+                            "target": raw_target,
+                            "line": lineno,
+                            "candidates": [rel],
+                            "resolved_vault": vid,
+                            "suggested_target": new_target,
+                        },
+                        remediation="auto",
+                        suggested_op={
+                            "ops": [
+                                {
+                                    "op": "replace_wikilink",
+                                    "from": raw_target,
+                                    "to": new_target,
+                                }
+                            ]
+                        },
+                        message=f"orphan wikilink [[{raw_target}]] → prefix [[{new_target}]]",
+                    )
+                )
                 continue
             flaws.append(
                 Flaw(

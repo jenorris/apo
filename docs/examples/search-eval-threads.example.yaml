@@ -2,7 +2,7 @@
 # Run: APO_VAULT_PATHS=~/Notes/Work APO_DEFAULT_VAULT=work \
 #        just search-eval --file ~/.apo/search-eval-threads.yaml
 #
-# Labeled queries for areas/threads ticket/slug recall. Paths are vault-relative.
+# Labeled queries for areas/threads ticket/slug recall (~30-query set). Paths are vault-relative.
 # CI gate: engine/tests/test_retrieval_gaps.py::RetrievalGapsTest::test_thread_eval_fixture_hit_rate
 
 vault: work
@@ -96,3 +96,39 @@ queries:
   - query: "floci opentofu pre deploy testing plan"
     folder: areas/gradguard-platform
     expect: ["areas/gradguard-platform/floci-opentofu-pre-deploy-testing-plan.md"]
+
+  - query: "plat 977 trivy accepted risks ngiroot tofu"
+    folder: areas/threads
+    expect: ["areas/threads/plat-977-trivy-accepted-risks.md"]
+
+  - query: "plat 1000 trivy expedite container scan pipeline"
+    folder: areas/threads
+    expect: ["areas/threads/plat-1000-trivy-expedite.md"]
+
+  - query: "usc sftp tuition insurance plat 913"
+    folder: areas/threads
+    expect: ["areas/threads/plat-913-usc-sftp-tuition-insurance.md"]
+
+  - query: "itops 726 cursor mosyle ipad deployment"
+    folder: areas/threads
+    expect: ["areas/threads/itops-726-cursor-mosyle-ipad.md"]
+
+  - query: "eks api secure access jake airbyte tailscale"
+    folder: areas/threads
+    expect: ["areas/threads/eks-api-secure-access-jake.md"]
+
+  - query: "dv 2497 charge on cancelled webhook skypad"
+    folder: areas/threads
+    expect: ["areas/threads/dv-2497-charge-on-cancelled-webhook.md"]
+
+  - query: "workbench local telemetry apo otel jaeger"
+    folder: areas/threads
+    expect: ["areas/threads/workbench-local-telemetry.md"]
+
+  - query: "app module git ref pinning per environment"
+    folder: areas/gradguard-platform
+    expect: ["areas/gradguard-platform/app-module-git-ref-pinning-plan.md"]
+
+  - query: "skypad core api merge feasibility markel renters"
+    folder: areas/gradguard-platform
+    expect: ["areas/gradguard-platform/skypad-core-api-merge-feasibility.md"]

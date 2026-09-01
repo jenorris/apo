@@ -4,10 +4,29 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
-## [0.26.7] — 2026-09-01
+## [0.26.8] — 2026-09-01
 
-Search and index performance: keyword-only routing, embed disk cache, vec0 caps,
-lint sweep cache, streaming index embed.
+Corpus hygiene automation, expanded thread eval, and search boost batch prefetch.
+
+### Added
+
+- **`engine/scripts/hygiene_batch.py`** — batch frontmatter floor, cross-vault `atlas:` link
+  prefix, and dialect wikilink stubs (`areas/` + `projects/`).
+- **`hygiene_apply.py`** — mechanical fix helpers used by hygiene batch.
+- **`resolve_foreign_wikilink()`** — unique sibling-vault match with `atlas` preference for
+  `system/*` paths; auto remediation in lint.
+- **~31-query thread eval** fixture (expanded from 22; +6 threads, +2 platform plans).
+- **Batch boost prefetch** — single SQL round-trip for frontmatter + backlink counts per
+  search pool (P3 latency).
+
+### Fixed
+
+- **Wikilink path escape** — `_wikilink_candidates` rejects targets resolving outside vault root
+  (e.g. `[[../../Workbench/...]]` no longer false-matches).
+
+### Changed
+
+Search and index performance (carried from 0.26.7 unreleased section):
 
 ### Fixed
 

@@ -2493,6 +2493,72 @@ def _backlink_search_boost(path: str) -> float:
     return 1.0 + min(0.18, 0.04 * math.log1p(n))
 
 
+def _prefetch_path_boost_data(paths: Iterable[str]) -> None:
+    """Warm frontmatter + backlink caches for a search candidate pool (one SQL batch each)."""
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for raw in paths:
+        p = str(raw).replace("\\", "/")
+        if p and p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    if not uniq:
+        return
+    db = reader_connect()
+    now = time.monotonic()
+    fm_warm: dict[str, dict[str, str]] = {}
+    batch_size = 400
+    for i in range(0, len(uniq), batch_size):
+        chunk = uniq[i : i + batch_size]
+        ph = ",".join("?" * len(chunk))
+        for path, raw_fm in db.execute(
+            f"SELECT path, frontmatter FROM files WHERE path IN ({ph})",
+            chunk,
+        ):
+            fields: dict[str, str] = {}
+            if raw_fm:
+                try:
+                    fm = json.loads(raw_fm)
+                    if isinstance(fm, dict):
+                        for k in ("title", "permalink", "description"):
+                            v = fm.get(k)
+                            if isinstance(v, str) and v.strip():
+                                fields[k] = v.strip()
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            fm_warm[str(path).replace("\\", "/")] = fields
+    with _frontmatter_boost_lock:
+        for path, fields in fm_warm.items():
+            _frontmatter_boost_cache[path] = (now, fields)
+
+    lookup: dict[str, set[str]] = {}
+    boost_keys: set[str] = set()
+    for p in uniq:
+        rel = p.replace("\\", "/").removesuffix(".md")
+        bk = rel.lower()
+        boost_keys.add(bk)
+        stem = Path(rel).name.lower()
+        for lk in (bk, stem):
+            lookup.setdefault(lk, set()).add(bk)
+    sources: dict[str, set[str]] = {bk: set() for bk in boost_keys}
+    keys = list(lookup.keys())
+    for i in range(0, len(keys), batch_size):
+        chunk = keys[i : i + batch_size]
+        ph = ",".join("?" * len(chunk))
+        for source, target_key, target_stem in db.execute(
+            f"""SELECT source, target_key, target_stem FROM backlinks
+                WHERE target_key IN ({ph}) OR target_stem IN ({ph})""",
+            chunk + chunk,
+        ):
+            src = str(source)
+            for lk in (str(target_key or "").lower(), str(target_stem or "").lower()):
+                for bk in lookup.get(lk, ()):
+                    sources[bk].add(src)
+    with _backlink_count_lock:
+        for bk, srcs in sources.items():
+            _backlink_count_cache[bk] = (now, len(srcs))
+
+
 def _phrase_stem_paths_in_folder(query: str, folder_prefix: str, *, limit: int = 12) -> list[str]:
     """Paths under folder whose stem contains a hyphenated phrase from the query."""
     folder_clean = folder_prefix.replace("\\", "/").strip("/")
@@ -2682,6 +2748,7 @@ def _apply_path_boosts_to_hits(
 ) -> list[Hit]:
     if not hits:
         return hits
+    _prefetch_path_boost_data([h.path for h in hits])
     folder_prefix = folder.replace("\\", "/").strip("/")
     if folder_prefix:
         hits, _ = _inject_phrase_stem_hits(hits, query, folder_prefix, explain=explain)
@@ -3513,6 +3580,8 @@ def search(
             ids,
         ):
             by_id[row[0]] = row[1:]
+
+    _prefetch_path_boost_data(row[0] for row in by_id.values())
 
     hits: list[Hit] = []
     full_texts: list[str] = []  # non-snippet bodies for the reranker
