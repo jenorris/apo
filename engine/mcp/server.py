@@ -209,6 +209,24 @@ if __name__ == "__main__":
 _load_vaults()
 
 
+def _maybe_warm_query_embed() -> None:
+    """Preload Ollama embed model + hydrate disk query cache on MCP process start."""
+    if not getattr(apo_config, "QUERY_EMBED_WARM_ON_START", True):
+        return
+    if not VAULTS:
+        return
+    v = VAULTS.get(DEFAULT_VAULT) or next(iter(VAULTS.values()), None)
+    if v is None:
+        return
+    try:
+        from apo_engine import core as apo_core
+
+        with apo_vaults.bind(v):
+            apo_core.warm_query_embed()
+    except (OSError, RuntimeError, ValueError):
+        pass
+
+
 def _metrics_vault_for_args(args: dict[str, Any]) -> tuple[str, Path | None, str]:
     """Resolve (vault_id, vault_root, collection) for ToolMetricsMiddleware."""
     key = str(args.get("vault") or "").strip() or DEFAULT_VAULT
@@ -1140,6 +1158,7 @@ def _csv_env(name: str) -> list[str] | None:
 
 
 if __name__ == "__main__":
+    _maybe_warm_query_embed()
     # Default: stdio, one subprocess per client (Claude Code, Cursor, each Hermes
     # gateway) — matches how every client's mcp_servers.apo entry launches this file
     # today. APO_MCP_TRANSPORT=http instead runs a shared, long-lived server multiple

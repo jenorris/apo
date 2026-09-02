@@ -169,11 +169,18 @@ UNSCOPED_VEC_K: int = int(os.environ.get("APO_UNSCOPED_VEC_K", "48"))
 # (avoids O(folder) Python L2 on huge folders). Override via APO_SCOPED_VECTOR_FULL_SCAN_MAX.
 SCOPED_VECTOR_FULL_SCAN_MAX: int = int(os.environ.get("APO_SCOPED_VECTOR_FULL_SCAN_MAX", "500"))
 
-# Cache identical query embeddings (seconds TTL; 0 disables).
+# Cache identical query embeddings (seconds TTL; 0 disables in-memory LRU).
 QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "600"))
 QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "128"))
 # Persist query embeddings in index meta across MCP process restarts (0 disables).
 QUERY_EMBED_DISK_CACHE: bool = env_bool("APO_QUERY_EMBED_DISK_CACHE", True)
+# Disk meta TTL — longer than in-memory so MCP restarts hit cache without Ollama (default 24h).
+QUERY_EMBED_DISK_TTL: float = float(os.environ.get("APO_QUERY_EMBED_DISK_TTL", "86400"))
+# Per-request Ollama keep_alive for query_embed only (independent of OLLAMA_KEEP_ALIVE).
+QUERY_EMBED_KEEP_ALIVE: str = os.environ.get("APO_QUERY_EMBED_KEEP_ALIVE", "5m")
+# Hydrate disk query-embed cache + preload Ollama embed model on MCP server start.
+QUERY_EMBED_WARM_ON_START: bool = env_bool("APO_QUERY_EMBED_WARM_ON_START", True)
+QUERY_EMBED_WARM_DISK_LIMIT: int = int(os.environ.get("APO_QUERY_EMBED_WARM_DISK_LIMIT", "64"))
 
 # Index embed batch size (Ollama input array length per request).
 EMBED_COMMIT_BATCH: int = int(os.environ.get("APO_EMBED_COMMIT_BATCH", "64"))

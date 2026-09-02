@@ -4,6 +4,22 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.26.10] — 2026-09-02
+
+Cold hybrid query-embed latency across MCP restarts.
+
+### Added
+
+- **`QUERY_EMBED_DISK_TTL`** — disk meta cache default 24h (in-memory stays 600s).
+- **`QUERY_EMBED_KEEP_ALIVE`** — per-request Ollama `keep_alive` on query embed (default `5m`).
+- **`warm_query_embed()`** — hydrate disk LRU + preload Ollama embed model.
+- MCP server calls warm on startup (`APO_QUERY_EMBED_WARM_ON_START`, default on).
+
+### Fixed
+
+- Disk query-embed entries store normalized query text for startup hydration.
+- Cold MCP hybrid search no longer misses disk cache after 10-minute in-memory TTL.
+
 ## [0.26.9] — 2026-09-01
 
 Unscoped exclude search latency — cap hit hydration and push prefix excludes into FTS.
