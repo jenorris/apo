@@ -53,7 +53,10 @@ otlp = [
     "opentelemetry-sdk>=1.30",
     "opentelemetry-exporter-otlp-proto-http>=1.30",
 ]
-dev = ["pytest>=8.0"]
+# joserfc/starlette back test_mcp_auth_google.py (mock RS256 JWKS + an ASGI
+# TestClient) — real deps today only via fastmcp's transitive install, which
+# a fastmcp version bump could silently drop.
+dev = ["pytest>=8.0", "joserfc>=1.0", "starlette>=0.37"]
 
 [project.scripts]
 apo-engine = "apo_engine.cli:main"

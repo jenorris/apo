@@ -19,6 +19,7 @@ from apo_engine import config as apo_config
 from apo_engine import deferred as index_deferred
 from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
+from apo_engine.mcp_auth import build_auth_provider_from_env
 from apo_engine.mcp_backend import ApoStore
 from apo_engine.mcp_instructions import MCP_INSTRUCTIONS as _MCP_INSTRUCTIONS
 from apo_engine.mcp_action_schemas import (
@@ -190,7 +191,12 @@ def _top_level_dirs(v: Vault) -> list[str]:
 # Server
 ###############################################################################
 
-mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS)
+# APO_MCP_AUTH unset (the default for stdio/loopback clients — Claude Code,
+# Cursor, each Hermes gateway) -> build_auth_provider_from_env() returns None
+# and this is byte-identical to no auth= kwarg at all. Only a dedicated
+# instance with APO_MCP_AUTH=google (the public desma endpoint) pays for or
+# is gated by auth.
+mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS, auth=build_auth_provider_from_env())
 
 # FastMCP wraps middleware with reversed(list): first added = outermost.
 # Metrics must sit *outside* validation rewrite so schema rejects are recorded as
@@ -221,7 +227,7 @@ def _maybe_warm_query_embed() -> None:
     try:
         from apo_engine import core as apo_core
 
-        with apo_vaults.bind(v):
+        with _bound(v):
             apo_core.warm_query_embed()
     except (OSError, RuntimeError, ValueError):
         pass

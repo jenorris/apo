@@ -1,0 +1,18 @@
+{
+  "personas": [
+    {
+      "name": "jeremy",
+      "client_id": "REPLACE-WITH-JEREMY-GOOGLE-OAUTH-CLIENT-ID.apps.googleusercontent.com",
+      "client_secret": "REPLACE-WITH-JEREMY-GOOGLE-OAUTH-CLIENT-SECRET",
+      "allowed_emails": ["jeremy.REPLACE@gmail.com"]
+    },
+    {
+      "name": "fotini",
+      "client_id": "REPLACE-WITH-FOTINI-GOOGLE-OAUTH-CLIENT-ID.apps.googleusercontent.com",
+      "client_secret": "REPLACE-WITH-FOTINI-GOOGLE-OAUTH-CLIENT-SECRET",
+      "allowed_emails": ["fotini.REPLACE@gmail.com"]
+    }
+  ],
+  "issuer": "https://accounts.google.com",
+  "base_url": "REPLACE-WITH-PUBLIC-FUNNEL-URL"
+}

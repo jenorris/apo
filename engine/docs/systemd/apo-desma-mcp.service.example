@@ -1,0 +1,91 @@
+# DRAFT — NOT installed or enabled by this change (t_8c3f9e4f). Human review
+# BEFORE this ever runs, per the non-negotiable security ordering:
+#   OAuth build + mock-OIDC unit tests (DONE — tests/test_mcp_auth_google.py,
+#   15 pass, independence-verified) -> human provisions the two GCP OAuth
+#   clients -> real Google grant verified for Jeremy AND Fotini over the
+#   tailnet-only URL -> tailnet-only serve (tailscale serve) -> ONLY THEN
+#   tailscale funnel. The endpoint MUST NOT be funnelled public until both
+#   personas have completed a real grant.
+#
+# RUNNABLE-NESS (verified live in the original sandbox spike, loopback
+# 127.0.0.1:8899; merged into the deployed engine 2026-09-06):
+#   * mcp/server.py had a pre-existing 0.26.10 standalone-boot bug —
+#     `_maybe_warm_query_embed()` called `apo_vaults.bind(v)` with a raw
+#     Vault, but vaults.bind() now requires a VaultBinding (AttributeError on
+#     boot). Fixed to `_bound(v)` (the same helper the deployed engine uses),
+#     so the dedicated instance boots. Pre-existing; unrelated to the auth
+#     work; also improves any standalone run.
+#   * With APO_MCP_AUTH=google the booted server serves RFC 9728
+#     oauth-protected-resource metadata and returns 401 on unauthenticated
+#     /mcp including write_note (mutation gate) and any malformed bearer.
+#
+# LAUNCH TARGET: mcp_auth.py + the server.py auth= wiring now live in the
+# deployed engine (/home/jeremy/Code/apo/engine) — this unit runs that
+# canonical interpreter directly, no PYTHONPATH override. (The original spike
+# ran from a sandboxed clone at ~/Workspace/Cato/code/apo while the deployed
+# engine was read-only for that task; that clone no longer exists.)
+#
+# Install (human step, AFTER GCP clients exist AND mcp-auth.json is filled
+# in from mcp-auth.json.example with REAL client ids/secrets/allowed_emails
+# and the tailnet-only base_url):
+#   cp apo-desma-mcp.service.example ~/.config/systemd/user/apo-desma-mcp.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now apo-desma-mcp.service
+#
+# Tailnet-only exposure FIRST (never funnel before both personas verify):
+#   tailscale serve --bg --https=8879 http://127.0.0.1:8879
+#   # -> exposes https://grid.rooster-deneb.ts.net:8879  (set base_url to this)
+#   tailscale serve status
+# Only once real Google-account logins from Jeremy AND Fotini verified end
+# to end over that tailnet-only URL:
+#   tailscale funnel --bg --https=8879 on
+#   tailscale funnel status
+
+[Unit]
+Description=Apo MCP — desma vault, streamable-HTTP, Google OAuth (Jeremy + Fotini)
+Documentation=file:///home/jeremy/Code/apo/engine/docs/systemd/apo-desma-mcp.service.example
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# desma vault scoping — pinned to the desma collection via APO_COLLECTION so
+# this instance's runtime file (~/.apo/mcp-runtime.desma.json, if ever used)
+# never collides with the default desk instance's.
+Environment="APO_VAULTS=/home/jeremy/.apo/vaults.json"
+Environment="APO_COLLECTION=desma"
+Environment="APO_EMBED_BACKEND=ollama"
+Environment="APO_MODEL=bge-m3"
+Environment="APO_OLLAMA_URL=http://127.0.0.1:11434"
+Environment="OLLAMA_KEEP_ALIVE=0"
+# Transport — streamable-HTTP, bound for tailscale serve/funnel to front.
+Environment="APO_MCP_TRANSPORT=http"
+Environment="APO_MCP_HOST=0.0.0.0"
+Environment="APO_MCP_PORT=8879"
+# Auth — see apo_engine.mcp_auth.build_auth_provider_from_env(). Real GCP
+# client_id/client_secret/allowed_emails live ONLY in mcp-auth.json (mode
+# 0600, never committed) — see mcp-auth.json.example here. client_secret is
+# accepted for schema/future-compatibility with an OAuthProxy fallback but is
+# NOT used by the current resource-server-only verifier
+# (PersonaGoogleTokenVerifier validates Google ID tokens directly; it never
+# exchanges an authorization code itself).
+Environment="APO_MCP_AUTH=google"
+Environment="APO_MCP_AUTH_CONFIG=/home/jeremy/.apo/mcp-auth.json"
+# Must match wherever this ends up reachable. Tailnet-only first
+# (https://grid.rooster-deneb.ts.net:8879), funnel URL only after that's
+# verified. Also the value of mcp-auth.json's base_url; the env var here
+# overrides if the two diverge.
+Environment="APO_MCP_AUTH_BASE_URL=https://REPLACE-WITH-TAILNET-ONLY-URL"
+ExecStart=/home/jeremy/Code/apo/engine/.venv/bin/python /home/jeremy/Code/apo/engine/mcp/server.py
+Restart=always
+RestartSec=10
+TimeoutStartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=apo-desma-mcp
+
+# Security
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
