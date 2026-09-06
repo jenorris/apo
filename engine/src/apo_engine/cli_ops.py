@@ -447,7 +447,7 @@ def _cmd_history(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
-        prog="apo",
+        prog="apo-local",
         description=(
             "Vault-facing CLI over apo_engine.ops — same backend as the Apo MCP "
             "server's note/search tools. Admin/index/watch/serve stay on apo-engine."

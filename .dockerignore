@@ -1,0 +1,15 @@
+client/
+engine/.venv/
+engine/graphify-out/
+engine/index.db*
+engine/tests/
+engine/deploy/
+engine/scripts/
+graphify-out/
+docs/
+.git/
+.github/
+**/__pycache__/
+**/*.pyc
+.serena/
+gateway-legacy-secrets/

@@ -4,6 +4,27 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- **`Dockerfile`** — packages the HTTP-transport MCP server; vault data is
+  bind-mounted, not baked in. See its header comment for a full `docker run`
+  example, including optional `APO_MCP_AUTH=google`.
+- **`client/`** — `apo`, a standalone Go MCP client (streamable-HTTP), no
+  local vault access, no engine dependencies. Single static binary (~8MB).
+  Convenience `tools`/`search`/`read` commands plus a generic `call <tool>
+  --args '<json>'` that reaches any tool the server exposes, including ones
+  added after the binary was built.
+
+### Changed
+
+- **Breaking:** the `apo` console script (`apo_engine.cli_ops`, shipped in
+  0.27.0) is renamed **`apo-local`**. `apo` is reserved for the new network
+  client above — the two are different tools (in-process + local vault vs.
+  MCP-over-HTTP + no local vault) and the collision became real once the
+  network client existed. Anyone who installed 0.27.0's `apo` in the ~hours
+  since it shipped: `pip install -e '.[mcp,dev]'` again to regenerate console
+  scripts, and re-alias any `~/.local/bin/apo` wrapper.
+
 ## [0.27.0] — 2026-09-06
 
 Vault-facing CLI and optional Google-auth'd MCP endpoint — both additive, no

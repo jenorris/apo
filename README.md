@@ -229,6 +229,16 @@ default upstream — verify this stays true after any FastMCP upgrade via
 `APO_MCP_ALLOWED_HOSTS` / `APO_MCP_ALLOWED_ORIGINS` (comma-separated) only ever add a
 non-loopback client on top.
 
+### Docker
+
+`Dockerfile` (repo root) packages the HTTP-transport server — vault data is
+bind-mounted, not baked in. `docker build -t apo-engine .` then see the
+Dockerfile's header comment for a full `docker run` example (vault mount,
+persistent `~/.apo` state volume, optional `APO_MCP_AUTH=google`). Pairs with
+[`client/`](client/) — a single static Go binary (`apo`) that talks to
+whichever host/port the container publishes, with no local vault access and
+none of this repo's Python dependencies.
+
 ## Configuration
 
 Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
@@ -291,6 +301,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection (`body` + `guidance`) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |
+| [client/README.md](client/README.md) | `apo` — thin Go MCP client for a running (e.g. containerized) engine |
 | [VERSIONING.md](VERSIONING.md) | Semver + jj release cut checklist |
 
 ## Boundaries

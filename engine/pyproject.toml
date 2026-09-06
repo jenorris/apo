@@ -60,18 +60,18 @@ dev = ["pytest>=8.0", "joserfc>=1.0", "starlette>=0.37"]
 
 [project.scripts]
 apo-engine = "apo_engine.cli:main"
-# Vault-facing CLI (read/search/write/append/patch/...), mirrors the MCP
-# note/vault tools. NOT the admin engine CLI above. Collision note: a
-# pre-existing ~/.local/bin/apo shell wrapper hardcodes an exec of the
-# admin apo-engine binary from the deployed venv path — it does not resolve
-# `apo` by PATH, so it is untouched by this entry. This console script only
-# takes effect where this package is installed (e.g. `<venv>/bin/apo`);
-# activating that venv puts it ahead of ~/.local/bin on PATH, so the
-# vault-facing CLI wins there while the global shell alias keeps pointing
-# at admin ops. If the two ever need to coexist without venv activation,
-# repoint the global alias at `apo-engine`'s replacement explicitly rather
-# than renaming either console script.
-apo = "apo_engine.cli_ops:main"
+# Vault-facing, in-process CLI (read/search/write/append/patch/...), mirrors
+# the MCP note/vault tools — same backend as engine/mcp/server.py, no daemon,
+# requires this package installed and the vault reachable on local disk. NOT
+# the admin engine CLI above.
+#
+# Named apo-local, not apo: `apo` is reserved for the standalone Go client
+# (../client/) that speaks MCP over HTTP to a *running* apo-engine server
+# (e.g. a containerized one) with no local vault access and none of this
+# package's dependencies (duckdb, sqlite-vec, ...). One release (0.27.0)
+# shipped this console script as `apo`; renamed in 0.28.0 before the name had
+# any real adoption, once the network client made the naming conflict real.
+apo-local = "apo_engine.cli_ops:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
