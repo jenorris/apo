@@ -4,6 +4,43 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-09-06
+
+Vault-facing CLI and optional Google-auth'd MCP endpoint — both additive, no
+existing client (Claude Code, Cursor, each Hermes gateway) is affected.
+
+### Added
+
+- **`apo` console script** — a vault-facing CLI (`apo read`/`search`/`write`/
+  `append`/`patch`/…) mirroring the MCP note/vault tools, alongside the
+  existing admin `apo-engine` entry. Shares the same backend
+  (`apo_engine.ops`, same `index.db`) so behavior matches the MCP server
+  exactly.
+- **`apo_engine.mcp_auth`** — Google OIDC multi-persona auth for a FastMCP
+  instance, opt-in via `APO_MCP_AUTH=google`. A plain `RemoteAuthProvider`
+  resource-server verifier (not an `OAuthProxy`), so more than one person's
+  separate Google OAuth client registration can authenticate against one
+  endpoint. Default (`APO_MCP_AUTH` unset) is byte-identical to no `auth=`
+  kwarg — every existing stdio/loopback client is unaffected. See
+  `docs/systemd/apo-desma-mcp.service.example` for a dedicated public
+  instance (not installed by this release).
+
+### Fixed
+
+- Standalone MCP instances (not the shared desk default) could hit an
+  `AttributeError` on boot in `_maybe_warm_query_embed()` — it called
+  `apo_vaults.bind(v)` with a raw `Vault` where `vaults.bind()` now requires
+  a `VaultBinding`. Fixed to use the existing `_bound(v)` helper.
+
+### Changed
+
+- `dev` extra now declares `joserfc` and `starlette` explicitly (previously
+  available only as `fastmcp`'s transitive deps) — both are exercised
+  directly by the new auth test suite.
+
+**Upgrade:** Quit Cursor/Claude fully (Cmd+Q) if you run a Claude Code/Cursor
+session against this engine, so MCP tool schemas reload.
+
 ## [0.26.10] — 2026-09-02
 
 Cold hybrid query-embed latency across MCP restarts.
