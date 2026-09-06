@@ -1,0 +1,5 @@
+# >>> graphify-corpus managed block — edit graphify.toml, not here >>>
+# tag: apo   source: /home/jeremy/Workspace/Cato/graphify.toml
+# Regenerate with: bin/graphify-corpus build
+/gateway-legacy-secrets/
+# <<< graphify-corpus managed block <<<
