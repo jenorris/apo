@@ -1,4 +1,5 @@
-client/
+client/apo
+client/apo-*
 engine/.venv/
 engine/graphify-out/
 engine/index.db*
