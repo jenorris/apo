@@ -99,14 +99,19 @@ func splitFlags(args []string) (serverFlags, []string) {
 	}
 	var rest []string
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
+		head, val, hasEq := splitEq(args[i])
+		switch head {
 		case "--server":
-			if i+1 < len(args) {
+			if hasEq {
+				sf.serverURL = val
+			} else if i+1 < len(args) {
 				sf.serverURL = args[i+1]
 				i++
 			}
 		case "--token":
-			if i+1 < len(args) {
+			if hasEq {
+				sf.token = val
+			} else if i+1 < len(args) {
 				sf.token = args[i+1]
 				i++
 			}
@@ -115,6 +120,18 @@ func splitFlags(args []string) (serverFlags, []string) {
 		}
 	}
 	return sf, rest
+}
+
+// splitEq splits a "--name=value" token into ("--name", "value", true); any
+// other token (including a bare "--name" with no "=") comes back unchanged
+// as (tok, "", false). Lets every flag accept either "--name value" or
+// "--name=value" — the latter is the form an agent unfamiliar with this
+// binary's specific parsing is more likely to reach for by default.
+func splitEq(tok string) (head, value string, hasEq bool) {
+	if i := strings.Index(tok, "="); i >= 0 && strings.HasPrefix(tok, "--") {
+		return tok[:i], tok[i+1:], true
+	}
+	return tok, "", false
 }
 
 func envOr(key, fallback string) string {
@@ -213,14 +230,20 @@ func cmdRead(args []string) error {
 
 // partition splits args into positionals and flag values, tolerating any
 // interleaving of the two (unlike stdlib flag.FlagSet, which stops parsing
-// flags at the first positional). valueFlags names which "--name" flags
-// consume the following token as their value; every other "--"-prefixed
-// token or bare token is treated as positional.
+// flags at the first positional) and both "--name value" and "--name=value"
+// forms (see splitEq). valueFlags names which "--name" flags consume a
+// value; every other "--"-prefixed token or bare token is treated as
+// positional.
 func partition(args []string, valueFlags map[string]bool) (positionals []string, flags map[string]string) {
 	flags = map[string]string{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if name, ok := strings.CutPrefix(a, "--"); ok && valueFlags[name] {
+		head, val, hasEq := splitEq(a)
+		if name, ok := strings.CutPrefix(head, "--"); ok && valueFlags[name] {
+			if hasEq {
+				flags[name] = val
+				continue
+			}
 			if i+1 < len(args) {
 				flags[name] = args[i+1]
 				i++

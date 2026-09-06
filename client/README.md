@@ -59,12 +59,15 @@ loopback or tailnet-only server with no auth configured.
   `github.com/modelcontextprotocol/go-sdk`, maintained in collaboration with
   Google — reduces the risk of protocol drift as the MCP spec evolves,
   versus reimplementing streamable-HTTP JSON-RPC framing by hand.
-- **No CLI framework.** Flag parsing is a ~15-line hand-rolled partitioner
-  (see `partition` in `main.go`) rather than a dependency like cobra —
-  stdlib's own `flag` package can't handle a flag placed after a positional
-  argument (`apo call write_note --args '...'` breaks with it), and pulling
-  in a framework to fix that would cut against the whole point of this being
-  the lightest possible binary.
+- **No CLI framework.** Flag parsing is a small hand-rolled partitioner (see
+  `partition` in `main.go`) rather than a dependency like cobra — stdlib's
+  own `flag` package can't handle a flag placed after a positional argument
+  (`apo call write_note --args '...'` breaks with it), and pulling in a
+  framework to fix that would cut against the whole point of this being the
+  lightest possible binary. Both `--name value` and `--name=value` are
+  accepted for every flag, in any position — an agent generating the
+  command line has no reason to know this binary's specific quirks, so
+  neither form should ever silently misbehave.
 - **Structured-content first.** `apo-engine`'s MCP tools return JSON-shaped
   results; this client prefers `CallToolResult.StructuredContent` when the
   server provides it and falls back to parsing concatenated `TextContent` as
