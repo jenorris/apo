@@ -45,6 +45,24 @@ echo '{"path":"areas/threads/x.md","ops":[{"op":"set_field","field":"status","va
   | apo call patch_note
 ```
 
+### Piping a command's output into a note
+
+`apo append <path>` wraps `append_note` for the common case of capturing a
+command's output directly — stdin is the note *text*, not a JSON envelope,
+so it composes with anything:
+
+```bash
+journalctl --user -u comfyui.service -n 50 | apo append changelog/2026-09-08-wedge-notes.md
+some-report --json | jq . | apo append projects/x/latest-run.md --heading "Latest run"
+```
+
+`create` defaults to `false` (matches `append_note`): a typo'd path errors
+instead of silently creating a note. Pass `--create` to create-on-first-use.
+**Caveat:** even with `--create`, a leading YAML block in the piped text is
+**not** parsed as frontmatter — it lands as literal body text under an
+auto-stamped minimal frontmatter (derived title only). Set real frontmatter
+separately (`apo call write_note`/`patch_note`) if it matters for that note.
+
 ## Auth
 
 `--token` / `APO_TOKEN` sets a bearer token on every request — for an

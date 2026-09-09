@@ -58,6 +58,8 @@ func run(args []string) error {
 		return cmdSearch(rest)
 	case "read":
 		return cmdRead(rest)
+	case "append":
+		return cmdAppend(rest)
 	default:
 		return fmt.Errorf("unknown command %q — run `apo help`", cmd)
 	}
@@ -71,6 +73,9 @@ Usage:
   apo call <tool> [--args '<json>']          call any tool by name (reads stdin if --args omitted)
   apo search <query> [--folder F] [--vault V] [--limit N]
   apo read <path> [--heading H]
+  cmd | apo append <path> [--heading H] [--chunk-hash C] [--vault V] [--position start|end] [--create]
+                                              pipe stdout straight into a note (append_note; errors if the
+                                              note doesn't exist unless --create is given)
 
 Global flags (any subcommand):
   --server URL   apo-engine MCP endpoint (default $APO_SERVER_URL or ` + defaultServerURL + `)
@@ -226,6 +231,70 @@ func cmdRead(args []string) error {
 		toolArgs["heading"] = v
 	}
 	return callAndPrint(sf, "read_note", toolArgs)
+}
+
+// cmdAppend wraps append_note for the common "pipe a command's output into a
+// note" case. Unlike cmdCall (JSON args from stdin), stdin here is the note
+// text itself — no JSON envelope, so `some-command | apo append path.md`
+// works with zero ceremony. create defaults to false, matching append_note's
+// own default: this never conjures a new note out of a typo'd path unless
+// asked to.
+func cmdAppend(args []string) error {
+	sf, rest := splitFlags(args)
+	create, rest := hasBoolFlag(rest, "create")
+	positionals, flags := partition(rest, map[string]bool{"heading": true, "chunk-hash": true, "vault": true, "position": true})
+	if len(positionals) < 1 {
+		return fmt.Errorf("usage: cmd | apo append <path> [--heading H] [--chunk-hash C] [--vault V] [--position start|end] [--create]")
+	}
+	path := positionals[0]
+
+	stat, _ := os.Stdin.Stat()
+	if stat == nil || (stat.Mode()&os.ModeCharDevice) != 0 {
+		return fmt.Errorf("apo append reads note text from stdin — pipe something in, e.g. `echo hi | apo append %s`", path)
+	}
+	b, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return fmt.Errorf("read stdin: %w", err)
+	}
+	text := string(b)
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("stdin was empty — nothing to append")
+	}
+
+	toolArgs := map[string]any{"path": path, "text": text}
+	if v := flags["heading"]; v != "" {
+		toolArgs["heading"] = v
+	}
+	if v := flags["chunk-hash"]; v != "" {
+		toolArgs["chunk_hash"] = v
+	}
+	if v := flags["vault"]; v != "" {
+		toolArgs["vault"] = v
+	}
+	if v := flags["position"]; v != "" {
+		toolArgs["position"] = v
+	}
+	if create {
+		toolArgs["create"] = true
+	}
+	return callAndPrint(sf, "append_note", toolArgs)
+}
+
+// hasBoolFlag reports whether a bare "--name" flag (no value) is present
+// anywhere in args, returning the args with every occurrence removed. For
+// flags like --create that are either present or not — never "--name value".
+func hasBoolFlag(args []string, name string) (bool, []string) {
+	target := "--" + name
+	found := false
+	rest := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == target {
+			found = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return found, rest
 }
 
 // partition splits args into positionals and flag values, tolerating any
