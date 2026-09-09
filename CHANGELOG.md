@@ -4,6 +4,8 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-09-08
+
 ### Added
 
 - **`Dockerfile`** — packages the HTTP-transport MCP server; vault data is
@@ -14,6 +16,23 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
   Convenience `tools`/`search`/`read` commands plus a generic `call <tool>
   --args '<json>'` that reaches any tool the server exposes, including ones
   added after the binary was built.
+- **`client/Dockerfile`** — `apo-sandbox` image (`python:3.12-slim` + `jq` +
+  the `apo` binary) for Hermes Agent's Docker code-execution backend, so
+  `execute_code`/`terminal` sessions can run `apo <cmd> | jq ...` pipelines
+  without any local vault access or engine dependencies inside the sandbox.
+- **`apo append <path>`** — wraps `append_note` for piping a command's
+  output straight into a note: stdin is the note text directly, no JSON
+  envelope like `call` needs. `create` defaults to `false` (matches
+  `append_note`), so a typo'd path errors instead of silently creating a
+  note. Note: even with `--create`, a leading YAML block in the piped text
+  is not parsed as frontmatter — it lands as literal body text under an
+  auto-stamped minimal frontmatter.
+
+### Fixed
+
+- `client`: flags now accept `--name=value` alongside `--name value` in any
+  position — previously only the latter worked, which an agent generating a
+  command line has no particular reason to expect.
 
 ### Changed
 
