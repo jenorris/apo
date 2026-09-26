@@ -4,6 +4,23 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.28.3] — 2026-09-26
+
+### Fixed
+
+- `_insert_pending_chunks` computed each batch's starting row id from
+  `MAX(id) FROM chunks` alone. `vec0` (sqlite-vec) doesn't always honor
+  rollback on a failed batch insert: when a batch's `vec_chunks` insert
+  throws partway through, `chunks` correctly rolls back but `vec_chunks`
+  can keep the rows it already wrote. Since `chunks.id` never advances
+  past that point, every retry recomputed the same starting id and
+  walked straight back into the orphaned `vec_chunks` rows, throwing
+  `UNIQUE constraint failed on vec_chunks primary key` every cycle,
+  forever — discovered live as a watcher crash-loop re-embedding the
+  same ~56k-chunk backlog every ~2s. Starting id is now the max across
+  `chunks.id`, `vec_chunks.rowid`, and `chunks_fts.rowid`, so orphaned
+  debris gets skipped instead of re-collided with.
+
 ## [0.28.2] — 2026-09-25
 
 `apo-mcp` config wiring was an absolute project-local venv path
