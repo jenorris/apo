@@ -16,6 +16,8 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
+import sqlite_vec
+
 from apo_engine import config, core
 
 _DIM = 16
@@ -342,6 +344,38 @@ class TestIndexLifecycle(VaultTestCase):
         finally:
             db.close()
         self.assertEqual(n1, n2)
+
+    def test_insert_pending_chunks_skips_orphaned_vec_chunks_rowid(self):
+        """vec0 doesn't always honor rollback on a failed batch insert — an aborted
+        batch can leave an orphaned row in vec_chunks with no matching chunks row.
+        The next batch's id allocation must skip past it, not recompute the same
+        start_id from chunks.id alone and collide with the leftover rowid forever.
+        """
+        self.write("a.md", "# A\n\nalpha content\n")
+        core.index_vault(verbose=False)
+
+        db = sqlite3.connect(config.INDEX_PATH)
+        db.enable_load_extension(True)
+        sqlite_vec.load(db)
+        db.enable_load_extension(False)
+        try:
+            max_id = db.execute("SELECT MAX(id) FROM chunks").fetchone()[0]
+            orphan_rowid = max_id + 1  # exactly where the next insert would land
+            blob = sqlite_vec.serialize_float32([0.0] * _DIM)
+            db.execute(
+                "INSERT INTO vec_chunks(rowid, embedding) VALUES (?, ?)",
+                (orphan_rowid, blob),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        self.write("b.md", "# B\n\nbeta content\n")
+        core.index_vault(verbose=False)  # must not raise sqlite3.IntegrityError
+
+        hits = core.search("beta", k=3, hybrid=False)
+        self.assertTrue(hits)
+        self.assertEqual(hits[0].path, "b.md")
 
     def test_filter_notes_equality_and_contains(self):
         self.write("a.md", "---\nstatus: active\ntags: [x]\n---\n\n# A\n\nbody a\n")

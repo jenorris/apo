@@ -1275,7 +1275,15 @@ def _insert_pending_chunks(
     if not valid:
         return 0
     _ensure_vec_table(db, len(valid[0][1]))
-    start_id = int(db.execute("SELECT COALESCE(MAX(id), 0) FROM chunks").fetchone()[0])
+    # vec0 doesn't always honor rollback on a failed batch insert (a sqlite-vec
+    # limitation) — an aborted batch can leave orphaned rows in vec_chunks/chunks_fts
+    # that outlive the rolled-back chunks insert. Recomputing from chunks.id alone
+    # would then re-collide with that debris on every retry, forever. Skip past it.
+    start_id = max(
+        int(db.execute("SELECT COALESCE(MAX(id), 0) FROM chunks").fetchone()[0]),
+        int(db.execute("SELECT COALESCE(MAX(rowid), 0) FROM vec_chunks").fetchone()[0]),
+        int(db.execute("SELECT COALESCE(MAX(rowid), 0) FROM chunks_fts").fetchone()[0]),
+    )
     chunk_rows: list[tuple] = []
     vec_rows: list[tuple] = []
     fts_rows: list[tuple] = []
