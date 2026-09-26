@@ -5,4 +5,4 @@ Markdown files. Embedded (sqlite-vec), no Docker; embeddings via Ollama (GPU)
 or fastembed (CPU).
 """
 
-__version__ = "0.27.0"
+__version__ = "0.28.1"

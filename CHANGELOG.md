@@ -4,6 +4,28 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.28.1] — 2026-09-25
+
+Unbounded `backlinks` growth on files with a missing `files` row — found via
+a 15GB `index-work.db` where one 30KB note had accumulated ~1.95M backlinks
+rows for 56 real links.
+
+### Fixed
+
+- `_index_vault_impl`'s per-file reindex loop only deleted a path's old
+  `backlinks` rows when it already had a `files` row. A path that ends up
+  with no `files` row at all — e.g. a chunk that keeps failing to embed
+  across a `files` delete/restamp boundary — looked "added" on every
+  subsequent full-vault scan, and the added-branch never deleted before
+  inserting. `chunks`/`vec_chunks` self-dedupe via content-hashed IDs, but
+  `backlinks` has no uniqueness constraint, so every such scan appended
+  another full copy of the file's links, forever. The delete is now
+  unconditional, matching the already-correct targeted-reindex path
+  (`_index_files_impl`).
+- `engine/pyproject.toml` / `apo_engine.__version__` corrected to `0.28.1` —
+  the 0.28.0 release commit updated `CHANGELOG.md` only and left both at
+  `0.27.0`.
+
 ## [0.28.0] — 2026-09-08
 
 ### Added
