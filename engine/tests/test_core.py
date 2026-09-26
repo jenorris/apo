@@ -308,6 +308,41 @@ class TestIndexLifecycle(VaultTestCase):
             db.close()
         self.assertEqual(n1, n2)
 
+    def test_missing_files_row_does_not_duplicate_backlinks(self):
+        """A path with no `files` row (crash/partial-write/legacy-migration residue)
+        must still get its stale backlinks cleared before re-insert on the next scan —
+        the "added" branch used to skip that delete, since it assumes a missing `files`
+        row means "brand new, nothing to clean up," which isn't always true.
+        """
+        self.write(
+            "poison.md",
+            "---\ntitle: Poison\n---\n\nSee [[Target Note]] and [[other]].\n\nbody\n",
+        )
+        core.index_vault(verbose=False)
+        db = sqlite3.connect(config.INDEX_PATH)
+        try:
+            n1 = db.execute(
+                "SELECT COUNT(*) FROM backlinks WHERE source='poison.md'"
+            ).fetchone()[0]
+            self.assertGreaterEqual(n1, 2)
+            # Simulate the files row going missing while backlinks/chunks survive —
+            # e.g. an interrupted write between the DELETE and the restamping INSERT.
+            db.execute("DELETE FROM files WHERE path='poison.md'")
+            db.commit()
+        finally:
+            db.close()
+
+        core.index_vault(verbose=False)
+
+        db = sqlite3.connect(config.INDEX_PATH)
+        try:
+            n2 = db.execute(
+                "SELECT COUNT(*) FROM backlinks WHERE source='poison.md'"
+            ).fetchone()[0]
+        finally:
+            db.close()
+        self.assertEqual(n1, n2)
+
     def test_filter_notes_equality_and_contains(self):
         self.write("a.md", "---\nstatus: active\ntags: [x]\n---\n\n# A\n\nbody a\n")
         self.write("b.md", "---\nstatus: done\ntags: [y]\n---\n\n# B\n\nbody b\n")

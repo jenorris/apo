@@ -1746,11 +1746,13 @@ def _index_vault_impl(
             continue
         if _embed_retry_backoff_active(db, rel, h):
             continue
+        # Unconditional: a file whose embed keeps failing never gets stamped into
+        # `files` (by design, see below), so it looks "added" on every scan forever —
+        # without this, its backlinks rows never get cleared and pile up unbounded.
+        _delete_path(db, rel)
         if prev and prev[1] == "":
-            # Embed-fail sentinel — rebuild chunks but keep fail counters on the files row.
-            _delete_path(db, rel)
+            pass  # Embed-fail sentinel — rebuild chunks but keep fail counters on the files row.
         elif prev:
-            _delete_path(db, rel)
             db.execute("DELETE FROM files WHERE path=?", (rel,))
             stats.changed += 1
         else:
