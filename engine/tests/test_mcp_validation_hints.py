@@ -12,7 +12,7 @@ from pathlib import Path
 from apo_engine import tool_metrics
 
 _ENGINE = Path(__file__).resolve().parents[1]
-_SERVER = _ENGINE / "mcp" / "server.py"
+_SERVER = _ENGINE / "src" / "apo_engine" / "mcp" / "server.py"
 
 # Snapshot pre-test state so tearDownModule can restore it exactly.
 # _load_server both (a) mutates os.environ directly with no per-call cleanup

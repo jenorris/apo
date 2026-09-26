@@ -10,7 +10,7 @@ set -a
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
 set +a
 
-APO_ENGINE_BIN="${APO_ENGINE_BIN:-${SCRIPT_DIR}/engine/.venv/bin/apo-engine}"
+APO_ENGINE_BIN="${APO_ENGINE_BIN:-${HOME}/.local/bin/apo-engine}"
 WATCH_PID_DIR="${WATCH_PID_DIR:-${HOME}/.apo}"
 OLLAMA_URL="${APO_OLLAMA_URL:-http://127.0.0.1:11434}"
 WATCH_INTERVAL="${WATCH_INTERVAL:-30}"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apo-engine"
-version = "0.28.1"
+version = "0.28.2"
 description = "Apo — local hybrid search over a Markdown vault (sqlite-vec, no Docker)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -72,6 +72,9 @@ apo-engine = "apo_engine.cli:main"
 # shipped this console script as `apo`; renamed in 0.28.0 before the name had
 # any real adoption, once the network client made the naming conflict real.
 apo-local = "apo_engine.cli_ops:main"
+# The MCP server itself — same backend, stdio/http transport instead of
+# in-process. `uv tool install`'d onto PATH alongside apo-engine/apo-local.
+apo-mcp = "apo_engine.mcp.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

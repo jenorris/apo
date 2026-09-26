@@ -7,7 +7,7 @@ launchd watcher. SQLite WAL allows concurrent readers but **only one writer** at
 
 | Process | Reads `index.db` | Writes `index.db` |
 |---------|------------------|-------------------|
-| **MCP** (`engine/mcp/server.py`) | Yes — search, read, backlinks | **Never** |
+| **MCP** (`apo-mcp`) | Yes — search, read, backlinks | **Never** |
 | **Watcher** (`apo-engine watch`) | Yes | **Sole writer** |
 
 MCP enqueues work under `~/.apo/`:

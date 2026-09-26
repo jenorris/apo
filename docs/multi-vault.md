@@ -49,7 +49,7 @@ export APO_DEFAULT_VAULT=work
 MCP argv equivalent:
 
 ```bash
-python engine/mcp/server.py \
+apo-mcp \
   --vault ~/Notes/Work \
   --vault ~/Notes/Contracts \
   --vault ~/Notes/Optima \

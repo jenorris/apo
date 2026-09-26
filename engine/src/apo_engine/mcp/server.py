@@ -205,12 +205,15 @@ mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS, auth=build_auth_provider_fr
 # (FastMCP validates args before tool bodies — see apo_engine.validation_hints).
 from apo_engine.agent_validation import AgentValidationMiddleware  # noqa: E402
 
-# When launched as ``python server.py --vault …``, apply discovery argv before
-# the first registry load. Import-time hosts (tests) set env themselves.
-if __name__ == "__main__":
-    import sys as _sys
+# Apply discovery argv (``--vault``/``--default``/``--collection-root``) before
+# the first registry load — unconditional so it applies whether this module is
+# launched as ``python server.py --vault …`` or via the ``apo-mcp`` console
+# script (which imports this module rather than executing it as __main__).
+# parse_known_args() ignores anything it doesn't recognize, so this is a no-op
+# for hosts that only set env (import-time hosts like tests) or pass no argv.
+import sys as _sys
 
-    _sys.argv[:] = apo_vaults.apply_discovery_argv(_sys.argv)
+_sys.argv[:] = apo_vaults.apply_discovery_argv(_sys.argv)
 
 _load_vaults()
 
@@ -1163,7 +1166,7 @@ def _csv_env(name: str) -> list[str] | None:
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 
-if __name__ == "__main__":
+def main() -> None:
     _maybe_warm_query_embed()
     # Default: stdio, one subprocess per client (Claude Code, Cursor, each Hermes
     # gateway) — matches how every client's mcp_servers.apo entry launches this file
@@ -1197,3 +1200,7 @@ if __name__ == "__main__":
         )
     else:
         mcp.run()
+
+
+if __name__ == "__main__":
+    main()

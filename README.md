@@ -218,7 +218,7 @@ Habit KPIs (optional): **`vault(request={action: "stats"})`**. Operator traces: 
 ### Transport
 
 Default is stdio — one subprocess per client (Claude Code, Cursor, each Hermes
-gateway), the way `mcp_servers.apo` config launches `engine/mcp/server.py` today.
+gateway), the way `mcp_servers.apo` config launches `apo-mcp` today.
 `just mcp-http` (or `APO_MCP_TRANSPORT=http`) runs a shared, long-lived server over
 HTTP instead — many clients can point at one warm process (adapted from
 [tobi/qmd](https://github.com/tobi/qmd)'s `qmd mcp --http`), avoiding N cold-loaded

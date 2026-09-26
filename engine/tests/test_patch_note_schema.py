@@ -10,8 +10,8 @@ import unittest
 from pathlib import Path
 
 _ENGINE = Path(__file__).resolve().parents[1]
-_SERVER = _ENGINE / "mcp" / "server.py"
 _SRC = _ENGINE / "src"
+_SERVER = _SRC / "apo_engine" / "mcp" / "server.py"
 
 
 def _list_tools_lean(*, collection: str):

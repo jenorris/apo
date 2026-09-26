@@ -13,8 +13,8 @@ from pathlib import Path
 from apo_engine import apo_admin
 
 _ENGINE = Path(__file__).resolve().parents[1]
-_SERVER = _ENGINE / "mcp" / "server.py"
 _SRC = _ENGINE / "src"
+_SERVER = _SRC / "apo_engine" / "mcp" / "server.py"
 
 _ADMIN_CAPABILITIES = frozenset({
     "reload_config",

@@ -4,6 +4,39 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.28.2] — 2026-09-25
+
+`apo-mcp` config wiring was an absolute project-local venv path
+(`engine/.venv/bin/python engine/mcp/server.py`) with a hand-set
+`PYTHONPATH` — brittle across checkouts and inconsistent with how every
+other CLI on the desk (`graphify`, `rtk`) lands on `PATH`.
+
+### Added
+
+- `apo-mcp = "apo_engine.mcp.server:main"` console script, installed via
+  `uv tool install --editable "engine[mcp]"` (now part of `just setup`)
+  alongside `apo-engine`/`apo-local`.
+
+### Changed
+
+- `engine/mcp/server.py` moved into the package proper at
+  `engine/src/apo_engine/mcp/server.py` so it's importable by the new
+  console script; its `__main__` block became a callable `main()`.
+  Discovery-argv parsing (`--vault`/`--default`/`--collection-root`) is now
+  applied unconditionally at import time rather than gated on
+  `__name__ == "__main__"`, since the console script imports rather than
+  execs this module.
+- `watch.sh`/`launchd-watch.sh`/`config.env.example` default
+  `APO_ENGINE_BIN` to `$HOME/.local/bin/apo-engine` (the `uv tool install`
+  shim) instead of the venv path.
+- MCP host registration (`.mcp.json`, Cursor configs, quickstart docs) now
+  just `"command": "apo-mcp"` — no `args`/`cwd`/`PYTHONPATH`.
+
+**Upgrade:** run `just setup` (or `uv tool install --editable "engine[mcp]"`
+directly) to install `apo-mcp`/`apo-engine` on `PATH`, update your MCP host
+config to the new `apo-mcp` command, then quit/reopen Cursor or Claude Code
+(Cmd+Q) fully. `just watch-install` to pick up the new watcher binary path.
+
 ## [0.28.1] — 2026-09-25
 
 Unbounded `backlinks` growth on files with a missing `files` row — found via

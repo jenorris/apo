@@ -31,6 +31,8 @@ just index
 just search "a phrase you know is in your vault"
 ```
 
+`just setup` also installs `apo-engine`/`apo-mcp` onto `PATH` via `uv tool install --editable` (needs [uv](https://docs.astral.sh/uv/)), which MCP registration and the watcher below use — the local `engine/.venv` stays around for `just test`/`just inspect`/`just tool-list`.
+
 Expect a ranked hit for that phrase. If search is empty, confirm `APO_NOTES_ROOT` and re-run `just index`.
 
 ## 2. Register MCP — Cursor
@@ -39,9 +41,7 @@ Add an `apo` block to `~/.cursor/mcp.json` (merge into existing `mcpServers`):
 
 ```json
 "apo": {
-  "command": "/ABSOLUTE/PATH/TO/apo/engine/.venv/bin/python",
-  "args": ["/ABSOLUTE/PATH/TO/apo/engine/mcp/server.py"],
-  "cwd": "/ABSOLUTE/PATH/TO/apo/engine/mcp",
+  "command": "apo-mcp",
   "env": {
     "APO_NOTES_ROOT": "/ABSOLUTE/PATH/TO/YOUR/VAULT",
     "APO_INDEX": "/ABSOLUTE/PATH/TO/HOME/.apo/index.db",
@@ -53,6 +53,8 @@ Add an `apo` block to `~/.cursor/mcp.json` (merge into existing `mcpServers`):
 }
 ```
 
+`apo-mcp` resolves via `PATH` (`~/.local/bin`, where `uv tool install` puts it) — no `args`/`cwd` needed. If the host launches without inheriting your shell `PATH` (rare), use the absolute shim path instead: `"command": "/ABSOLUTE/PATH/TO/HOME/.local/bin/apo-mcp"`.
+
 Per-vault search noise filters live in `<vault>/system/contracts/search-contract.schema.yaml` — not MCP env.
 
 Engine admin ops (`memory_status`, `reindex`, `delete_note`, `git_sync`, `list_refs`, `reload_config`) are reached via **`apo_admin(action=list|describe|invoke)`**. Destructive invoke requires **`confirm=true`** (`delete_note` always; `reindex` when `force=true`; `git_sync` for `run`/`pull`/`rebase`).
@@ -62,9 +64,7 @@ Engine admin ops (`memory_status`, `reindex`, `delete_note`, `git_sync`, `list_r
 ## 3. Register MCP — Claude Code
 
 ```bash
-claude mcp add -s user apo -- \
-  /ABSOLUTE/PATH/TO/apo/engine/.venv/bin/python \
-  /ABSOLUTE/PATH/TO/apo/engine/mcp/server.py
+claude mcp add -s user apo -- apo-mcp
 ```
 
 Then put the same env block as Cursor into `~/.claude.json` under the `apo` server (or export them in the shell that launches Claude):
@@ -128,7 +128,7 @@ Install gets the engine running. **Persistent write habits** should match *your*
 
 | Symptom | Fix |
 |---------|-----|
-| 0 Apo tools in Cursor | Full quit/reopen (Cmd+Q); confirm `mcpServers.apo` key; `command` / `args` / `cwd` are absolute and `engine/.venv` exists (`just setup`); `APO_NOTES_ROOT` exists; Ollama up with `bge-m3`; check MCP host logs for subprocess crash |
+| 0 Apo tools in Cursor | Full quit/reopen (Cmd+Q); confirm `mcpServers.apo` key; `command -v apo-mcp` resolves (`just setup` installs it via `uv tool install`); `APO_NOTES_ROOT` exists; Ollama up with `bge-m3`; check MCP host logs for subprocess crash |
 | Empty / stale search | `just reindex` after model/backend change; confirm `APO_NOTES_ROOT`; `just watch-status` |
 | Writes don’t show in search | Ensure watcher is running (`just watch-status`); wait for debounce/poll (enqueue wakes watcher) |
 | Ollama `/api/embed` HTTP 500 | Check `ollama --version` and upgrade if needed before blaming vault content |
