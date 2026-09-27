@@ -186,6 +186,18 @@ Register MCP for Cursor or Claude Code, install the watcher, and verify tool cou
 
 Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habits match *your* vault — not a canned layout.
 
+### CLI entry points
+
+`just setup` installs four console scripts onto `PATH`. **`apo` is the one to reach for by hand going forward** — it dispatches by leading token, so the other three never need separate memorizing:
+
+| Command | Routes to | Covers |
+|---------|-----------|--------|
+| `apo <note-verb> ...` | same backend as `apo-local` | `read`, `search`, `write`, `append`, `patch`, `patch-table`, `graph-neighbors`, `filter`, `backlinks`, `history` — mirrors the MCP note tools |
+| `apo engine <cmd> ...` | same backend as `apo-engine` | `index`, `search`, `search-eval`, `stats`, `watch`, `desk-project`, `okf`, `serve`, `optima-merge` |
+| `apo mcp` | same backend as `apo-mcp` | run the MCP server in place (stdio/http) |
+
+`apo-engine` / `apo-local` / `apo-mcp` still work unchanged as their own commands — nothing that depends on those exact names (launchd plists, shell aliases, MCP host config) needs to change. `just`'s own recipes (`search`/`stats`/`index`/`mcp`/...) still shell out to the original names too, so they keep working whether or not `apo` has been reinstalled yet.
+
 ## How agents use it
 
 ```text
@@ -195,11 +207,12 @@ Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habit
 4. watcher re-embeds                        → next search/filter sees the change
 ```
 
-CLI equivalent while you are wiring things up:
+CLI equivalent while you are wiring things up (via `just`, or directly):
 
 ```bash
-just search "quarterly planning"
-just stats
+just search "quarterly planning"    # == apo engine search "quarterly planning"
+just stats                          # == apo engine stats
+apo search "quarterly planning"     # note-verb search — mirrors search_notes, folder=/vaults=/etc.
 ```
 
 Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day edits.
@@ -235,9 +248,9 @@ non-loopback client on top.
 bind-mounted, not baked in. `docker build -t apo-engine .` then see the
 Dockerfile's header comment for a full `docker run` example (vault mount,
 persistent `~/.apo` state volume, optional `APO_MCP_AUTH=google`). Pairs with
-[`client/`](client/) — a single static Go binary (`apo`) that talks to
-whichever host/port the container publishes, with no local vault access and
-none of this repo's Python dependencies.
+[`client/`](client/) — a single static Go binary (`apo-remote`) that talks
+to whichever host/port the container publishes, with no local vault access
+and none of this repo's Python dependencies.
 
 ## Configuration
 
@@ -301,7 +314,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection (`body` + `guidance`) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |
-| [client/README.md](client/README.md) | `apo` — thin Go MCP client for a running (e.g. containerized) engine |
+| [client/README.md](client/README.md) | `apo-remote` — thin Go MCP client for a running (e.g. containerized) engine |
 | [VERSIONING.md](VERSIONING.md) | Semver + jj release cut checklist |
 
 ## Boundaries

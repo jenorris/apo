@@ -65,7 +65,7 @@ apo-engine = "apo_engine.cli:main"
 # requires this package installed and the vault reachable on local disk. NOT
 # the admin engine CLI above.
 #
-# Named apo-local, not apo: `apo` is reserved for the standalone Go client
+# Named apo-local, not apo: `apo` was reserved for the standalone Go client
 # (../client/) that speaks MCP over HTTP to a *running* apo-engine server
 # (e.g. a containerized one) with no local vault access and none of this
 # package's dependencies (duckdb, sqlite-vec, ...). One release (0.27.0)
@@ -75,6 +75,19 @@ apo-local = "apo_engine.cli_ops:main"
 # The MCP server itself — same backend, stdio/http transport instead of
 # in-process. `uv tool install`'d onto PATH alongside apo-engine/apo-local.
 apo-mcp = "apo_engine.mcp.server:main"
+# Naming-consolidation pass (0.29): a single unified entry point, additive —
+# apo-engine/apo-local/apo-mcp above are unchanged and keep working. `apo`
+# dispatches by leading token: bare note verbs (read/search/write/append/
+# patch/patch-table/graph-neighbors/filter/backlinks/history) go to the same
+# apo_engine.cli_ops backend as apo-local; `apo engine <cmd>` goes to the
+# same apo_engine.cli backend as apo-engine (index/search/search-eval/stats/
+# watch/desk-project/okf/serve/optima-merge); `apo mcp` runs the MCP server
+# in place, same as apo-mcp. See apo_engine/cli_apo.py's module docstring for
+# the full rationale, including how this resolves the `search` name
+# collision between the two backends. The Go network client (../client/),
+# which used to reserve the bare `apo` name for itself over MCP-over-HTTP,
+# is renamed `apo-remote` to free this name up — see ../client/README.md.
+apo = "apo_engine.cli_apo:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

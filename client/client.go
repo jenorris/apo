@@ -50,7 +50,7 @@ func connect(ctx context.Context, serverURL, token string) (*apoSession, error) 
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{
-		Name:    "apo",
+		Name:    "apo-remote",
 		Version: version,
 	}, nil)
 
@@ -66,7 +66,7 @@ func (s *apoSession) close() {
 }
 
 // listTools returns the tool names + descriptions the server currently
-// exposes — used by `apo tools`.
+// exposes — used by `apo-remote tools`.
 func (s *apoSession) listTools(ctx context.Context) ([]*mcp.Tool, error) {
 	var out []*mcp.Tool
 	cursor := ""

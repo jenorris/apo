@@ -31,7 +31,7 @@ just index
 just search "a phrase you know is in your vault"
 ```
 
-`just setup` also installs `apo-engine`/`apo-mcp` onto `PATH` via `uv tool install --editable` (needs [uv](https://docs.astral.sh/uv/)), which MCP registration and the watcher below use — the local `engine/.venv` stays around for `just test`/`just inspect`/`just tool-list`.
+`just setup` also installs `apo` / `apo-engine` / `apo-local` / `apo-mcp` onto `PATH` via `uv tool install --editable` (needs [uv](https://docs.astral.sh/uv/)) — MCP registration and the watcher below use `apo-mcp`/`apo-engine` by name; the local `engine/.venv` stays around for `just test`/`just inspect`/`just tool-list`. `apo` is the unified entry point (`apo <note-verb>`, `apo engine <cmd>`, `apo mcp`) — reach for it by hand going forward; `apo-engine`/`apo-local`/`apo-mcp` are unchanged and still work, and nothing in this guide's MCP registration needs to change.
 
 Expect a ranked hit for that phrase. If search is empty, confirm `APO_NOTES_ROOT` and re-run `just index`.
 

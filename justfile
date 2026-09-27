@@ -4,7 +4,13 @@
 set dotenv-load := true
 
 # PATH binaries from `uv tool install --editable "engine[mcp]"` — override via env
-# if your install lives elsewhere.
+# if your install lives elsewhere. These recipes deliberately keep shelling out to
+# apo-engine/apo-mcp by their original names (not the unified `apo`/`apo engine ...`
+# entry point added alongside them) so `just` keeps working immediately after a
+# fresh `just setup`, before any manual re-registration of MCP/launchd/shell config
+# — see README.md's "CLI entry points" table for the equivalent `apo` commands to
+# reach for by hand (`just search` == `apo engine search`, `just stats` == `apo
+# engine stats`, etc).
 eng := env_var_or_default("APO_ENGINE_BIN", "apo-engine")
 mcp_bin := env_var_or_default("APO_MCP_BIN", "apo-mcp")
 # Dev-venv python — only for `inspect`/`tool-list`, which load the server module
