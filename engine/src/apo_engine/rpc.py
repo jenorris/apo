@@ -1,6 +1,26 @@
 """Local JSON HTTP RPC for apo-engine (loopback / optional Unix socket).
 
-Intended clients: apo-enterprise Laravel gateway (and any non-stdio host).
+DEPRECATED — this hand-rolled RPC server (`apo-engine serve`) is legacy and
+frozen. It is kept only because an out-of-scope external consumer
+(`apo-enterprise`, see docs/local-rpc.md) may still call it; it is not part of
+the intended two-interface surface (`apo-local` for in-process/no-daemon use,
+`apo-mcp` for everything else) and gets no new routes or features.
+
+Prefer, in order:
+- `apo-mcp`'s HTTP transport (FastMCP, default `:8878`) — the same tool
+  surface as stdio MCP, over HTTP, with the Go `apo` client as a ready CLI.
+- `apo-local` for in-process calls with no daemon at all.
+
+Its only confirmed real consumer (`~/Notes/Work/system/scripts/ingest-pull-
+gmail.py`) has been migrated off RPC onto `apo-local write` directly (2026-09).
+No launchd job has ever run `apo-engine serve` in production — 12,030 failed
+RPC attempts logged against it, 0 successes.
+
+Do not delete this module or its route logic without confirming no consumer
+remains; do not add new routes or behavior here — extend `apo-mcp` instead.
+
+Intended clients (legacy): apo-enterprise Laravel gateway (and any non-stdio
+host that has not migrated to apo-mcp's HTTP transport).
 Auth: optional shared bearer token (APO_RPC_TOKEN). Bind defaults to 127.0.0.1.
 """
 
@@ -10,6 +30,7 @@ import json
 import os
 import socket
 import sys
+import warnings
 from datetime import date, datetime, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,6 +39,11 @@ from urllib.parse import urlparse
 
 from apo_engine import ops
 from apo_engine.mcp_instructions import MCP_INSTRUCTIONS
+
+_DEPRECATION_MESSAGE = (
+    "apo-engine serve (rpc.py) is deprecated — prefer apo-mcp's HTTP transport "
+    "(:8878) or apo-local for in-process use. See docs/local-rpc.md."
+)
 
 Handler = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -689,6 +715,8 @@ def run_rpc(
     token: str | None = None,
 ) -> None:
     """Block serving until killed. Prefer loopback TCP; optional Unix domain socket."""
+    warnings.warn(_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=2)
+    sys.stderr.write(f"DEPRECATED: {_DEPRECATION_MESSAGE}\n")
     RpcHandler.rpc_token = (token if token is not None else os.environ.get("APO_RPC_TOKEN", "")).strip()
 
     if socket_path:

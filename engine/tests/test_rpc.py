@@ -1,10 +1,20 @@
-"""Local RPC HTTP smoke tests (no Ollama — fake embed + temp vault)."""
+"""apo-engine serve (rpc.py) — DEPRECATED, legacy HTTP transport.
+
+This suite is intentionally thin: rpc.py is a deprecated, frozen surface that
+re-dispatches to `ops.*`, so functional coverage of read/write/search/filter/
+place/scratchpad behavior lives as direct `ops.*` tests elsewhere in this
+tree (test_toc_read.py, test_ops_expand_filter.py, test_place_note.py,
+test_scratchpad.py, test_write_guard.py, test_agent_args.py, etc.) — not
+duplicated here over HTTP. What stays here is what only the HTTP transport
+itself can exercise: the server starts and emits its deprecation warning,
+bearer-token auth, and a couple of regressions specific to this module's own
+hand-rolled JSON encoding/routing (no Ollama — fake embed + temp vault).
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import shutil
 import tempfile
@@ -144,203 +154,32 @@ class TestLocalRpc(unittest.TestCase):
         self.assertEqual(read["frontmatter"]["timestamp"], "2026-08-12")
         self.assertEqual(read["frontmatter"]["updated"], "2026-08-12T07:30:00")
 
-    def test_read_and_filter(self):
-        status, read = self._post("/v1/read", {"path": "note.md"})
-        self.assertEqual(status, 200)
-        self.assertTrue(read["ok"])
-        self.assertIn("alpha widget", read["content"].lower())
-        self.assertNotIn("title: Alpha", read["content"])
-        self.assertEqual(read["frontmatter"]["title"], "Alpha")
-        self.assertEqual(read["frontmatter"]["status"], "open")
-
-        status, raw = self._post("/v1/read", {"path": "note.md", "raw": True})
-        self.assertEqual(status, 200)
-        self.assertTrue(raw["ok"])
-        self.assertIn("title: Alpha", raw["content"])
-        self.assertEqual(raw["frontmatter"]["title"], "Alpha")
-
-        status, filt = self._post(
-            "/v1/filter",
-            {"where": {"status": "open"}, "limit": 10},
-        )
-        self.assertEqual(status, 200)
-        self.assertTrue(filt["ok"])
-        self.assertGreaterEqual(filt["total"], 1)
-
-    def test_write_append_patch_delete(self):
-        status, written = self._post(
-            "/v1/write",
-            {
-                "path": "inbox/rpc-write.md",
-                "content": "---\ntitle: RPC Write\n---\n\n# Head\n\nbody\n",
-            },
-        )
-        self.assertEqual(status, 200, written)
-        self.assertTrue(written["ok"])
-        self.assertEqual(written["action"], "created")
-
-        status, rejected = self._post(
-            "/v1/write",
-            {
-                "path": "inbox/rpc-write.md",
-                "content": "tail\n",
-                "append": True,
-            },
-        )
-        self.assertEqual(status, 400, rejected)
-        self.assertFalse(rejected["ok"])
-        self.assertEqual(rejected["error"], "append_removed")
-
-        status, appended = self._post(
-            "/v1/append",
-            {"path": "inbox/rpc-write.md", "text": "- bullet\n", "heading": "Head"},
-        )
-        self.assertEqual(status, 200, appended)
-        self.assertTrue(appended["ok"])
-
-        status, appended_alias = self._post(
-            "/v1/append",
-            {
-                "path": "inbox/rpc-write.md",
-                "content": "- via content alias\n",
-                "heading": "Head",
-            },
-        )
-        self.assertEqual(status, 200, appended_alias)
-        self.assertTrue(appended_alias["ok"])
-        self.assertIn("content=", appended_alias.get("tip") or "")
-
-        status, written_alias = self._post(
-            "/v1/write",
-            {
-                "path": "inbox/rpc-write-alias.md",
-                "text": "---\ntitle: Alias Write\n---\n\n# Head\n\nbody\n",
-            },
-        )
-        self.assertEqual(status, 200, written_alias)
-        self.assertTrue(written_alias["ok"])
-        self.assertIn("text=", written_alias.get("tip") or "")
-
-        status, conflict = self._post(
-            "/v1/append",
-            {
-                "path": "inbox/rpc-write.md",
-                "text": "a\n",
-                "content": "b\n",
-                "heading": "Head",
-            },
-        )
-        self.assertEqual(status, 400, conflict)
-        self.assertFalse(conflict["ok"])
-        self.assertEqual(conflict["error"], "bad_request")
-        self.assertIn("conflicting", conflict.get("message") or "")
-
-        status, patched = self._post(
-            "/v1/patch",
-            {
-                "path": "inbox/rpc-write.md",
-                "ops": [{"op": "set_field", "field": "status", "value": "open"}],
-            },
-        )
-        self.assertEqual(status, 200, patched)
-        self.assertTrue(patched["ok"])
-
-        mtime = patched["mtime"]
-        status, stale = self._post(
-            "/v1/move",
-            {
-                "src": "inbox/rpc-write.md",
-                "dst": "inbox/rpc-moved.md",
-                "expected_mtime": mtime - 10,
-            },
-        )
-        self.assertEqual(status, 409, stale)
-        self.assertEqual(stale["error"], "stale_write")
-
-        status, moved = self._post(
-            "/v1/move",
-            {
-                "src": "inbox/rpc-write.md",
-                "dst": "inbox/rpc-moved.md",
-                "expected_mtime": mtime,
-            },
-        )
-        self.assertEqual(status, 200, moved)
-        self.assertTrue(moved["ok"])
-
-        status, deleted = self._post("/v1/delete", {"path": "inbox/rpc-moved.md"})
-        self.assertEqual(status, 200, deleted)
-        self.assertTrue(deleted["ok"])
-        self.assertFalse((self.vault / "inbox" / "rpc-moved.md").exists())
-
-    def test_place_note_promotes_host_md(self):
-        host = self.tmp / "host-report.md"
-        host.write_text("---\ntitle: Host\n---\n\n# Host\n\npromoted\n", encoding="utf-8")
-        with unittest.mock.patch.object(config, "SEND_ALLOW_ROOTS", str(self.tmp.resolve())):
-            status, placed = self._post(
-                "/v1/place",
-                {
-                    "src": str(host),
-                    "dst": "resources/wiki/host-report.md",
-                    "fields": {"source": "rpc-test"},
-                },
-            )
-        self.assertEqual(status, 200, placed)
-        self.assertTrue(placed["ok"], placed)
-        self.assertEqual(placed.get("mode"), "copy")
-        self.assertTrue(host.exists())
-        dest = self.vault / "resources" / "wiki" / "host-report.md"
-        self.assertTrue(dest.is_file())
-        self.assertIn("source: rpc-test", dest.read_text(encoding="utf-8"))
-
-    def test_scratchpad_commit_via_rpc(self):
-        spill = self.tmp / "spill"
-        spill.mkdir()
-        prev = os.environ.get("APO_SCRATCHPADS_ROOT")
-        os.environ["APO_SCRATCHPADS_ROOT"] = str(spill)
-        try:
-            status, created = self._post(
-                "/v1/scratchpad",
-                {
-                    "action": "create",
-                    "format": "json",
-                    "content": {"title": "Rpc", "status": "draft"},
-                },
-            )
-            self.assertEqual(status, 200, created)
-            self.assertTrue(created["ok"], created)
-            sid = created["session_id"]
-            status, committed = self._post(
-                "/v1/scratchpad",
-                {
-                    "action": "commit",
-                    "session_id": sid,
-                    "vault": "default",
-                    "destination_path": "inbox/rpc-spill.json",
-                },
-            )
-            self.assertEqual(status, 200, committed)
-            self.assertTrue(committed["ok"], committed)
-            self.assertEqual(committed.get("state"), "PROMOTED")
-            dest = self.vault / "inbox" / "rpc-spill.json"
-            self.assertTrue(dest.is_file())
-            self.assertIn('"status": "draft"', dest.read_text(encoding="utf-8"))
-        finally:
-            if prev is None:
-                os.environ.pop("APO_SCRATCHPADS_ROOT", None)
-            else:
-                os.environ["APO_SCRATCHPADS_ROOT"] = prev
-
-    def test_search_prefers_limit(self):
-        status, search = self._post("/v1/search", {"query": "alpha widget", "limit": 3})
-        self.assertEqual(status, 200)
-        self.assertTrue(search["ok"])
-        self.assertGreaterEqual(len(search["results"]), 1)
-
     def test_auth_required(self):
         status, body = self._get("/health", token="wrong")
         self.assertEqual(status, 401)
         self.assertFalse(body["ok"])
+
+
+class TestRunRpcDeprecation(unittest.TestCase):
+    """`apo-engine serve` (rpc.run_rpc) must warn loudly on every start — the
+    one thing this legacy transport needs to keep doing as long as it exists.
+    """
+
+    @staticmethod
+    def _free_port() -> int:
+        import socket
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    def test_serve_emits_deprecation_warning(self):
+        port = self._free_port()
+        with unittest.mock.patch.object(ThreadingHTTPServer, "serve_forever", return_value=None):
+            with self.assertWarns(DeprecationWarning) as ctx:
+                rpc.run_rpc(host="127.0.0.1", port=port, token="unused")
+        self.assertIn("deprecated", str(ctx.warning).lower())
+        self.assertIn("apo-mcp", str(ctx.warning).lower())
 
 
 if __name__ == "__main__":
