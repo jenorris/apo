@@ -2,14 +2,43 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
-## [Unreleased]
+## [0.30.0] — 2026-09-27
 
-Contract-mechanism tightening: the same class of drift 0.29.0 chased across
-tool surfaces, applied to what the vault contracts claim versus what the engine
-enforces.
+A performance/simplicity/maintainability review turned up a live search-quality
+problem (89.8% of the `work` vault's chunks were auto-generated Gmail tables)
+and a pile of accreted config/code debt; this release fixes the former and
+works through the latter, plus a contract-mechanism tightening pass covering
+the same class of drift 0.29.0 chased across tool surfaces.
 
 ### Fixed
 
+- **`index-work.db` was 90% auto-generated Gmail ingest tables** (468,766 of
+  522,261 chunks) sitting in a `vec0` table that was 69% dead space (sqlite-vec
+  never reclaims deleted slots), plus ~7GB of unvacuumed freed pages from the
+  0.28.1 backlinks fix. Real hybrid-search latency on `work`: 50.4s cold /
+  1.7s warm. Excluded the ingest folder and a buggy calendar-sync script's
+  derivative output (`areas/schedule/days/*`, rewritten ~once/minute around
+  the clock despite its own "skip if unchanged" logic never actually
+  triggering) via `.indexignore`, rebuilt, and vacuumed:
+  **16.8GB → 240MB, same query now 0.44s.**
+- `index_health()`'s `vec_chunks`/`chunks_fts` orphan checks went through the
+  virtual tables themselves — for `vec0` that means materializing every
+  embedding blob just to check rowid membership (seconds on a large index).
+  Both have their own shadow tables built for exactly this
+  (`vec_chunks_rowids.rowid`, `chunks_fts_docsize.id`); `apo-engine doctor`
+  drops from 25s to sub-second.
+- Watcher logs were 988MB/174MB of un-timestamped, unrotated `print()` output
+  — a burst of already-fixed cycle errors was impossible to date, and a
+  steady-state re-embed (the schedule-sync bug above) was invisible in them.
+  `watch.py` (and `git_sync`/`optima_merge`/`vault_project`'s own `print()`
+  calls, which would have kept the old growth going even with the watcher's
+  own logging fixed) now log through Python's `logging` with ISO timestamps
+  and a `RotatingFileHandler` (50MB × 3). `core.py`'s existing
+  `apo.index` logger inherits the same handler for free via the logging
+  hierarchy.
+- `git_sync._run_git`'s 120s timeout applied even to `push`/`pull`/`fetch` —
+  the only realistic hang is a dead network on those specifically; tightened
+  to 30s for network calls, left at 120s for local git operations.
 - **`table-contract` was half-enforced.** `patch_table` row ops keyed by the
   contract `key_column`, but `replace_table(merge=upsert)` keyed by the first
   cell — on a table whose key column is not first (the template's own `SKU`
@@ -53,6 +82,65 @@ enforces.
   parse-and-check body; `git` and `optima` had grown private caches for the
   watcher tick while the `table` loader re-parsed YAML per indexed file. One
   loader, one cache, one `clear_yaml_cache()`.
+- **Watcher hook health**: `last_tick_at`/`last_tick_seconds`/`ok`/`error` per
+  hook (git-sync, Optima-merge, desk-reprojection), surfaced through
+  `apo-engine doctor` and MCP `index_health`/`memory_status` — a hang in any
+  of the three (only exceptions were ever guarded against, not stalls) is now
+  visible instead of silently stopping indexing. Does not add the
+  thread-per-hook scheduler `docs/watcher-scheduler-separation.md` floated —
+  reviewed and rejected as more machinery than a solo maintainer's watcher
+  needs; the doc now carries a status note.
+- `ranking.py`: the ~600 lines of hybrid-search boost heuristics
+  (`_phrase_stem_boost`, `_backlink_search_boost`, `_neighbor_rank_boost`, etc.)
+  moved out of `core.py` — a straight relocation, same logic and signatures,
+  so `search()` reads as retrieval + storage, not retrieval + storage + eight
+  boost multipliers.
+- `search-contract.schema.yaml` gains `boost_vocab`: the architecture/system
+  vocabulary that biases ranking toward infra-flavored results used to be a
+  hardcoded regex in engine source — literal employer system names
+  (`skypad`, `faber`, `cortana`, `starrez`, …) shipping in a general-purpose
+  local tool, applied identically to every vault including personal ones with
+  no relation to that vocabulary. Now empty by default (no boost, not a
+  crash) and set per-vault; the `work` vault's contract now carries the exact
+  terms that used to be hardcoded, so its ranking is unchanged.
+
+### Changed
+
+- `apo-engine search`/`stats` route through `ops.search`/`ops.stats` (were
+  calling `core.*` directly) — CLI and MCP tools now return the same
+  `{ok, results[], has_more, ...}` shape. `apo-engine` subcommands honor
+  `$APO_VAULT` like `apo-local` already did. `apo-engine search` itself is
+  removed (below) now that both fronted the same function.
+- `apo-engine index`/`apo_admin`'s `reindex` are watcher-aware: `mode=rebuild`
+  signals a live watcher (never a second concurrent `index.db` writer) or
+  runs inline when none is running, and `wait=true` can block on completion.
+  `apo_admin(reindex, mode=rebuild)` now requires `confirm=true`
+  unconditionally, not just when `force=true` — a rebuild can run inline
+  (a direct write from the MCP server process) when no watcher is live.
+- Vault discovery: `--vault-path` is the preferred spelling for an explicit
+  filesystem root in `apo-mcp`'s discovery argv (`--vault` kept as a
+  back-compat alias) — it collided in name, not meaning, with
+  `apo-engine`/`apo-local`'s own `--vault NAME` (a registered `vault_id`).
+  `config.env`/`config.env.example` collapse into `.env`/`.env.example`
+  (the two had already drifted — live `.env` carried three OTLP vars
+  `config.env` lacked).
+
+### Removed
+
+- **`apo-engine serve` / `rpc.py`** (the JSON-HTTP RPC server, deprecated in
+  0.28.3) is deleted outright rather than left deprecated-but-shipping — it
+  had zero known consumers, and every future `ops.py` change had to be
+  checked against its hand-rolled JSON encoding regardless. Coverage that
+  was genuinely testing `ops.py` behavior moved to direct (non-HTTP) tests;
+  `apo-engine serve`, `just rpc`, and `APO_RPC_*` config are gone. See
+  `docs/local-rpc.md` for a pointer to the last commit before removal.
+- Dead vault-discovery config: `APO_VAULT_PATH_LIST` (never set anywhere),
+  `config.VAULTS_CONFIG` (defined, never read), and a hardcoded
+  atlas/meta/jeremy/notes_global vault alias table (confirmed dead — all
+  real vaults resolve via collection-id or the plain legacy fallback).
+  `APO_VAULTS` (the JSON registration shim) is *not* removed — it's the only
+  way `apo-engine okf ingest` registers a read-only vault, a real feature
+  the original plan for this cleanup didn't account for.
 
 ### Docs
 
