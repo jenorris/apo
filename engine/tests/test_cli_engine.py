@@ -4,7 +4,11 @@ Problem B (watcher-aware index/reindex) regression coverage.
 These are wiring-level tests: the downstream ``ops``/``core`` calls are mocked
 so each test isolates one thing — the CLI parses ``--vault``/env correctly and
 calls the right function with the right kwargs — rather than re-testing
-``ops.search``/``ops.reindex`` themselves (covered elsewhere).
+``ops.stats``/``ops.reindex`` themselves (covered elsewhere).
+
+``cli.py``'s own ``search`` subcommand was removed (2026-09 dedupe pass) —
+apo-local's ``search`` (``cli_ops.py``, exercised in ``test_cli_apo.py`` /
+``test_cli_ops.py``) is the only CLI front end for ``ops.search`` now.
 """
 from __future__ import annotations
 
@@ -26,18 +30,6 @@ class CliVaultEnvTest(unittest.TestCase):
         )
         self._env_patch.start()
         self.addCleanup(self._env_patch.stop)
-
-    def test_search_default_vault_from_env(self):
-        captured = {}
-
-        def fake_search(query, **kwargs):
-            captured.update(kwargs)
-            return {"ok": True, "results": [], "vault": kwargs.get("vault"), "has_more": False}
-
-        with mock.patch.object(ops, "search", side_effect=fake_search):
-            rc = cli.main(["search", "hello", "--json"])
-        self.assertEqual(rc, 0)
-        self.assertEqual(captured.get("vault"), "envvault")
 
     def test_stats_default_vault_from_env(self):
         captured = {}
@@ -65,49 +57,6 @@ class CliVaultEnvTest(unittest.TestCase):
         self.assertEqual(captured.get("vault"), "envvault")
         # --wait defaults on
         self.assertTrue(captured.get("wait"))
-
-    def test_explicit_vault_flag_overrides_env(self):
-        captured = {}
-
-        def fake_search(query, **kwargs):
-            captured.update(kwargs)
-            return {"ok": True, "results": [], "vault": kwargs.get("vault"), "has_more": False}
-
-        with mock.patch.object(ops, "search", side_effect=fake_search):
-            rc = cli.main(["search", "hello", "--json", "--vault", "explicit"])
-        self.assertEqual(rc, 0)
-        self.assertEqual(captured.get("vault"), "explicit")
-
-
-class CliSearchNoHybridTest(unittest.TestCase):
-    """apo-engine search already had --no-hybrid; confirm it still reaches ops.search
-    (Problem A: cli.py used to call core.search directly, bypassing ops.search
-    entirely — this pins the ops-layer routing so the MCP-shaped envelope holds)."""
-
-    def test_no_hybrid_forwards_hybrid_false(self):
-        captured = {}
-
-        def fake_search(query, **kwargs):
-            captured.update(kwargs)
-            return {"ok": True, "results": [], "vault": "default", "has_more": False}
-
-        with mock.patch.object(ops, "search", side_effect=fake_search):
-            rc = cli.main(["search", "hello", "--json", "--no-hybrid"])
-        self.assertEqual(rc, 0)
-        self.assertFalse(captured.get("hybrid"))
-
-    def test_hybrid_default_true(self):
-        captured = {}
-
-        def fake_search(query, **kwargs):
-            captured.update(kwargs)
-            return {"ok": True, "results": [], "vault": "default", "has_more": False}
-
-        with mock.patch.object(ops, "search", side_effect=fake_search):
-            rc = cli.main(["search", "hello", "--json"])
-        self.assertEqual(rc, 0)
-        self.assertTrue(captured.get("hybrid"))
-
 
 class CliIndexWatcherSafetyTest(unittest.TestCase):
     """--inline must refuse when a watcher is live; --force-inline overrides it."""

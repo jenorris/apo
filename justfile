@@ -5,13 +5,14 @@ set dotenv-load := true
 
 # PATH binaries from `uv tool install --editable "engine[mcp]"` — override via env
 # if your install lives elsewhere. These recipes deliberately keep shelling out to
-# apo-engine/apo-mcp by their original names (not the unified `apo`/`apo engine ...`
-# entry point added alongside them) so `just` keeps working immediately after a
-# fresh `just setup`, before any manual re-registration of MCP/launchd/shell config
-# — see README.md's "CLI entry points" table for the equivalent `apo` commands to
-# reach for by hand (`just search` == `apo engine search`, `just stats` == `apo
-# engine stats`, etc).
+# apo-engine/apo-local/apo-mcp by their original names (not the unified `apo`/`apo
+# engine ...` entry point added alongside them) so `just` keeps working immediately
+# after a fresh `just setup`, before any manual re-registration of MCP/launchd/shell
+# config — see README.md's "CLI entry points" table for the equivalent `apo`
+# commands to reach for by hand (`just search` == `apo search` [apo-local backend],
+# `just stats` == `apo engine stats`, etc).
 eng := env_var_or_default("APO_ENGINE_BIN", "apo-engine")
+local_bin := env_var_or_default("APO_LOCAL_BIN", "apo-local")
 mcp_bin := env_var_or_default("APO_MCP_BIN", "apo-mcp")
 # Dev-venv python — only for `inspect`/`tool-list`, which load the server module
 # straight from source so they always reflect uncommitted local changes.
@@ -52,8 +53,11 @@ index *ARGS:
 reindex:
     {{eng}} index --rebuild
 
+# apo-local's search (ops.search) — apo-engine's own duplicate `search` subcommand
+# was removed (same backend, subset of flags); use apo-local's flags (--limit, not
+# -k; --folder/--vaults/etc.) going forward.
 search *ARGS:
-    {{eng}} search {{ARGS}}
+    {{local_bin}} search {{ARGS}}
 
 # Labeled search-quality eval (hit@k / MRR). File format: docs/examples/search-eval.example.yaml
 search-eval *ARGS:

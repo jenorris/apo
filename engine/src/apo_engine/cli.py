@@ -1,4 +1,4 @@
-"""Command-line interface: index | search | stats | doctor | watch | desk-project."""
+"""Command-line interface: index | search-eval | stats | doctor | watch | desk-project."""
 from __future__ import annotations
 
 import argparse
@@ -85,35 +85,6 @@ def _vacuum_index(b) -> int:
     db.execute("VACUUM")
     db.commit()
     print(f"[{b.name}] VACUUM complete in {time.monotonic() - t0:.1f}s — {vaults.index_path()}")
-    return 0
-
-
-def _cmd_search(args) -> int:
-    vault_arg = getattr(args, "vault", None) or ""
-    result = apo_ops.search(
-        args.query,
-        top_k=args.k,
-        vault=vault_arg,
-        exclude=args.exclude or None,
-        hybrid=not args.no_hybrid,
-    )
-    if result.get("warning"):
-        print(f"WARNING: {result['warning']}", file=sys.stderr)
-    if args.json:
-        print(json.dumps(result))
-        return 0 if result.get("ok") else 1
-    if not result.get("ok"):
-        print(f"error: {result.get('error')}: {result.get('message')}", file=sys.stderr)
-        return 1
-    hits = result.get("results", [])
-    if not hits:
-        print("(no results)")
-        return 0
-    for i, h in enumerate(hits, 1):
-        crumb = f"  ⟩ {h['heading']}" if h.get("heading") else ""
-        print(f"\n{i}. [{h.get('score', 0):.3f}] {h.get('source', '')}{crumb}")
-        snippet = " ".join((h.get("content") or "").split())
-        print(f"   {snippet[:280]}{'…' if len(snippet) > 280 else ''}")
     return 0
 
 
@@ -317,15 +288,6 @@ def main(argv: list[str] | None = None) -> int:
         "second concurrent index.db writer — see docs/index-concurrency.md)",
     )
     pi.set_defaults(func=_cmd_index)
-
-    ps = sub.add_parser("search", help="query the index")
-    ps.add_argument("query")
-    ps.add_argument("-k", type=int, default=8, help="number of results")
-    ps.add_argument("--exclude", nargs="*", default=[], help="glob(s) of paths to drop (e.g. 'private/*')")
-    ps.add_argument("--json", action="store_true")
-    ps.add_argument("--no-hybrid", action="store_true", help="keyword-only (skip vector fusion and query embed)")
-    ps.add_argument("--vault", default=os.environ.get("APO_VAULT", ""), help="usage-contract vault_id ($APO_VAULT)")
-    ps.set_defaults(func=_cmd_search)
 
     pe = sub.add_parser(
         "search-eval",
