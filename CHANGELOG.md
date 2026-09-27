@@ -2,6 +2,66 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [Unreleased]
+
+Contract-mechanism tightening: the same class of drift 0.29.0 chased across
+tool surfaces, applied to what the vault contracts claim versus what the engine
+enforces.
+
+### Fixed
+
+- **`table-contract` was half-enforced.** `patch_table` row ops keyed by the
+  contract `key_column`, but `replace_table(merge=upsert)` keyed by the first
+  cell — on a table whose key column is not first (the template's own `SKU`
+  example) an upsert appended a duplicate instead of replacing the row. Upsert
+  now keys by `key_column`. The template's per-rule `merge`,
+  `allow_new_columns` and `header_synonyms` were documented since 0.6.1 and
+  never read; they are now defaults for `replace_table` (op fields still win;
+  `ReplaceTableOp.merge` / `allow_new_columns` default to unset so a contract
+  default can apply). `allow_new_columns: true` accepted a new header and then
+  dropped its values because the table schema never grew — the column is now
+  added. The mapping form `tables: {horizon.md: {key_column: start}}` (the
+  shape the Optima vault ships) was silently ignored; both list and mapping
+  forms are honored.
+- **`vault(lint)` skipped OKF entirely.** Only `apo-engine okf validate`
+  checked corpus conformance; MCP agents had no equivalent. Lint now runs the
+  producer profile per note (`okf.missing_field`, plus `okf.missing_frontmatter`
+  / `okf.reserved_frontmatter` for the structural clauses) with the same
+  `suggested_op` shape as post-write flaws; the flagged-path set matches the
+  CLI. `read_note(lint=true)` inherits it. `note_lint.lint_note(include_okf=)`
+  opts out.
+- **Lint sweep cache ignored most contract edits.** The 120 s `vault(lint)`
+  cache fingerprinted only the read and archival contracts; editing the OKF or
+  usage contract served stale findings. It now fingerprints every contract file.
+
+### Added
+
+- **Contract shape checks** (`vault_contracts.check_contract`): each
+  engine-interpreted contract (`okf`, `search`, `table`, `git`, `mermaid`,
+  `archival`, `telemetry`, `optima` `refresh`) declares the keys its loader
+  reads and its enums. Unknown top-level keys, values outside an enum
+  (`enforcement: strict`, `store.backend: sqlite`, `mode: maybe`) and wrong
+  container shapes surface as `warnings[]` on `vault(contracts|describe|merge)`
+  entries and as `contract.unknown_key` / `contract.invalid_value` /
+  `contract.invalid_shape` flaws on unscoped `vault(lint)`; unparseable YAML is
+  `contract.unreadable` (`error`). Advisory only — nothing blocks. Contracts the
+  engine does not interpret (`usage`, `read`, `local-web`) are not checked.
+  Against the live desk this flags exactly the Work vault's `provenance_optional`
+  / `okf_02_soft_on` (0.2 provenance keys no loader reads).
+- **Shared contract YAML cache** (`vault_contracts.load_yaml_cached`, keyed on
+  path + mtime_ns + size): the eight per-contract loaders shared one copy-pasted
+  parse-and-check body; `git` and `optima` had grown private caches for the
+  watcher tick while the `table` loader re-parsed YAML per indexed file. One
+  loader, one cache, one `clear_yaml_cache()`.
+
+### Docs
+
+- `docs/contracts/README.md`: contract checks, and the glob-semantics split
+  (`okf` / `archival` use full-path match where `*` stops at `/`; `search` /
+  `table` / `mermaid` use `fnmatch` where it does not).
+- `telemetry-contract` template no longer claims `deny` is stripped at ingest;
+  the recorder is allow-list by construction and never captured those fields.
+
 ## [0.29.0] — 2026-09-27
 
 An aggressive CLI/MCP-surface review turned up real gaps and drift between

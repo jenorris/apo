@@ -7,8 +7,11 @@
 
 table_contract_version: "0.1"
 
-# Per-pattern table rules. `match` is a vault-relative path glob; the first match
-# wins. Omit this file entirely to accept engine defaults everywhere.
+# Per-pattern table rules. `match` is a vault-relative path glob (fnmatch: `*`
+# crosses `/`); the first match wins. Omit this file entirely to accept engine
+# defaults everywhere. A mapping form is also accepted:
+#   tables:
+#     horizon.md: {key_column: start}
 # See also docs/contracts/mermaid-notes.md for diagram chunk_kind search habits.
 tables:
   - match: "areas/vehicle/*.md"
@@ -17,9 +20,12 @@ tables:
     key_column: "Date"
 
   - match: "areas/**/inventory.md"
+    # Also the upsert key for replace_table(merge=upsert) — rows match on this
+    # column, not on the first cell.
     key_column: "SKU"
-    # Default merge for replace_table / CSV upsert on this note.
-    # replace = swap whole table; append = add rows; upsert = replace by key.
+    # Default merge for replace_table / CSV upsert on this note when the op
+    # omits merge=. replace = swap whole table; append = add rows; upsert =
+    # replace by key.
     merge: upsert
     # Allow CSV/JSON imports to introduce columns not present in the table.
     # Default false — unmatched columns reject with header_ambiguous + suggestions.

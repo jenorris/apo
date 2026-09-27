@@ -12,6 +12,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import yaml
 
@@ -307,6 +308,92 @@ def load_contract(path: Path) -> OkfContract:
         path_rules=rules,
         legacy_type_map={str(k): str(v) for k, v in legacy.items()},
     )
+
+
+ENFORCEMENTS = ("exempt", "reserved", "soft", "hard")
+SPEC_TYPE_POLICIES = ("fill", "mirror", "off")
+GENERATED_POLICIES = ("off", "forward")
+# Top-level keys the engine (loader + scratchpad type_profiles) actually reads.
+# ``bundle_root`` is the template's documentation pointer; ``okf_contract_version``
+# is the generic contract version key. Anything else is silently ignored on
+# load — ``check_contract`` makes that visible.
+KNOWN_TOP_KEYS = frozenset(
+    {
+        "okf_version",
+        "okf_contract_version",
+        "bundle_root",
+        "type_field",
+        "legacy_type_field",
+        "spec_type_field",
+        "spec_type_policy",
+        "spec_required",
+        "generated_policy",
+        "generated_by",
+        "core_required",
+        "core_soft",
+        "default_enforcement",
+        "default_okf_type",
+        "reserved_filenames",
+        "path_rules",
+        "legacy_type_map",
+        "type_profiles",
+    }
+)
+KNOWN_RULE_KEYS = frozenset({"match", "enforcement", "okf_type", "required_fields", "notes"})
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    """Shape findings for a parsed OKF contract (advisory, never blocks).
+
+    ``load_contract`` coerces silently — an unknown ``enforcement`` becomes
+    ``soft``, a rule without ``match`` is dropped, an unknown top-level key is
+    ignored. Each of those is reported here so ``vault(contracts)`` / ``vault(lint)``
+    show what the engine will actually do with the file.
+    """
+    from apo_engine import vault_contracts as vc
+
+    findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
+    for key, allowed in (
+        ("default_enforcement", ("soft", "hard")),
+        ("spec_type_policy", SPEC_TYPE_POLICIES),
+        ("generated_policy", GENERATED_POLICIES),
+    ):
+        f = vc.enum_finding(data.get(key), allowed, key)
+        if f:
+            findings.append(f)
+    for key in ("core_required", "core_soft", "spec_required", "reserved_filenames"):
+        findings.extend(vc.str_list_findings(data.get(key), key))
+    f = vc.mapping_finding(data.get("legacy_type_map"), "legacy_type_map")
+    if f:
+        findings.append(f)
+    f = vc.mapping_finding(data.get("type_profiles"), "type_profiles")
+    if f:
+        findings.append(f)
+    rules = data.get("path_rules")
+    if rules is None:
+        return findings
+    if not isinstance(rules, list):
+        findings.append(
+            vc.finding("contract.invalid_shape", "path_rules", "path_rules must be a list of rules")
+        )
+        return findings
+    for i, rule in enumerate(rules):
+        where = f"path_rules[{i}]"
+        if not isinstance(rule, dict):
+            findings.append(vc.finding("contract.invalid_shape", where, "rule must be a mapping"))
+            continue
+        if not str(rule.get("match") or "").strip():
+            findings.append(
+                vc.finding(
+                    "contract.invalid_shape", where, "rule has no match glob and is dropped on load"
+                )
+            )
+        findings.extend(vc.unknown_key_findings(rule, KNOWN_RULE_KEYS, prefix=where))
+        f = vc.enum_finding(rule.get("enforcement"), ENFORCEMENTS, f"{where}.enforcement")
+        if f:
+            findings.append(f)
+        findings.extend(vc.str_list_findings(rule.get("required_fields"), f"{where}.required_fields"))
+    return findings
 
 
 def get_contract(vault_root: Path) -> OkfContract | None:

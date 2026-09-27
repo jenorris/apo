@@ -15,9 +15,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
-
+from apo_engine import vault_contracts as vc
 from apo_engine.okf import path_glob_match
+
+MODES = ("off", "suggest", "auto")
+STRATEGIES = ("mirror", "flat")
+IDLE_FIELDS = ("last_activity", "mtime")
+KNOWN_TOP_KEYS = frozenset(
+    {
+        "archival_contract_version",
+        "mode",
+        "destination",
+        "eligibility",
+        "actions",
+        "hot_search",
+        "schedule",
+        "safety",
+    }
+)
+KNOWN_ELIGIBILITY_KEYS = frozenset(
+    {"include_folders", "exempt_folders", "exempt_globs", "status_in", "idle", "okf_type_in"}
+)
 
 ARCHIVAL_CONTRACT_CANDIDATES = (
     Path("system") / "contracts" / "archival-contract.schema.yaml",
@@ -55,11 +73,63 @@ def load_archival_contract(
     path = resolve_archival_contract_path(vault_root, explicit)
     if path is None:
         return None
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    return data if isinstance(data, dict) else None
+    return vc.load_yaml_cached(path)
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    """Shape findings for a parsed archival contract (advisory, never blocks)."""
+    findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
+    # ``mode: auto`` and a non-mirror strategy are documented-but-unimplemented
+    # states; lint already reports them on its ``tip`` / ``warning`` channels,
+    # so only genuinely invalid values are findings here.
+    f = vc.enum_finding(data.get("mode"), MODES, "mode")
+    if f:
+        findings.append(f)
+    dest = data.get("destination")
+    f = vc.mapping_finding(dest, "destination")
+    if f:
+        findings.append(f)
+    elif isinstance(dest, dict):
+        f = vc.enum_finding(dest.get("strategy"), STRATEGIES, "destination.strategy")
+        if f:
+            findings.append(f)
+    elig = data.get("eligibility")
+    f = vc.mapping_finding(elig, "eligibility")
+    if f:
+        findings.append(f)
+    elif isinstance(elig, dict):
+        findings.extend(vc.unknown_key_findings(elig, KNOWN_ELIGIBILITY_KEYS, prefix="eligibility"))
+        for key in ("include_folders", "exempt_folders", "exempt_globs", "status_in", "okf_type_in"):
+            findings.extend(vc.str_list_findings(elig.get(key), f"eligibility.{key}"))
+        idle = elig.get("idle")
+        f = vc.mapping_finding(idle, "eligibility.idle")
+        if f:
+            findings.append(f)
+        elif isinstance(idle, dict):
+            f = vc.enum_finding(idle.get("field"), IDLE_FIELDS, "eligibility.idle.field")
+            if f:
+                findings.append(f)
+            days = idle.get("older_than_days")
+            if days is not None:
+                try:
+                    float(days)
+                except (TypeError, ValueError):
+                    findings.append(
+                        vc.finding(
+                            "contract.invalid_value",
+                            "eligibility.idle.older_than_days",
+                            f"older_than_days {days!r} is not a number (default 90 used)",
+                        )
+                    )
+        if not _str_list(elig.get("status_in")) and raw_mode(data) == "suggest":
+            findings.append(
+                vc.finding(
+                    "contract.invalid_shape",
+                    "eligibility.status_in",
+                    "status_in is empty; no note can be archive.eligible",
+                )
+            )
+    return findings
 
 
 def raw_mode(data: dict[str, Any] | None) -> str:
@@ -511,5 +581,5 @@ def evaluate_write_path(
 
 
 def clear_archival_contract_cache() -> None:
-    """Reserved; currently no-op (loads are uncached)."""
-    return None
+    """Drop cached contract reads (shared contract YAML cache)."""
+    vc.clear_yaml_cache()

@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from apo_engine import optima_contract, optima_merge, vaults
+from apo_engine import optima_contract, optima_merge, vault_contracts, vaults
 
 ET = ZoneInfo("America/New_York")
 
@@ -260,7 +260,7 @@ class MergeTickIdleCostTest(unittest.TestCase):
             ctl = optima_merge.VaultMergeController(root, verbose=False)
             ctl.tick(index_busy=False)  # warm caches + arm interval
             with unittest.mock.patch.object(
-                optima_contract.yaml, "safe_load"
+                vault_contracts.yaml, "safe_load"
             ) as parse, unittest.mock.patch.object(
                 optima_merge, "run_merge"
             ) as merge:

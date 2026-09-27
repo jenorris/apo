@@ -9,7 +9,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from apo_engine import vault_contracts as vc
+
+PATH_MODES = ("none", "hash_only", "vault_relative", "absolute")
+KNOWN_TOP_KEYS = frozenset(
+    {
+        "telemetry_contract_version",
+        "enabled",
+        "vault_id",
+        "store",
+        "otel",
+        "privacy",
+        "retention_days",
+        "agent_access",
+        "efficiency",
+        "ingest",
+        "pointers",
+    }
+)
+# What the engine reads under privacy.allow; ``deny`` is documentation only —
+# the recorder is allow-list by construction and never captures bodies/queries.
+KNOWN_ALLOW_KEYS = frozenset({"dimensions", "flags", "paths", "headings", "chunk_hash"})
 
 TELEMETRY_CONTRACT_CANDIDATES = (
     Path("system") / "contracts" / "telemetry-contract.schema.yaml",
@@ -67,11 +87,49 @@ def load_telemetry_contract(
     path = resolve_telemetry_contract_path(vault_root, explicit)
     if path is None:
         return None
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    return data if isinstance(data, dict) else None
+    return vc.load_yaml_cached(path)
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    """Shape findings for a parsed telemetry contract (advisory, never blocks)."""
+    from apo_engine.metrics_backend import _BACKEND_ALIASES, VALID_BACKENDS
+
+    findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
+    store = data.get("store")
+    f = vc.mapping_finding(store, "store")
+    if f:
+        findings.append(f)
+    elif isinstance(store, dict) and store.get("backend") is not None:
+        raw = str(store.get("backend")).strip().lower()
+        if _BACKEND_ALIASES.get(raw, raw) not in VALID_BACKENDS:
+            findings.append(
+                vc.finding(
+                    "contract.invalid_value",
+                    "store.backend",
+                    f"store.backend {raw!r} not in {'|'.join(VALID_BACKENDS)} "
+                    "(falls back to embedded)",
+                )
+            )
+    privacy = data.get("privacy")
+    f = vc.mapping_finding(privacy, "privacy")
+    if f:
+        findings.append(f)
+    elif isinstance(privacy, dict):
+        allow = privacy.get("allow")
+        f = vc.mapping_finding(allow, "privacy.allow")
+        if f:
+            findings.append(f)
+        elif isinstance(allow, dict):
+            findings.extend(
+                vc.unknown_key_findings(allow, KNOWN_ALLOW_KEYS, prefix="privacy.allow")
+            )
+            f = vc.enum_finding(allow.get("paths"), PATH_MODES, "privacy.allow.paths")
+            if f:
+                findings.append(f)
+            findings.extend(
+                vc.str_list_findings(allow.get("dimensions"), "privacy.allow.dimensions")
+            )
+    return findings
 
 
 def policy_from_contract(data: dict[str, Any] | None) -> TelemetryPolicy:

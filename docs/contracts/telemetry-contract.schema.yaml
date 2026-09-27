@@ -18,7 +18,10 @@ store:
 otel:
   export: true
 
-# Engine records only dimensions listed under allow; strips deny keys at ingest.
+# The recorder is allow-list by construction: it reads allow.paths / headings /
+# chunk_hash and whether conversation_id is in allow.dimensions. It never
+# captures note bodies, queries, prompts, or raw tool arguments, so `deny` is
+# documentation of that guarantee, not an ingest filter.
 privacy:
   allow:
     dimensions: [tool, ok, duration_ms, collection, conversation_id, vault_id, apo_version]

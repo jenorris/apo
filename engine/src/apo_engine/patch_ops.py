@@ -252,8 +252,11 @@ class ReplaceTableOp(_TableOpBase):
     op: Literal["replace_table"]
     rows: list[dict[str, Any]] | None = None
     csv: str | None = None
-    merge: Literal["replace", "append", "upsert"] = "replace"
-    allow_new_columns: bool = False
+    # None = unset → the vault table-contract rule's ``merge`` /
+    # ``allow_new_columns`` (else replace / false). A materialized default here
+    # would shadow the contract, since ops are dumped with exclude_none.
+    merge: Literal["replace", "append", "upsert"] | None = None
+    allow_new_columns: bool | None = None
 
 
 class AlterTableSchemaOp(_TableOpBase):

@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import yaml
+from apo_engine import vault_contracts as vc
 
 GIT_CONTRACT_CANDIDATES = (
     Path("system") / "contracts" / "git-contract.schema.yaml",
@@ -24,9 +24,31 @@ GIT_CONTRACT_CANDIDATES = (
 )
 GIT_CONTRACT_REL = GIT_CONTRACT_CANDIDATES[0]  # preferred path for docs/tests
 _GIT_LOG_TIMEOUT_S = 15.0
-# Caches for the watcher's hot path (git-sync tick runs per vault per second).
-_contract_cache_lock = threading.Lock()
-_contract_cache: dict[tuple[str, int, int], dict[str, Any]] = {}
+HOSTS = ("github", "forgejo", "gitlab", "local")
+KNOWN_TOP_KEYS = frozenset(
+    {
+        "git_contract_version",
+        "remote",
+        "host",
+        "default_branch",
+        "backup",
+        "lfs",
+        "never_commit",
+        "sync",
+        "restore",
+    }
+)
+KNOWN_SYNC_KEYS = frozenset(
+    {
+        "enabled",
+        "debounce_seconds",
+        "pull_interval_seconds",
+        "commit_message_template",
+        "auto_push",
+        "on_block_command",
+    }
+)
+# Cache for the watcher's hot path (git-sync tick runs per vault per second).
 _work_tree_cache_lock = threading.Lock()
 _work_tree_cache: dict[str, tuple[float, bool]] = {}
 # A vault root gaining/losing its git work tree is rare; re-probe occasionally
@@ -52,35 +74,53 @@ def resolve_git_contract_path(vault_root: Path, explicit: str | None = None) -> 
 def load_git_contract(vault_root: Path, explicit: str | None = None) -> dict[str, Any] | None:
     """Parse git-contract YAML if present. Returns None when missing/unreadable.
 
-    Cached on (path, mtime_ns, size): the watcher's git-sync tick reads this
-    several times per vault per second, and re-parsing YAML each time was a
-    measurable share of idle CPU. A contract edit changes mtime/size, so the
-    cache self-invalidates.
+    Cached on (path, mtime_ns, size) via the shared contract cache: the
+    watcher's git-sync tick reads this several times per vault per second, and
+    re-parsing YAML each time was a measurable share of idle CPU. A contract
+    edit changes mtime/size, so the cache self-invalidates.
     """
     path = resolve_git_contract_path(vault_root, explicit)
     if path is None:
         return None
-    try:
-        st = path.stat()
-        key = (str(path), st.st_mtime_ns, st.st_size)
-    except OSError:
-        return None
-    with _contract_cache_lock:
-        hit = _contract_cache.get(key)
-    if hit is not None:
-        # Copy: callers treat the result as their own dict.
-        return dict(hit)
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    with _contract_cache_lock:
-        if len(_contract_cache) > 64:
-            _contract_cache.clear()
-        _contract_cache[key] = data
-    return dict(data)
+    return vc.load_yaml_cached(path)
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    """Shape findings for a parsed git contract (advisory, never blocks)."""
+    findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
+    f = vc.enum_finding(data.get("host"), HOSTS, "host")
+    if f:
+        findings.append(f)
+    findings.extend(vc.str_list_findings(data.get("never_commit"), "never_commit"))
+    sync = data.get("sync")
+    f = vc.mapping_finding(sync, "sync")
+    if f:
+        findings.append(f)
+    elif isinstance(sync, dict):
+        findings.extend(vc.unknown_key_findings(sync, KNOWN_SYNC_KEYS, prefix="sync"))
+        for key in ("debounce_seconds", "pull_interval_seconds"):
+            val = sync.get(key)
+            if val is None:
+                continue
+            try:
+                float(val)
+            except (TypeError, ValueError):
+                findings.append(
+                    vc.finding(
+                        "contract.invalid_value",
+                        f"sync.{key}",
+                        f"sync.{key} {val!r} is not a number (default used)",
+                    )
+                )
+        if sync.get("enabled") and not str(data.get("remote") or "").strip():
+            findings.append(
+                vc.finding(
+                    "contract.invalid_shape",
+                    "remote",
+                    "sync.enabled without remote: push/pull have nowhere to go",
+                )
+            )
+    return findings
 
 
 def is_git_work_tree(vault_root: Path) -> bool:
