@@ -1,12 +1,13 @@
-"""Command-line interface: index | search | stats | watch | desk-project | serve."""
+"""Command-line interface: index | search | stats | doctor | watch | desk-project | serve."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import sys
+import time
 
-from . import core, vaults
+from . import core, ops as apo_ops, vaults
 from .rpc import run_rpc
 from .watch import run_watch
 
@@ -22,12 +23,39 @@ def _bind_cli_vault(name: str | None = None):
 def _cmd_index(args) -> int:
     cm, b = _bind_cli_vault(getattr(args, "vault", None))
     with cm:
+        if getattr(args, "vacuum", False):
+            return _vacuum_index(b)
         print(f"[{b.name}] Indexing {vaults.notes_root()}  →  {vaults.index_path()}")
         s = core.index_vault(rebuild=args.rebuild, limit=args.limit)
         print(
             f"done in {s.seconds:.1f}s — "
             f"+{s.added} new, ~{s.changed} changed, -{s.removed} removed, {s.chunks} chunks embedded"
         )
+    return 0
+
+
+def _vacuum_index(b) -> int:
+    """VACUUM the bound vault's index db.
+
+    Known limitation: there is no watcher pause/resume coordination in
+    deferred.py/watch.py, so this refuses outright rather than risk a lock
+    conflict (or worse, vacuuming out from under an in-flight watcher write)
+    — stop the watcher first.
+    """
+    status = apo_ops.watcher_status()
+    if status.get("running"):
+        print(
+            f"[{b.name}] refusing --vacuum: watcher is running (pid {status.get('pid')}). "
+            "Stop it first (`just watch-stop`), then retry. No pause/resume coordination "
+            "exists yet, so vacuuming under a live watcher is unsafe.",
+            file=sys.stderr,
+        )
+        return 1
+    db = core.writer_connect()
+    t0 = time.monotonic()
+    db.execute("VACUUM")
+    db.commit()
+    print(f"[{b.name}] VACUUM complete in {time.monotonic() - t0:.1f}s — {vaults.index_path()}")
     return 0
 
 
@@ -79,6 +107,80 @@ def _cmd_stats(args) -> int:
         data["vault"] = b.name
         print(json.dumps(data, indent=2))
     return 0
+
+
+def _fmt_bytes(n: int | None) -> str:
+    if n is None:
+        return "-"
+    val = float(n)
+    for unit in ("B", "K", "M", "G"):
+        if val < 1024 or unit == "G":
+            return f"{val:.0f}{unit}" if unit == "B" else f"{val:.1f}{unit}"
+        val /= 1024
+    return f"{val:.1f}G"
+
+
+def _cmd_doctor(args) -> int:
+    vault = (getattr(args, "vault", None) or "").strip()
+    data = apo_ops.index_health(vault=vault)
+    if not data.get("ok"):
+        print(json.dumps(data, indent=2))
+        return 1
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0
+
+    watcher = data.get("watcher", {})
+    vis = data.get("index_visibility", {})
+    running = watcher.get("running")
+    print(f"watcher: {'running (pid ' + str(watcher.get('pid')) + ')' if running else 'NOT RUNNING'}")
+    if watcher.get("warning"):
+        print(f"  warning: {watcher['warning']}")
+    print(
+        f"index visibility: {vis.get('path', 'n/a')}"
+        + (f" (bound {vis['bound_seconds']}s)" if vis.get("bound_seconds") is not None else "")
+    )
+    print()
+
+    cols = [
+        ("vault", 14),
+        ("db", 8),
+        ("wal", 8),
+        ("files", 6),
+        ("chunks", 7),
+        ("vec", 7),
+        ("fts", 7),
+        ("links", 8),
+        ("lmax", 6),
+        ("vorph", 6),
+        ("forph", 6),
+        ("quar", 5),
+    ]
+    header = "  ".join(f"{label:<{w}}" for label, w in cols) + "  flags"
+    print(header)
+    print("-" * len(header))
+    exit_code = 0
+    for name, v in data.get("vaults", {}).items():
+        flags = v.get("flags") or []
+        if flags:
+            exit_code = 1
+        row_vals = [
+            name,
+            _fmt_bytes(v.get("db_bytes")),
+            _fmt_bytes(v.get("wal_bytes")),
+            str(v.get("files", 0)),
+            str(v.get("chunks", 0)),
+            str(v.get("vec_chunks", 0)),
+            str(v.get("fts_rows", 0)),
+            str(v.get("backlinks_rows", 0)),
+            str(v.get("backlinks_per_file_max", 0)),
+            str(v.get("vec_chunks_orphans", 0)),
+            str(v.get("fts_orphans", 0)),
+            str(v.get("quarantined", 0)),
+        ]
+        row = "  ".join(f"{val:<{w}}" for val, (_, w) in zip(row_vals, cols))
+        print(f"{row}  {','.join(flags) or '-'}")
+    return exit_code
 
 
 def _cmd_watch(args) -> int:
@@ -150,6 +252,11 @@ def main(argv: list[str] | None = None) -> int:
     pi.add_argument("--rebuild", action="store_true", help="drop and rebuild from scratch")
     pi.add_argument("--limit", type=int, default=None, help="index only the first N notes (smoke test)")
     pi.add_argument(
+        "--vacuum",
+        action="store_true",
+        help="VACUUM the bound vault's index db instead of indexing; refuses if the watcher is running",
+    )
+    pi.add_argument(
         "--vault",
         default="",
         help="usage-contract vault_id (default vault if empty)",
@@ -180,6 +287,14 @@ def main(argv: list[str] | None = None) -> int:
     pt = sub.add_parser("stats", help="index stats")
     pt.add_argument("--vault", default="", help="usage-contract vault_id")
     pt.set_defaults(func=_cmd_stats)
+
+    pdoc = sub.add_parser(
+        "doctor",
+        help="index introspection: db/WAL sizes, row-count parity, orphans, backlinks blowup, quarantine",
+    )
+    pdoc.add_argument("--vault", default="", help="usage-contract vault_id (empty = every registered vault)")
+    pdoc.add_argument("--json", action="store_true")
+    pdoc.set_defaults(func=_cmd_doctor)
 
     pw = sub.add_parser("watch", help="watch vault + consume deferred queues (sole index writer)")
     pw.add_argument("--interval", type=float, default=None, help="poll interval seconds (default from WATCH_INTERVAL)")

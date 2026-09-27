@@ -428,6 +428,11 @@ def _memory_status_admin(_params: dict[str, Any], *, vault: str = "") -> dict:
     return _memory_status_sync()
 
 
+def _index_health_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    v = vault or str(params.get("vault") or "")
+    return apo_ops.index_health(vault=v)
+
+
 def _reload_config_admin(_params: dict[str, Any], *, vault: str = "") -> dict:
     del vault
     return _reload_config_sync()
@@ -436,6 +441,7 @@ def _reload_config_admin(_params: dict[str, Any], *, vault: str = "") -> dict:
 _ADMIN_HANDLERS: dict[str, apo_admin_ops.AdminHandler] = {
     "reload_config": _reload_config_admin,
     "memory_status": _memory_status_admin,
+    "index_health": _index_health_admin,
     "reindex": _reindex_admin,
     "reindex_deferred": _reindex_deferred_legacy_admin,
     "delete_note": _delete_note_admin,

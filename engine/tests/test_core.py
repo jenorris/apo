@@ -377,6 +377,57 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertTrue(hits)
         self.assertEqual(hits[0].path, "b.md")
 
+    def test_index_health_healthy_fixture(self):
+        self.write(
+            "src.md",
+            "---\ntitle: Src\n---\n\nSee [[Target Note]] and [[other]].\n",
+        )
+        self.write("target-note.md", "# Target Note\n\ntarget body\n")
+        core.index_vault(verbose=False)
+
+        health = core.index_health()
+        self.assertEqual(health["files"], 2)
+        self.assertGreater(health["chunks"], 0)
+        self.assertEqual(health["chunks"], health["vec_chunks"])
+        self.assertEqual(health["chunks"], health["fts_rows"])
+        self.assertGreaterEqual(health["backlinks_rows"], 2)
+        self.assertEqual(health["vec_chunks_orphans"], 0)
+        self.assertEqual(health["fts_orphans"], 0)
+        self.assertEqual(health["quarantined"], 0)
+        self.assertLess(health["backlinks_per_file_max"], core.BACKLINKS_PER_FILE_WARN)
+        self.assertEqual(health["flags"], [])
+        self.assertGreater(health["db_bytes"], 0)
+        self.assertIsNotNone(health["last_index_ts"])
+
+    def test_index_health_flags_vec_chunks_orphans(self):
+        """Same orphan-construction technique as
+        test_insert_pending_chunks_skips_orphaned_vec_chunks_rowid — a row in
+        vec_chunks with no matching chunks.id, exactly the v0.28.3 bug shape.
+        index_health must count it and raise the vec_orphans flag.
+        """
+        self.write("a.md", "# A\n\nalpha content\n")
+        core.index_vault(verbose=False)
+
+        db = sqlite3.connect(config.INDEX_PATH)
+        db.enable_load_extension(True)
+        sqlite_vec.load(db)
+        db.enable_load_extension(False)
+        try:
+            max_id = db.execute("SELECT MAX(id) FROM chunks").fetchone()[0]
+            orphan_rowid = max_id + 1
+            blob = sqlite_vec.serialize_float32([0.0] * _DIM)
+            db.execute(
+                "INSERT INTO vec_chunks(rowid, embedding) VALUES (?, ?)",
+                (orphan_rowid, blob),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        health = core.index_health()
+        self.assertGreater(health["vec_chunks_orphans"], 0)
+        self.assertIn("vec_orphans", health["flags"])
+
     def test_filter_notes_equality_and_contains(self):
         self.write("a.md", "---\nstatus: active\ntags: [x]\n---\n\n# A\n\nbody a\n")
         self.write("b.md", "---\nstatus: done\ntags: [y]\n---\n\n# B\n\nbody b\n")
