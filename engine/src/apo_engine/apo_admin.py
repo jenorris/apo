@@ -50,15 +50,20 @@ _ADMIN_CATALOG: dict[str, dict[str, Any]] = {
     "reindex": {
         "description": (
             "Index maintenance: mode=flush wakes deferred queue (empty vault = all vaults); "
-            "mode=rebuild signals full rebuild (single vault). force=true re-embeds all."
+            "mode=rebuild signals full rebuild (single vault) when a watcher is live, or runs "
+            "it inline when no watcher is running (no concurrent-writer risk). force=true "
+            "re-embeds all. wait=true blocks (up to timeout seconds) for a watcher-signaled "
+            "rebuild to finish."
         ),
         "read_only": False,
         "destructive": False,
-        "confirm_policy": "force=true",
+        "confirm_policy": "mode=rebuild",
         "parameters": {
-            "mode": "flush | rebuild (default rebuild)",
+            "mode": "flush | rebuild (default flush)",
             "force": "bool — rebuild only; re-embed all chunks (default false)",
             "vault": "vault name (empty = all vaults for flush only)",
+            "wait": "bool — rebuild only; block until a watcher-signaled rebuild completes (default false)",
+            "timeout": "seconds — max time to wait when wait=true (default 30)",
         },
     },
     "delete_note": {
@@ -124,8 +129,14 @@ def _capability_summary(name: str, meta: dict[str, Any]) -> dict[str, Any]:
 def _needs_confirm(name: str, parameters: dict[str, Any]) -> bool:
     if name == "delete_note":
         return True
-    if name == "reindex" and bool(parameters.get("force")):
-        return True
+    if name == "reindex":
+        mode = str(parameters.get("mode") or "flush").strip().lower()
+        # mode=rebuild can run inline (a direct index.db write from this process)
+        # when no watcher is live, not just when force=true — gate on the mode
+        # itself rather than only on force, so an unattended agent can't trigger
+        # an unconfirmed direct write via the no-watcher path.
+        if mode == "rebuild" or bool(parameters.get("force")):
+            return True
     if name == "git_sync":
         action = str(parameters.get("action") or "status").strip().lower()
         return action in ("run", "pull", "rebase")

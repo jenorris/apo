@@ -199,6 +199,38 @@ def consume_rebuild(collection: str) -> dict | None:
         return None
 
 
+def rebuild_pending(collection: str) -> bool:
+    """True if a rebuild was signaled but the watcher hasn't picked it up yet."""
+    return (DEFERRED_DIR / f"rebuild-{collection}.json").is_file()
+
+
+def mark_rebuild_running(collection: str) -> None:
+    """Watcher-side: flag that a signaled rebuild is now actually executing.
+
+    Paired with :func:`clear_rebuild_running`. Scoped to reindex wait-polling
+    only (``ops.reindex(wait=True)``) — not a general health/status marker.
+    """
+    p = DEFERRED_DIR / f"rebuild-busy-{collection}.json"
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_rebuild_running(collection: str) -> None:
+    p = DEFERRED_DIR / f"rebuild-busy-{collection}.json"
+    try:
+        p.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def rebuild_running(collection: str) -> bool:
+    """True while the watcher is actively inside ``index_vault`` for a signaled rebuild."""
+    return (DEFERRED_DIR / f"rebuild-busy-{collection}.json").is_file()
+
+
 def touch_wake(collection: str) -> None:
     try:
         DEFERRED_DIR.mkdir(parents=True, exist_ok=True)

@@ -125,6 +125,28 @@ class ApoAdminCatalogTest(unittest.TestCase):
         )
         self.assertTrue(out["ok"])
 
+    def test_admin_invoke_requires_confirm_for_reindex_rebuild(self):
+        """mode=rebuild can run inline (a direct index.db write) when no watcher
+        is live — gate on the mode itself, not just force=true, so this can't
+        slip through unconfirmed via the no-watcher path."""
+        out = apo_admin.admin_invoke(
+            "reindex",
+            parameters={"mode": "rebuild"},
+            confirm=False,
+            handlers={"reindex": lambda *_a, **_k: {"ok": True}},
+        )
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "confirm_required")
+
+    def test_admin_invoke_allows_reindex_flush_without_confirm(self):
+        out = apo_admin.admin_invoke(
+            "reindex",
+            parameters={"mode": "flush"},
+            confirm=False,
+            handlers={"reindex": lambda *_a, **_k: {"ok": True}},
+        )
+        self.assertTrue(out["ok"])
+
 
 class ApoAdminMcpSurfaceTest(unittest.TestCase):
     def test_tool_count_and_names(self):

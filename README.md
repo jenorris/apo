@@ -207,7 +207,9 @@ Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habit
 4. watcher re-embeds                        → next search/filter sees the change
 ```
 
-CLI equivalent while you are wiring things up (via `just`, or directly):
+CLI equivalent while you are wiring things up (via `just`, `apo`, or directly — `apo-engine
+search`/`stats` share the same `ops.search`/`ops.stats` backend as the MCP tools now, so the
+JSON shape matches):
 
 ```bash
 just search "quarterly planning"    # == apo engine search "quarterly planning"

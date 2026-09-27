@@ -21,17 +21,47 @@ def _bind_cli_vault(name: str | None = None):
 
 
 def _cmd_index(args) -> int:
-    cm, b = _bind_cli_vault(getattr(args, "vault", None))
-    with cm:
-        if getattr(args, "vacuum", False):
+    vault_arg = getattr(args, "vault", None) or ""
+
+    if getattr(args, "vacuum", False):
+        cm, b = _bind_cli_vault(vault_arg)
+        with cm:
             return _vacuum_index(b)
-        print(f"[{b.name}] Indexing {vaults.notes_root()}  →  {vaults.index_path()}")
-        s = core.index_vault(rebuild=args.rebuild, limit=args.limit)
-        print(
-            f"done in {s.seconds:.1f}s — "
-            f"+{s.added} new, ~{s.changed} changed, -{s.removed} removed, {s.chunks} chunks embedded"
-        )
-    return 0
+
+    inline_requested = bool(args.inline or args.force_inline) or (args.limit is not None)
+
+    if inline_requested and not args.force_inline:
+        watcher = apo_ops.watcher_status()
+        if watcher.get("running"):
+            print(
+                "error: watcher is running — an in-process index here would be a second "
+                "concurrent index.db writer (docs/index-concurrency.md). Pass --force-inline "
+                "to override (or stop the watcher first), or drop --inline/--limit so index "
+                "signals the watcher instead.",
+                file=sys.stderr,
+            )
+            return 1
+
+    if inline_requested:
+        cm, b = _bind_cli_vault(vault_arg)
+        with cm:
+            print(f"[{b.name}] Indexing {vaults.notes_root()}  →  {vaults.index_path()} (inline)")
+            s = core.index_vault(rebuild=args.rebuild, limit=args.limit)
+            print(
+                f"done in {s.seconds:.1f}s — "
+                f"+{s.added} new, ~{s.changed} changed, -{s.removed} removed, {s.chunks} chunks embedded"
+            )
+        return 0
+
+    result = apo_ops.reindex(
+        vault=vault_arg,
+        mode="rebuild",
+        force=bool(args.rebuild),
+        wait=args.wait,
+        timeout=args.timeout,
+    )
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("ok") else 1
 
 
 def _vacuum_index(b) -> int:
@@ -60,27 +90,31 @@ def _vacuum_index(b) -> int:
 
 
 def _cmd_search(args) -> int:
-    cm, b = _bind_cli_vault(getattr(args, "vault", None))
-    with cm:
-        hits = core.search(args.query, k=args.k, exclude=args.exclude or None, hybrid=not args.no_hybrid)
-        degraded = core.last_search_degraded()
-        if degraded:
-            print(
-                f"WARNING: {degraded} — results are keyword-only (BM25). "
-                "Check the embed backend (`just ollama`; APO_OLLAMA_URL / APO_MODEL).",
-                file=sys.stderr,
-            )
-        if args.json:
-            print(json.dumps([h.__dict__ for h in hits]))
-            return 0
-        if not hits:
-            print("(no results)")
-            return 0
-        for i, h in enumerate(hits, 1):
-            crumb = f"  ⟩ {h.heading}" if h.heading else ""
-            print(f"\n{i}. [{h.score:.3f}] {h.path}{crumb}")
-            snippet = " ".join(h.text.split())
-            print(f"   {snippet[:280]}{'…' if len(snippet) > 280 else ''}")
+    vault_arg = getattr(args, "vault", None) or ""
+    result = apo_ops.search(
+        args.query,
+        top_k=args.k,
+        vault=vault_arg,
+        exclude=args.exclude or None,
+        hybrid=not args.no_hybrid,
+    )
+    if result.get("warning"):
+        print(f"WARNING: {result['warning']}", file=sys.stderr)
+    if args.json:
+        print(json.dumps(result))
+        return 0 if result.get("ok") else 1
+    if not result.get("ok"):
+        print(f"error: {result.get('error')}: {result.get('message')}", file=sys.stderr)
+        return 1
+    hits = result.get("results", [])
+    if not hits:
+        print("(no results)")
+        return 0
+    for i, h in enumerate(hits, 1):
+        crumb = f"  ⟩ {h['heading']}" if h.get("heading") else ""
+        print(f"\n{i}. [{h.get('score', 0):.3f}] {h.get('source', '')}{crumb}")
+        snippet = " ".join((h.get("content") or "").split())
+        print(f"   {snippet[:280]}{'…' if len(snippet) > 280 else ''}")
     return 0
 
 
@@ -101,12 +135,10 @@ def _cmd_search_eval(args) -> int:
 
 
 def _cmd_stats(args) -> int:
-    cm, b = _bind_cli_vault(getattr(args, "vault", None))
-    with cm:
-        data = core.stats()
-        data["vault"] = b.name
-        print(json.dumps(data, indent=2))
-    return 0
+    vault_arg = getattr(args, "vault", None) or ""
+    result = apo_ops.stats(vault=vault_arg)
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("ok") else 1
 
 
 def _fmt_bytes(n: int | None) -> str:
@@ -248,9 +280,9 @@ def main(argv: list[str] | None = None) -> int:
     vaults.add_discovery_arguments(p)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pi = sub.add_parser("index", help="build / update the index")
+    pi = sub.add_parser("index", help="build / update the index (watcher-aware — see --inline)")
     pi.add_argument("--rebuild", action="store_true", help="drop and rebuild from scratch")
-    pi.add_argument("--limit", type=int, default=None, help="index only the first N notes (smoke test)")
+    pi.add_argument("--limit", type=int, default=None, help="index only the first N notes (smoke test; forces --inline)")
     pi.add_argument(
         "--vacuum",
         action="store_true",
@@ -258,8 +290,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     pi.add_argument(
         "--vault",
-        default="",
-        help="usage-contract vault_id (default vault if empty)",
+        default=os.environ.get("APO_VAULT", ""),
+        help="usage-contract vault_id (default vault if empty; $APO_VAULT)",
+    )
+    pi.add_argument(
+        "--wait",
+        dest="wait",
+        action="store_true",
+        default=True,
+        help="block until a watcher-signaled rebuild completes (default: on)",
+    )
+    pi.add_argument(
+        "--no-wait",
+        dest="wait",
+        action="store_false",
+        help="signal the watcher and return immediately instead of blocking",
+    )
+    pi.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="max seconds to wait for a watcher-signaled rebuild (default 30)",
+    )
+    pi.add_argument(
+        "--inline",
+        action="store_true",
+        help="run the index in this process (today's direct core.index_vault behavior); "
+        "refused if a watcher is live unless --force-inline",
+    )
+    pi.add_argument(
+        "--force-inline",
+        action="store_true",
+        help="override the watcher-live refusal for --inline (races the watcher as a "
+        "second concurrent index.db writer — see docs/index-concurrency.md)",
     )
     pi.set_defaults(func=_cmd_index)
 
@@ -269,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--exclude", nargs="*", default=[], help="glob(s) of paths to drop (e.g. 'private/*')")
     ps.add_argument("--json", action="store_true")
     ps.add_argument("--no-hybrid", action="store_true", help="keyword-only (skip vector fusion and query embed)")
-    ps.add_argument("--vault", default="", help="usage-contract vault_id")
+    ps.add_argument("--vault", default=os.environ.get("APO_VAULT", ""), help="usage-contract vault_id ($APO_VAULT)")
     ps.set_defaults(func=_cmd_search)
 
     pe = sub.add_parser(
@@ -278,14 +341,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     pe.add_argument("--file", required=True, help="YAML eval file (lives outside the repo)")
     pe.add_argument("-k", type=int, default=0, help="cutoff (default: file `k` or 5)")
-    pe.add_argument("--vault", default="", help="usage-contract vault_id")
+    pe.add_argument("--vault", default=os.environ.get("APO_VAULT", ""), help="usage-contract vault_id ($APO_VAULT)")
     pe.add_argument("--exclude", nargs="*", default=[], help="glob(s) applied to every query")
     pe.add_argument("--json", action="store_true")
     pe.add_argument("--verbose", action="store_true", help="also list per-query passes")
     pe.set_defaults(func=_cmd_search_eval)
 
     pt = sub.add_parser("stats", help="index stats")
-    pt.add_argument("--vault", default="", help="usage-contract vault_id")
+    pt.add_argument("--vault", default=os.environ.get("APO_VAULT", ""), help="usage-contract vault_id ($APO_VAULT)")
     pt.set_defaults(func=_cmd_stats)
 
     pdoc = sub.add_parser(

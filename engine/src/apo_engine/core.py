@@ -4484,7 +4484,11 @@ def process_queues(
 
     rebuild = deferred.consume_rebuild(coll)
     if rebuild is not None:
-        out.vault_stats = index_vault(rebuild=bool(rebuild.get("force")), verbose=verbose)
+        deferred.mark_rebuild_running(coll)
+        try:
+            out.vault_stats = index_vault(rebuild=bool(rebuild.get("force")), verbose=verbose)
+        finally:
+            deferred.clear_rebuild_running(coll)
         return out
 
     for path in deferred.consume_purge_queue(coll):
