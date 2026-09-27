@@ -9,6 +9,17 @@ from typing import Any
 
 import yaml
 
+from apo_engine import vault_contracts as vc
+
+CHUNK_STRATEGIES = ("nodes_and_edges", "nodes", "whole")
+VALIDATION_MODES = ("soft", "hard", "off")
+SLUG_SOURCES = ("parent_dir", "stem")
+KNOWN_TOP_KEYS = frozenset({"mermaid_contract_version", "catalogs", "diagrams"})
+KNOWN_CATALOG_RULE_KEYS = frozenset({"match", "catalog_path", "slug_from", "notes"})
+KNOWN_DIAGRAM_RULE_KEYS = frozenset(
+    {"match", "chunk_strategy", "flatten_template", "include_edge_chunks", "validation", "notes"}
+)
+
 MERMAID_CONTRACT_CANDIDATES = (
     Path("system") / "contracts" / "mermaid-contract.schema.yaml",
     Path("system") / "config" / "mermaid-contract.schema.yaml",
@@ -32,11 +43,64 @@ def load_mermaid_contract(vault_root: Path, explicit: str | None = None) -> dict
     path = resolve_mermaid_contract_path(vault_root, explicit)
     if path is None:
         return None
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    return data if isinstance(data, dict) else None
+    return vc.load_yaml_cached(path)
+
+
+def _rule_list_findings(
+    rules: Any, field: str, known: frozenset[str]
+) -> list[dict[str, str]]:
+    if rules is None:
+        return []
+    if not isinstance(rules, list):
+        return [vc.finding("contract.invalid_shape", field, f"{field} must be a list of rules")]
+    out: list[dict[str, str]] = []
+    for i, rule in enumerate(rules):
+        where = f"{field}[{i}]"
+        if not isinstance(rule, dict):
+            out.append(vc.finding("contract.invalid_shape", where, "rule must be a mapping"))
+            continue
+        if not str(rule.get("match") or "").strip():
+            out.append(vc.finding("contract.invalid_shape", where, "rule needs a non-empty match glob"))
+        out.extend(vc.unknown_key_findings(rule, known, prefix=where))
+    return out
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    """Shape findings for a parsed mermaid contract (advisory, never blocks)."""
+    findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
+    findings.extend(_rule_list_findings(data.get("catalogs"), "catalogs", KNOWN_CATALOG_RULE_KEYS))
+    findings.extend(_rule_list_findings(data.get("diagrams"), "diagrams", KNOWN_DIAGRAM_RULE_KEYS))
+    for i, rule in enumerate(data.get("catalogs") or []):
+        if not isinstance(rule, dict):
+            continue
+        if not str(rule.get("catalog_path") or "").strip():
+            findings.append(
+                vc.finding(
+                    "contract.invalid_shape",
+                    f"catalogs[{i}].catalog_path",
+                    "catalog rule without catalog_path never joins a catalog",
+                )
+            )
+        f = vc.enum_finding(rule.get("slug_from"), SLUG_SOURCES, f"catalogs[{i}].slug_from")
+        if f:
+            findings.append(f)
+    for i, rule in enumerate(data.get("diagrams") or []):
+        if not isinstance(rule, dict):
+            continue
+        for key, allowed in (("validation", VALIDATION_MODES), ("chunk_strategy", CHUNK_STRATEGIES)):
+            f = vc.enum_finding(rule.get(key), allowed, f"diagrams[{i}].{key}")
+            if f:
+                findings.append(f)
+        iec = rule.get("include_edge_chunks")
+        if iec is not None and not isinstance(iec, bool):
+            findings.append(
+                vc.finding(
+                    "contract.invalid_value",
+                    f"diagrams[{i}].include_edge_chunks",
+                    f"include_edge_chunks {iec!r} must be true|false (non-bool is ignored)",
+                )
+            )
+    return findings
 
 
 def diagram_rule_for(vault_root: Path, rel: str) -> dict[str, Any]:

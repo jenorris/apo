@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-import yaml
+from apo_engine import vault_contracts as vc
 
 LOCAL_WEB_CONTRACT_CANDIDATES = (
     Path("system") / "contracts" / "local-web-contract.schema.yaml",
@@ -40,8 +40,4 @@ def load_local_web_contract(vault_root: Path, explicit: str | None = None) -> di
     path = resolve_local_web_contract_path(vault_root, explicit)
     if path is None:
         return None
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    return data if isinstance(data, dict) else None
+    return vc.load_yaml_cached(path)

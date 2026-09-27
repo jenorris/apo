@@ -94,18 +94,9 @@ _LINT_SWEEP_CACHE_TTL = 120.0
 
 
 def _lint_cache_fingerprint(root: Path) -> str:
-    parts: list[str] = []
-    for rel in (
-        "system/contracts/read-contract.schema.yaml",
-        "system/contracts/archival-contract.schema.yaml",
-    ):
-        p = root / rel
-        if p.is_file():
-            try:
-                parts.append(f"{rel}:{p.stat().st_mtime_ns}")
-            except OSError:
-                parts.append(rel)
-    return "|".join(parts) or "none"
+    # Every contract on disk: lint now depends on okf/read/archival/usage bodies
+    # and reports contract-shape drift, so any contract edit must miss the cache.
+    return vault_contracts.contract_fingerprint(root)
 
 
 def _vault_lint_merged_payload(
@@ -152,6 +143,11 @@ def _vault_lint_merged_payload(
         f.as_dict()
         for f in note_lint.detect_read_contract_type_mismatches(root, vault=b.name)
     )
+    if not folder_s:
+        # Contract-shape drift is vault-level; a folder-scoped sweep stays scoped.
+        merged_flaws.extend(
+            f.as_dict() for f in note_lint.contract_flaws(root, vault=b.name)
+        )
     counts: dict[str, int] = {}
     for f in merged_flaws:
         code = str(f.get("code") or "?")
@@ -3241,14 +3237,17 @@ def _splice_table(content: str, span: tuple[int, int], new_gfm: str) -> str:
 def _apply_one_table_op(content: str, rel: str, op: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Apply a single table op to ``content``; return (new_content, result meta)."""
     from . import table_markdown as tm
-    from .table_contract import key_column_for
+    from .table_contract import key_column_of, table_rule_for
 
     kind = op["op"]
     table, span = _locate_table(content, rel, op.get("table_id"), op.get("heading"))
     table_id = tm.table_id_for(
         rel, core._body_start_line(content)[1] + table.start_line, table.table_index
     )
-    key_column = key_column_for(vaults.notes_root(), rel)
+    # One contract lookup per op: row lookups key by ``key_column``; replace_table
+    # also takes merge / allow_new_columns defaults + header_synonyms from the rule.
+    rule = table_rule_for(vaults.notes_root(), rel)
+    key_column = key_column_of(rule)
 
     def _require_row_precondition(ri: int) -> None:
         exp_c = op.get("expected_content_hash")
@@ -3301,7 +3300,7 @@ def _apply_one_table_op(content: str, rel: str, op: dict[str, Any]) -> tuple[str
         # Capture the new row_key for the response (after append, last index).
         op = {**op, "row_key": tm.row_key_for(table, len(table.rows) - 1, key_column=key_column)}
     elif kind == "replace_table":
-        _apply_replace_table(table, op)
+        _apply_replace_table(table, op, key_column=key_column, rule=rule)
     elif kind == "alter_table_schema":
         _apply_alter_schema(table, op)
     else:  # pragma: no cover - guarded by TABLE_OPS
@@ -3316,9 +3315,25 @@ def _apply_one_table_op(content: str, rel: str, op: dict[str, Any]) -> tuple[str
     return new_content, meta
 
 
-def _apply_replace_table(table, op: dict[str, Any]) -> None:
-    from . import table_markdown as tm
+def _apply_replace_table(
+    table,
+    op: dict[str, Any],
+    *,
+    key_column: str | None = None,
+    rule: dict[str, Any] | None = None,
+) -> None:
+    """``replace_table`` — whole-table swap, or append / upsert onto the existing schema.
 
+    ``rule`` is the matching table-contract rule (may be empty): its ``merge`` and
+    ``allow_new_columns`` are the defaults when the op omits them, and its
+    ``header_synonyms`` are applied to incoming headers before the fuzzy map.
+    ``key_column`` keys the upsert (falls back to first non-empty cell — the same
+    natural key the indexer and row ops use).
+    """
+    from . import table_markdown as tm
+    from .table_contract import header_synonyms_of, merge_default_of
+
+    rule = rule or {}
     if op.get("csv") is not None:
         headers_in, records = tm.csv_to_records(op["csv"])
     elif op.get("rows") is not None:
@@ -3331,17 +3346,34 @@ def _apply_replace_table(table, op: dict[str, Any]) -> None:
     else:
         raise _TableOpError("bad_request", "replace_table requires rows= or csv=")
 
-    merge = op.get("merge", "replace")
+    merge = op.get("merge") or merge_default_of(rule) or "replace"
     if merge == "replace":
         table.headers[:] = headers_in
         table.rows[:] = tm.dicts_to_rows(headers_in, records)
         table.alignments[:] = []
         return
 
-    # append / upsert keep existing schema; map incoming headers (fuzzy, ambiguity-reject).
+    allow_new = op.get("allow_new_columns")
+    if allow_new is None:
+        allow_new = bool(rule.get("allow_new_columns", False))
+
+    # Contract synonyms first (exact, normalized). A synonym whose canonical
+    # header is not in the table is ignored rather than inventing a column.
+    existing_by_norm = {tm.normalize_header(h): h for h in table.headers}
+    mapping: dict[str, str] = {}
+    for inc, canonical in header_synonyms_of(rule).items():
+        canon = existing_by_norm.get(tm.normalize_header(canonical))
+        if canon is None:
+            continue
+        for h in headers_in:
+            if tm.normalize_header(h) == tm.normalize_header(inc):
+                mapping[h] = canon
+    unmapped = [h for h in headers_in if h not in mapping]
+
+    # append / upsert keep existing schema; map remaining headers (fuzzy, ambiguity-reject).
     try:
-        mapping = tm.fuzzy_header_map(
-            headers_in, table.headers, allow_new_columns=op.get("allow_new_columns", False)
+        mapping.update(
+            tm.fuzzy_header_map(unmapped, table.headers, allow_new_columns=bool(allow_new))
         )
     except tm.HeaderAmbiguous as e:
         raise _TableOpError("header_ambiguous", str(e), e.suggestions)
@@ -3350,22 +3382,41 @@ def _apply_replace_table(table, op: dict[str, Any]) -> None:
     for rec in records:
         mapped_records.append({mapping.get(k, k): v for k, v in rec.items()})
 
+    # allow_new_columns: fuzzy_header_map keeps an unmatched header as itself;
+    # the table schema has to grow to receive it, or the imported values are
+    # silently dropped by dicts_to_rows.
+    for target in mapping.values():
+        if target not in table.headers:
+            table.headers.append(target)
+            for row in table.rows:
+                row.append("")
+            if table.alignments:
+                table.alignments.append("")
+
     if merge == "append":
         table.rows.extend(tm.dicts_to_rows(table.headers, mapped_records))
         return
     if merge == "upsert":
-        existing = {tm.row_key_for(table, i): i for i in range(len(table.rows))}
-        seen: set[str] = set()
+        key_idx = -1
+        if key_column:
+            target = tm.normalize_header(key_column)
+            key_idx = next(
+                (i for i, h in enumerate(table.headers) if tm.normalize_header(h) == target),
+                -1,
+            )
+        existing = {
+            tm.row_key_for(table, i, key_column=key_column): i for i in range(len(table.rows))
+        }
         for rec in mapped_records:
             cells = [str(rec.get(h, "")) for h in table.headers]
-            key = next((c for c in cells if c.strip()), "")
-            if key in seen:
-                # last-wins within this import
-                pass
-            seen.add(key)
+            key = cells[key_idx].strip() if key_idx >= 0 else ""
+            if not key:
+                key = next((c for c in cells if c.strip()), "")
+            # last-wins within this import
             if key in existing:
                 table.rows[existing[key]] = cells
             else:
+                existing[key] = len(table.rows)
                 table.rows.append(cells)
         return
     raise _TableOpError("bad_request", f"unknown merge mode {merge!r}")

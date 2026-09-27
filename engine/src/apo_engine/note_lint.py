@@ -114,6 +114,138 @@ def flaws_from_okf(
     return [f.as_dict() for f in flaws]
 
 
+def flaws_from_okf_report(
+    report: Any,
+    *,
+    path: str,
+    vault: str = "",
+) -> list[dict[str, Any]]:
+    """Map a read-only ``okf.validate_concept`` report into structured flaws.
+
+    Same codes as the write path (``okf.missing_field``) so an agent remediates
+    lint findings and post-write findings with one habit; structural clauses
+    that the write path stamps away get their own codes (``okf.missing_frontmatter``,
+    ``okf.reserved_frontmatter``).
+    """
+    flaws: list[Flaw] = []
+    enf = getattr(report, "enforcement", "off") or "off"
+    for v in getattr(report, "violations", None) or []:
+        if not isinstance(v, dict):
+            continue
+        fld = str(v.get("field") or "").strip()
+        expected = str(v.get("expected") or "non-empty")
+        if not fld:
+            continue
+        if fld == "frontmatter":
+            if expected == "absent":
+                flaws.append(
+                    Flaw(
+                        code="okf.reserved_frontmatter",
+                        severity="warn",
+                        path=path,
+                        vault=vault or None,
+                        evidence={"enforcement": enf},
+                        remediation="human",
+                        message="reserved path carries concept frontmatter (expected none)",
+                    )
+                )
+            else:
+                flaws.append(
+                    Flaw(
+                        code="okf.missing_frontmatter",
+                        severity="warn",
+                        path=path,
+                        vault=vault or None,
+                        evidence={"enforcement": enf},
+                        remediation="llm",
+                        suggested_op={
+                            "tool": "patch_note",
+                            "ops": [{"op": "set_field", "field": "okf_type", "value": None}],
+                        },
+                        message="no frontmatter; any Apo write stamps the concept fields",
+                    )
+                )
+            continue
+        flaws.append(
+            Flaw(
+                code="okf.missing_field",
+                severity="error" if enf == "hard" else "warn",
+                path=path,
+                vault=vault or None,
+                evidence={"field": fld, "expected": expected, "enforcement": enf},
+                remediation="llm",
+                suggested_op={
+                    "tool": "patch_note",
+                    "ops": [{"op": "set_field", "field": fld, "value": None}],
+                },
+                message=f"missing {fld} (expected {expected})",
+            )
+        )
+    return [f.as_dict() for f in flaws]
+
+
+def detect_okf(
+    content: str,
+    *,
+    path: str,
+    vault_root: Path,
+    vault: str = "",
+) -> list[dict[str, Any]]:
+    """Producer-profile OKF conformance for one note (read-only; no stamping).
+
+    No-op when the vault has no OKF contract, the path is not a note, or the
+    path is a contract schema. Mirrors ``apo-engine okf validate`` so MCP
+    ``vault(lint)`` and the CLI report the same corpus.
+    """
+    from apo_engine import okf
+    from apo_engine.note_format import is_contract_schema_path, is_note_path
+
+    rel = (path or "").replace("\\", "/").lstrip("/")
+    if not rel or not is_note_path(rel) or is_contract_schema_path(rel):
+        return []
+    if okf.get_contract(vault_root) is None:
+        return []
+    report = okf.validate_concept(
+        vault_root=vault_root, rel_path=rel, content=content, profile="apo"
+    )
+    return flaws_from_okf_report(report, path=rel, vault=vault)
+
+
+def contract_flaws(vault_root: Path, *, vault: str = "") -> list[Flaw]:
+    """Contract-file findings: unreadable YAML and shape drift the engine ignores."""
+    from apo_engine import vault_contracts
+
+    out: list[Flaw] = []
+    for cid, entry in vault_contracts.discover_contracts(vault_root).items():
+        rel = str(entry.get("path") or "")
+        if not entry.get("ok", True):
+            out.append(
+                Flaw(
+                    code="contract.unreadable",
+                    severity="error",
+                    path=rel,
+                    vault=vault or None,
+                    evidence={"contract": cid, "error": str(entry.get("error") or "")},
+                    remediation="human",
+                    message=f"{cid}: {entry.get('error')}; engine treats this contract as absent",
+                )
+            )
+            continue
+        for w in entry.get("warnings") or []:
+            out.append(
+                Flaw(
+                    code=str(w.get("code") or "contract.invalid_shape"),
+                    severity="warn",
+                    path=rel,
+                    vault=vault or None,
+                    evidence={"contract": cid, "field": str(w.get("field") or "")},
+                    remediation="human",
+                    message=f"{cid}: {w.get('message')}",
+                )
+            )
+    return out
+
+
 def _trailing_ws_lines(content: str) -> list[int]:
     bad: list[int] = []
     for i, line in enumerate(content.splitlines(), 1):
@@ -725,6 +857,7 @@ def lint_note(
     include_links: bool = False,
     include_usage: bool = True,
     include_format: bool = True,
+    include_okf: bool = True,
     wiki_index: dict[str, list[str]] | None = None,
     vault_roots: dict[str, Path] | None = None,
     foreign_idx_cache: dict[str, dict[str, list[str]]] | None = None,
@@ -737,6 +870,10 @@ def lint_note(
     """
     flaws_out: list[dict[str, Any]] = []
     text = content
+    if include_okf:
+        flaws_out.extend(
+            detect_okf(text, path=path, vault_root=vault_root, vault=vault)
+        )
     if include_format:
         if auto_fix:
             text, fixed = apply_auto_fixes(text, path=path, vault=vault, enabled=True)

@@ -13,7 +13,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from apo_engine import git_contract, git_sync, vault_project
+from apo_engine import git_contract, git_sync, vault_contracts, vault_project
 
 
 def _reset_reproject_state() -> None:
@@ -27,7 +27,7 @@ class MaybeReprojectPollGateTest(unittest.TestCase):
     def setUp(self) -> None:
         _reset_reproject_state()
         self.addCleanup(_reset_reproject_state)
-        git_contract._contract_cache.clear()
+        vault_contracts.clear_yaml_cache()
         git_contract._work_tree_cache.clear()
 
     def test_repeat_polls_do_not_rescan(self) -> None:
@@ -81,9 +81,9 @@ class MaybeReprojectPollGateTest(unittest.TestCase):
 
 class GitContractCacheTest(unittest.TestCase):
     def setUp(self) -> None:
-        git_contract._contract_cache.clear()
+        vault_contracts.clear_yaml_cache()
         git_contract._work_tree_cache.clear()
-        self.addCleanup(git_contract._contract_cache.clear)
+        self.addCleanup(vault_contracts.clear_yaml_cache)
         self.addCleanup(git_contract._work_tree_cache.clear)
 
     def _vault(self, tmp: Path, *, enabled: bool = True) -> Path:
@@ -104,7 +104,7 @@ class GitContractCacheTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = self._vault(Path(td))
             with unittest.mock.patch.object(
-                git_contract.yaml, "safe_load", wraps=git_contract.yaml.safe_load
+                vault_contracts.yaml, "safe_load", wraps=vault_contracts.yaml.safe_load
             ) as parse:
                 for _ in range(5):
                     data = git_contract.load_git_contract(root)
@@ -155,9 +155,9 @@ class SyncTickIdleCostTest(unittest.TestCase):
     """A disabled/enabled sync tick must not re-read the contract each time."""
 
     def setUp(self) -> None:
-        git_contract._contract_cache.clear()
+        vault_contracts.clear_yaml_cache()
         git_contract._work_tree_cache.clear()
-        self.addCleanup(git_contract._contract_cache.clear)
+        self.addCleanup(vault_contracts.clear_yaml_cache)
         self.addCleanup(git_contract._work_tree_cache.clear)
 
     def test_idle_tick_reparses_nothing(self) -> None:
@@ -174,7 +174,7 @@ class SyncTickIdleCostTest(unittest.TestCase):
             ctl = git_sync.VaultSyncController(root, verbose=False)
             ctl.tick(index_busy=False)  # warm caches
             with unittest.mock.patch.object(
-                git_contract.yaml, "safe_load"
+                vault_contracts.yaml, "safe_load"
             ) as parse, unittest.mock.patch.object(
                 git_contract.subprocess, "run"
             ) as run:

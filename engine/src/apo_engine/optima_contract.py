@@ -8,12 +8,11 @@ Active when ``system/contracts/optima-contract.schema.yaml`` (or legacy
 from __future__ import annotations
 
 import os
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from apo_engine import vault_contracts as vc
 
 OPTIMA_CONTRACT_CANDIDATES = (
     Path("system") / "contracts" / "optima-contract.schema.yaml",
@@ -21,8 +20,7 @@ OPTIMA_CONTRACT_CANDIDATES = (
 )
 OPTIMA_CONTRACT_REL = OPTIMA_CONTRACT_CANDIDATES[0]
 
-_contract_cache_lock = threading.Lock()
-_contract_cache: dict[tuple[str, int, int], dict[str, Any]] = {}
+IF_MISSING = ("skip", "error")
 
 
 @dataclass(frozen=True)
@@ -69,32 +67,61 @@ def load_optima_contract(
     path = resolve_optima_contract_path(vault_root, explicit)
     if path is None:
         return None
-    try:
-        st = path.stat()
-        key = (str(path), st.st_mtime_ns, st.st_size)
-    except OSError:
-        return None
-    with _contract_cache_lock:
-        hit = _contract_cache.get(key)
-    if hit is not None:
-        return dict(hit)
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    with _contract_cache_lock:
-        if len(_contract_cache) > 64:
-            _contract_cache.clear()
-        _contract_cache[key] = data
-    return dict(data)
+    return vc.load_yaml_cached(path)
 
 
 def clear_optima_contract_cache() -> None:
-    """Test helper — drop mtime cache."""
-    with _contract_cache_lock:
-        _contract_cache.clear()
+    """Test helper — drop the shared contract YAML cache."""
+    vc.clear_yaml_cache()
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    """Shape findings for the Stage B merge knobs only.
+
+    The optima contract is a broad agent IR (schemas, query hints, commands)
+    read by vault scripts too, so unknown top-level keys are not flagged —
+    only the ``refresh`` block the watcher's merge tick actually parses.
+    """
+    findings: list[dict[str, str]] = []
+    refresh = data.get("refresh")
+    f = vc.mapping_finding(refresh, "refresh")
+    if f:
+        return [f]
+    if not isinstance(refresh, dict):
+        return findings
+    watch = refresh.get("watch")
+    f = vc.mapping_finding(watch, "refresh.watch")
+    if f:
+        findings.append(f)
+    elif isinstance(watch, dict) and watch.get("interval_seconds") is not None:
+        try:
+            float(watch["interval_seconds"])
+        except (TypeError, ValueError):
+            findings.append(
+                vc.finding(
+                    "contract.invalid_value",
+                    "refresh.watch.interval_seconds",
+                    f"interval_seconds {watch['interval_seconds']!r} is not a number (60 used)",
+                )
+            )
+    sources = refresh.get("sources")
+    if sources is not None and not isinstance(sources, list):
+        findings.append(
+            vc.finding("contract.invalid_shape", "refresh.sources", "sources must be a list")
+        )
+    for i, row in enumerate(sources if isinstance(sources, list) else []):
+        where = f"refresh.sources[{i}]"
+        if not isinstance(row, dict):
+            findings.append(vc.finding("contract.invalid_shape", where, "source must be a mapping"))
+            continue
+        if not str(row.get("path") or "").strip():
+            findings.append(
+                vc.finding("contract.invalid_shape", f"{where}.path", "source without path is skipped")
+            )
+        f = vc.enum_finding(row.get("if_missing"), IF_MISSING, f"{where}.if_missing")
+        if f:
+            findings.append(f)
+    return findings
 
 
 def optima_contract_active(vault_root: Path) -> bool:

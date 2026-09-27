@@ -14,9 +14,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from apo_engine import config
+from apo_engine import vault_contracts as vc
 
 SEARCH_CONTRACT_CANDIDATES = (
     Path("system") / "contracts" / "search-contract.schema.yaml",
@@ -43,11 +42,7 @@ def load_search_contract(vault_root: Path, explicit: str | None = None) -> dict[
     path = resolve_search_contract_path(vault_root, explicit)
     if path is None:
         return None
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    return data if isinstance(data, dict) else None
+    return vc.load_yaml_cached(path)
 
 
 def _normalize_exclude_list(raw: Any) -> list[str]:
@@ -123,5 +118,47 @@ def resolve_search_exclude(
 
 
 def clear_default_exclude_cache() -> None:
-    """Invalidate any cached contract reads (reserved; currently no-op)."""
-    return None
+    """Invalidate cached contract reads (shared contract YAML cache)."""
+    vc.clear_yaml_cache()
+
+
+KNOWN_TOP_KEYS = frozenset({"search_contract_version", "default_exclude", "folder_exclude"})
+KNOWN_FOLDER_RULE_KEYS = frozenset({"folder", "when_folder", "exclude", "unless_query", "notes"})
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    """Shape findings for a parsed search contract (advisory, never blocks)."""
+    findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
+    findings.extend(vc.str_list_findings(data.get("default_exclude"), "default_exclude"))
+    rules = data.get("folder_exclude")
+    if rules is None:
+        return findings
+    if not isinstance(rules, list):
+        findings.append(
+            vc.finding(
+                "contract.invalid_shape",
+                "folder_exclude",
+                "folder_exclude must be a list of {folder, exclude[, unless_query]} rules",
+            )
+        )
+        return findings
+    for i, rule in enumerate(rules):
+        where = f"folder_exclude[{i}]"
+        if not isinstance(rule, dict):
+            findings.append(vc.finding("contract.invalid_shape", where, "rule must be a mapping"))
+            continue
+        findings.extend(vc.unknown_key_findings(rule, KNOWN_FOLDER_RULE_KEYS, prefix=where))
+        if not str(rule.get("folder") or rule.get("when_folder") or "").strip():
+            findings.append(
+                vc.finding("contract.invalid_shape", f"{where}.folder", "rule needs folder=")
+            )
+        if not _normalize_exclude_list(rule.get("exclude")):
+            findings.append(
+                vc.finding(
+                    "contract.invalid_shape",
+                    f"{where}.exclude",
+                    "rule has no exclude globs; it never applies",
+                )
+            )
+        findings.extend(vc.str_list_findings(rule.get("unless_query"), f"{where}.unless_query"))
+    return findings
