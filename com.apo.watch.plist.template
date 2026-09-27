@@ -37,6 +37,14 @@
     <key>ThrottleInterval</key>
     <integer>30</integer>
 
+    <!--
+      Routine watcher output goes through Python logging (`apo_engine.watch`)
+      into a self-rotating `~/.apo/watch.log` (50MB x 3 backups) — this file
+      only ever gets launchd-wrapper startup text and truly unhandled crash
+      tracebacks (anything before/outside Python's own logging setup), so it
+      should stay small. If it's growing without bound again, something is
+      writing to stdout/stderr directly instead of through the `apo.*` logger.
+    -->
     <key>StandardOutPath</key>
     <string>__HOME__/.apo/watch-launchd.log</string>
 

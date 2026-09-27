@@ -54,7 +54,12 @@ WATCH_INTERVAL="${WATCH_INTERVAL:-30}"
 mkdir -p "${WATCH_PID_DIR}"
 
 PID_FILE="${WATCH_PID_DIR}/watch.pid"
-LOG_FILE="${WATCH_PID_DIR}/watch.log"
+# Routine chatter now goes through Python logging (`apo_engine.watch`) into a
+# self-rotating `${WATCH_PID_DIR}/watch.log` — do NOT reuse that filename here.
+# This redirect only catches stdout/stderr from before logging initializes,
+# or a truly unhandled crash traceback; rotating that too would fight the
+# RotatingFileHandler over the same inode (dup2'd fds don't follow a rename).
+LOG_FILE="${WATCH_PID_DIR}/watch-stdout.log"
 
 info()    { printf '\033[34m[apo-watch]\033[0m %s\n' "$*"; }
 success() { printf '\033[32m[apo-watch]\033[0m %s\n' "$*"; }
@@ -125,7 +130,7 @@ PY
   # Give the grandchild a moment; pid file should already exist.
   sleep 0.2
   if is_running; then
-    success "Watcher started (PID $(cat "$PID_FILE")) → $LOG_FILE"
+    success "Watcher started (PID $(cat "$PID_FILE")) → ${WATCH_PID_DIR}/watch.log"
   else
     warn "Watcher failed to start — see $LOG_FILE"
     return 1
@@ -147,7 +152,7 @@ cmd_stop() {
 cmd_status() {
   if is_running; then
     success "Watcher RUNNING (PID $(cat "$PID_FILE"))"
-    info "  log: $LOG_FILE"
+    info "  log: ${WATCH_PID_DIR}/watch.log (startup/crash-only: $LOG_FILE)"
     info "  vault: ${APO_NOTES_ROOT:-unset}"
     [[ -n "${APO_COLLECTION_ROOT:-}" ]] && info "  APO_COLLECTION_ROOT: ${APO_COLLECTION_ROOT}"
     [[ -n "${APO_VAULT_PATHS:-}" ]] && info "  APO_VAULT_PATHS: ${APO_VAULT_PATHS}"

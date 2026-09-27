@@ -152,6 +152,22 @@ def _fmt_bytes(n: int | None) -> str:
     return f"{val:.1f}G"
 
 
+def _fmt_hook_age(iso_ts: str | None) -> str:
+    """``"12s ago"`` from an ISO-8601 ``last_tick_at`` stamp, or ``"n/a"``."""
+    if not iso_ts:
+        return "n/a"
+    import datetime as _dt
+
+    try:
+        at = _dt.datetime.fromisoformat(str(iso_ts))
+    except ValueError:
+        return "n/a"
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=_dt.timezone.utc)
+    age = (_dt.datetime.now(_dt.timezone.utc) - at).total_seconds()
+    return f"{max(0.0, age):.0f}s ago"
+
+
 def _cmd_doctor(args) -> int:
     vault = (getattr(args, "vault", None) or "").strip()
     data = apo_ops.index_health(vault=vault)
@@ -192,6 +208,7 @@ def _cmd_doctor(args) -> int:
     print(header)
     print("-" * len(header))
     exit_code = 0
+    hook_lines: list[str] = []
     for name, v in data.get("vaults", {}).items():
         flags = v.get("flags") or []
         if flags:
@@ -212,6 +229,19 @@ def _cmd_doctor(args) -> int:
         ]
         row = "  ".join(f"{val:<{w}}" for val, (_, w) in zip(row_vals, cols))
         print(f"{row}  {','.join(flags) or '-'}")
+        hooks = v.get("hooks") or {}
+        if hooks:
+            bits = []
+            for hook_name in sorted(hooks):
+                h = hooks[hook_name]
+                if not isinstance(h, dict):
+                    continue
+                marker = "" if h.get("ok", True) else " ERROR"
+                bits.append(f"{hook_name}={_fmt_hook_age(h.get('last_tick_at'))}{marker}")
+            if bits:
+                hook_lines.append(f"  [{name}] hooks: " + ", ".join(bits))
+    for line in hook_lines:
+        print(line)
     return exit_code
 
 

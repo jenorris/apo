@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -30,7 +31,19 @@ from zoneinfo import ZoneInfo
 
 from apo_engine import git_contract, vaults
 
+# Child of the "apo" logger `watch.py` configures with a rotating, timestamped
+# handler — no separate wiring needed here (see `watch._configure_logging`).
+# These `tick()` calls run inside the watch loop with `verbose=True` in
+# production, so a bare `print()` here would bypass that handler entirely and
+# keep writing raw, un-timestamped lines straight to stdout.
+logger = logging.getLogger("apo.git_sync")
+
 _GIT_TIMEOUT_S = 120.0
+# push/pull/fetch touch the network — a dead remote link should fail fast
+# rather than hold the local-only default's generous ceiling. 120s of a
+# stalled watch loop per hang (per the `docs/watcher-scheduler-separation.md`
+# review) is too long for what's really just an "is the network up" check.
+_GIT_NETWORK_TIMEOUT_S = 30.0
 _NOTIFY_TIMEOUT_S = 20.0
 _STATUS_REL = Path(".apo") / "git-sync-status.json"
 _LOCKS: dict[str, threading.Lock] = {}
@@ -553,7 +566,7 @@ def commit_and_push(
 def _push(vault_root: Path, settings: SyncSettings) -> dict[str, Any]:
     st = read_status(vault_root)
     # Intentionally never pass --force / --force-with-lease.
-    proc = _run_git(vault_root, "push")
+    proc = _run_git(vault_root, "push", timeout=_GIT_NETWORK_TIMEOUT_S)
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "git push failed").strip()
         # Try setting upstream once if missing
@@ -562,7 +575,9 @@ def _push(vault_root: Path, settings: SyncSettings) -> dict[str, Any]:
             cur = _run_git(vault_root, "rev-parse", "--abbrev-ref", "HEAD")
             if cur.returncode == 0 and (cur.stdout or "").strip():
                 branch = (cur.stdout or "").strip()
-            proc = _run_git(vault_root, "push", "-u", "origin", branch)
+            proc = _run_git(
+                vault_root, "push", "-u", "origin", branch, timeout=_GIT_NETWORK_TIMEOUT_S
+            )
             err = (proc.stderr or proc.stdout or "git push failed").strip()
             if proc.returncode != 0:
                 _block(vault_root, err, st=st)
@@ -599,7 +614,7 @@ def pull_ff_only(vault_root: Path) -> dict[str, Any]:
         }
 
     # Dirty tree: still attempt ff-only; git will refuse if it would overwrite
-    proc = _run_git(vault_root, "pull", "--ff-only")
+    proc = _run_git(vault_root, "pull", "--ff-only", timeout=_GIT_NETWORK_TIMEOUT_S)
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "git pull --ff-only failed").strip()
         _block(vault_root, err, st=st)
@@ -648,7 +663,9 @@ def rebase_onto_remote(vault_root: Path) -> dict[str, Any]:
             "status": st,
         }
 
-    fetch = _run_git(vault_root, "fetch", "origin", settings.default_branch)
+    fetch = _run_git(
+        vault_root, "fetch", "origin", settings.default_branch, timeout=_GIT_NETWORK_TIMEOUT_S
+    )
     if fetch.returncode != 0:
         err = (fetch.stderr or fetch.stdout or "git fetch failed").strip()
         _block(vault_root, err, st=st)
@@ -771,13 +788,13 @@ class VaultSyncController:
                 result = commit_and_push(self.root)
             if self.verbose:
                 if result.get("ok") and result.get("committed"):
-                    print(
-                        f"  git-sync commit: {result.get('hash', '')[:8]} "
-                        f"{result.get('message')!r}",
-                        flush=True,
+                    logger.info(
+                        "git-sync commit: %s %r",
+                        result.get("hash", "")[:8],
+                        result.get("message"),
                     )
                 elif not result.get("ok"):
-                    print(f"  git-sync blocked: {result.get('message')}", flush=True)
+                    logger.warning("git-sync blocked: %s", result.get("message"))
             return
 
         # Idle pull: no pending commit debounce, index not busy
@@ -789,11 +806,11 @@ class VaultSyncController:
 
         if _core.index_lock_backoff_active():
             if self.verbose:
-                print("  git-sync pull: skipped (index_busy)", flush=True)
+                logger.info("git-sync pull: skipped (index_busy)")
             return
         if _core.is_wal_over_limit():
             if self.verbose:
-                print("  git-sync pull: skipped (wal_over_limit)", flush=True)
+                logger.info("git-sync pull: skipped (wal_over_limit)")
             return
         if self._last_pull_at and (now - self._last_pull_at) < settings.pull_interval_seconds:
             return
@@ -805,6 +822,6 @@ class VaultSyncController:
         with _lock_for(self.root):
             result = pull_ff_only(self.root)
         if self.verbose and not result.get("ok"):
-            print(f"  git-sync pull blocked: {result.get('message')}", flush=True)
+            logger.warning("git-sync pull blocked: %s", result.get("message"))
         elif self.verbose and result.get("ok"):
-            print("  git-sync pull: ok", flush=True)
+            logger.info("git-sync pull: ok")

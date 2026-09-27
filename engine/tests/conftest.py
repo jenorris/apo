@@ -18,6 +18,11 @@ def _isolated_apo_runtime(tmp_path, monkeypatch):
     # Deterministic watcher state (missing pid file → not running) regardless of host.
     monkeypatch.setattr(ops, "WATCH_PID_FILE", runtime / "watch.pid")
     monkeypatch.setenv("APO_DEFERRED_DIR", str(runtime))
+    # watch.py's `_configure_logging` defaults its rotating log file under
+    # `WATCH_PID_DIR` (falling back to `~/.apo`) — any test that exercises
+    # `run_watch`/`_watch_one` (even with `_watch_one` mocked out) must not
+    # open/rotate the real `~/.apo/watch.log`.
+    monkeypatch.setenv("WATCH_PID_DIR", str(runtime))
     # A dev shell exporting APO_VAULTS must not leak real vaults into tests
     # (tests that need a registry set it explicitly).
     for key in (

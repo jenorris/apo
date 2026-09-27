@@ -1,15 +1,76 @@
 """Vault watcher — filesystem events + deferred queue consumer (sole index writer)."""
 from __future__ import annotations
 
+import logging
 import os
 import queue
 import sqlite3
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from . import config, core, deferred, git_sync
+from . import config, core, deferred, git_sync, watch_health
 from .note_format import is_note_path
+
+# Every watcher log line — and, via the "apo" logger hierarchy, `core.py`'s
+# `logging.getLogger("apo.index")` warnings — goes through this handler once
+# `_configure_logging` runs. Previously: bare `print(..., flush=True)` with no
+# timestamp, appended forever by launchd/`watch.sh` (988MB / 174MB observed,
+# unbounded). `RotatingFileHandler` bounds it; `%(asctime)s` makes a burst of
+# errors answerable ("did this happen over 10 minutes or 10 days") without
+# cross-referencing the index.
+_LOG_ROOT_NAME = "apo"
+_LOG_MAX_BYTES = 50 * 1024 * 1024
+_LOG_BACKUP_COUNT = 3
+
+logger = logging.getLogger("apo.watch")
+
+
+def log_file_path() -> Path:
+    """Resolve the watcher's rotated log file.
+
+    ``APO_WATCH_LOG_FILE`` wins outright; else ``WATCH_PID_DIR`` (the same
+    env `watch.sh` uses for the pid file) + ``watch.log``; else
+    ``~/.apo/watch.log``. Kept distinct from `watch.sh`'s own stdout/stderr
+    redirect target (`watch-stdout.log`) — two writers rotating the same
+    path would fight each other.
+    """
+    override = os.environ.get("APO_WATCH_LOG_FILE", "").strip()
+    if override:
+        return Path(override).expanduser()
+    pid_dir = os.environ.get("WATCH_PID_DIR", "").strip()
+    base = Path(pid_dir).expanduser() if pid_dir else Path.home() / ".apo"
+    return base / "watch.log"
+
+
+def _configure_logging(verbose: bool) -> logging.Logger:
+    """Idempotent: attach the rotating handler once per process.
+
+    Handler lives on the ``"apo"`` logger (not ``"apo.watch"``) so
+    ``core.py``'s ``logging.getLogger("apo.index")`` warnings inherit the
+    same timestamped, rotated destination via the logging hierarchy —
+    no separate wiring needed in `core.py`.
+    """
+    root = logging.getLogger(_LOG_ROOT_NAME)
+    if not root.handlers:
+        path = log_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            str(path),
+            maxBytes=_LOG_MAX_BYTES,
+            backupCount=_LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+        handler.setFormatter(
+            logging.Formatter(
+                fmt="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+                datefmt="%Y-%m-%dT%H:%M:%S%z",
+            )
+        )
+        root.addHandler(handler)
+    root.setLevel(logging.DEBUG if verbose else logging.INFO)
+    return logger
 
 
 class PathDebouncer:
@@ -106,6 +167,34 @@ def _event_path_noise(raw: str, root: Path, ignore_res: list) -> bool:
             return True
     return bool(core._is_ignored(rel, ignore_res))
 
+def _format_indexed_summary(
+    stats: core.QueueStats, ready: list[Path], root: Path
+) -> str | None:
+    """One-line ``indexed:`` summary, or ``None`` when there's nothing to say.
+
+    Small debounced batches are the common single-save case that used to make
+    this log line unanswerable (``indexed: 1 file(s)`` with no path) — name
+    them when there are few enough to be readable (``<= 5``); larger batches
+    stay a count so a bulk reindex doesn't spam the log.
+    """
+    vs = stats.vault_stats
+    scan_changed = bool(vs and (vs.added or vs.changed or vs.removed))
+    if not (stats.indexed or stats.purged or scan_changed):
+        return None
+    parts: list[str] = []
+    if stats.indexed:
+        if ready and len(ready) <= 5:
+            names = ", ".join(p.relative_to(root).as_posix() for p in ready)
+            parts.append(f"{stats.indexed} file(s) [{names}]")
+        else:
+            parts.append(f"{stats.indexed} file(s)")
+    if stats.purged:
+        parts.append(f"{stats.purged} purged")
+    if scan_changed:
+        parts.append(f"scan +{vs.added} ~{vs.changed} -{vs.removed}")
+    return ", ".join(parts)
+
+
 def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
     """Index ready paths in one embed batch. Returns files updated or purged."""
     items = list(paths)
@@ -118,7 +207,7 @@ def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
         return n if n else purged
     except (OSError, ValueError) as e:
         if verbose:
-            print(f"  skip batch: {e}", flush=True)
+            logger.warning("skip batch: %s", e)
         return 0
 
 
@@ -133,6 +222,8 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
     """
     from . import vaults
 
+    _configure_logging(verbose)
+
     _default, bindings = vaults.load_bindings()
     # Single-vault legacy (no discovery env): one thread, no supervisor.
     # When discovery is active (even with one vault), run the multi-vault
@@ -146,7 +237,7 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
 
     if verbose:
         names = ", ".join(sorted(bindings))
-        print(f"Multi-vault watch: {names}", flush=True)
+        logger.info("Multi-vault watch: %s", names)
 
     process_stop = threading.Event()
     # name -> (VaultBinding, Thread, per-vault stop Event)
@@ -156,9 +247,9 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
     def spawn(b: vaults.VaultBinding, *, initial_rebuild: bool = False) -> None:
         if b.name in zombie_vaults:
             if verbose:
-                print(
-                    f"  [registry] skip respawn for vault {b.name!r} — prior thread still alive",
-                    flush=True,
+                logger.info(
+                    "[registry] skip respawn for vault %r — prior thread still alive",
+                    b.name,
                 )
             return
         if initial_rebuild:
@@ -182,16 +273,18 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
                     # SystemExit escapes `except Exception` and is dropped silently by
                     # threading.excepthook — surface it so one vault cannot fail invisibly.
                     if verbose:
-                        print(
-                            f"  vault {binding.name} watch fatal: {type(e).__name__}: {e}",
-                            flush=True,
+                        logger.error(
+                            "vault %s watch fatal: %s: %s",
+                            binding.name,
+                            type(e).__name__,
+                            e,
                         )
 
         t = threading.Thread(target=_run, name=f"apo-watch-{b.name}", daemon=True)
         t.start()
         active[b.name] = (b, t, vault_stop)
         if verbose and initial_rebuild:
-            print(f"  [registry] hot-added vault {b.name!r} → {b.root}", flush=True)
+            logger.info("[registry] hot-added vault %r → %s", b.name, b.root)
 
     def soft_remove(name: str, *, reason: str) -> None:
         entry = active.pop(name, None)
@@ -203,18 +296,21 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
         if t.is_alive():
             zombie_vaults.add(name)
             if verbose:
-                print(
-                    f"  [registry] soft-removed vault {name!r} ({reason}) — "
-                    f"thread still alive; index/deferred kept ({old_b.index.name}); "
+                logger.warning(
+                    "[registry] soft-removed vault %r (%s) — "
+                    "thread still alive; index/deferred kept (%s); "
                     "will not respawn until watcher restart",
-                    flush=True,
+                    name,
+                    reason,
+                    old_b.index.name,
                 )
             return
         if verbose:
-            print(
-                f"  [registry] soft-removed vault {name!r} ({reason}) — "
-                f"index/deferred kept ({old_b.index.name})",
-                flush=True,
+            logger.info(
+                "[registry] soft-removed vault %r (%s) — index/deferred kept (%s)",
+                name,
+                reason,
+                old_b.index.name,
             )
 
     for b in bindings.values():
@@ -228,7 +324,7 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
             _def, latest = vaults.load_bindings()
         except (OSError, ValueError) as e:
             if verbose:
-                print(f"  [registry] reload failed (continuing): {e}", flush=True)
+                logger.warning("[registry] reload failed (continuing): %s", e)
             return
         last_reg_mtime = vaults.registry_mtime()
 
@@ -261,7 +357,7 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
         for _b, _t, vault_stop in list(active.values()):
             vault_stop.set()
         if verbose:
-            print("\nstopped", flush=True)
+            logger.info("stopped")
         for _b, t, _vs in list(active.values()):
             t.join(timeout=5)
 
@@ -283,6 +379,10 @@ def _watch_one(
     index_path = binding.index
     label = binding.name
 
+    # Idempotent — covers a direct `_watch_one` call (tests, future callers)
+    # that skips `run_watch`'s own setup.
+    _configure_logging(verbose)
+
     # A caller-supplied event is shared across vaults; only signal shutdown on an
     # event we own, so one vault's exit cannot stop its siblings.
     owns_stop = stop is None
@@ -295,6 +395,7 @@ def _watch_one(
     from . import optima_merge as _optima_merge
 
     merge_ctl = _optima_merge.VaultMergeController(root, verbose=verbose)
+    hook_health = watch_health.HookHealthTracker(root)
 
     ignore_res = core._compile_ignore(core._load_ignore())
 
@@ -340,20 +441,28 @@ def _watch_one(
             observer.schedule(Handler(), str(root), recursive=True)
             observer.start()
             if verbose:
-                print(
-                    f"[{label}] Watching {root} (fsevents + {poll}s poll, debounce {debounce_s}s) → {index_path}",
-                    flush=True,
+                logger.info(
+                    "[%s] Watching %s (fsevents + %ss poll, debounce %ss) → %s",
+                    label,
+                    root,
+                    poll,
+                    debounce_s,
+                    index_path,
                 )
         except ImportError:
             observer = None
             if verbose:
-                print(f"[{label}] watchdog not installed — poll-only mode", flush=True)
+                logger.info("[%s] watchdog not installed — poll-only mode", label)
 
     if observer is None:
         if verbose:
-            print(
-                f"[{label}] Watching {root} every {poll}s (debounce {debounce_s}s) → {index_path}",
-                flush=True,
+            logger.info(
+                "[%s] Watching %s every %ss (debounce %ss) → %s",
+                label,
+                root,
+                poll,
+                debounce_s,
+                index_path,
             )
 
     last_scan = 0.0
@@ -364,7 +473,7 @@ def _watch_one(
         else max(poll, float(getattr(config, "WATCH_RECONCILE_INTERVAL", 300.0)))
     )
     if verbose and observer is not None:
-        print(f"  [{label}] reconcile walk every {reconcile:.0f}s", flush=True)
+        logger.info("[%s] reconcile walk every %.0fs", label, reconcile)
     try:
         while not stop.is_set():
             woke = deferred.wake_pending(collection)
@@ -424,50 +533,79 @@ def _watch_one(
                             )
                     except Exception as proj_err:
                         if verbose:
-                            print(
-                                f"  [{label}] desk-project error: {proj_err}",
-                                flush=True,
+                            logger.warning(
+                                "[%s] desk-project error: %s", label, proj_err
                             )
 
                 # Desk overlay lives outside vault roots — poll mtime each cycle.
+                # Also doubles as the desk-reprojection hook's heartbeat: it runs
+                # unconditionally every cycle, unlike the contracts-triggered call
+                # above, so its tick timing is what `watch-hooks.json` tracks.
+                _t0 = time.monotonic()
                 try:
                     from . import vault_project
 
                     vault_project.maybe_reproject(reason="desk-poll", verbose=verbose)
                 except Exception as proj_err:
+                    hook_health.record(
+                        watch_health.DESK_REPROJECT,
+                        seconds=time.monotonic() - _t0,
+                        ok=False,
+                        error=str(proj_err),
+                    )
                     if verbose:
-                        print(
-                            f"  [{label}] desk-poll project error: {proj_err}",
-                            flush=True,
+                        logger.warning(
+                            "[%s] desk-poll project error: %s", label, proj_err
                         )
+                else:
+                    hook_health.record(
+                        watch_health.DESK_REPROJECT,
+                        seconds=time.monotonic() - _t0,
+                        ok=True,
+                    )
 
-                if verbose and (stats.indexed or stats.purged or (
-                    stats.vault_stats
-                    and (stats.vault_stats.added or stats.vault_stats.changed or stats.vault_stats.removed)
-                )):
-                    parts = []
-                    if stats.indexed:
-                        parts.append(f"{stats.indexed} file(s)")
-                    if stats.purged:
-                        parts.append(f"{stats.purged} purged")
-                    if stats.vault_stats and (
-                        stats.vault_stats.added or stats.vault_stats.changed or stats.vault_stats.removed
-                    ):
-                        vs = stats.vault_stats
-                        parts.append(f"scan +{vs.added} ~{vs.changed} -{vs.removed}")
-                    print(f"  [{label}] indexed: {', '.join(parts)}", flush=True)
+                if verbose:
+                    summary = _format_indexed_summary(stats, ready, root)
+                    if summary is not None:
+                        logger.info("[%s] indexed: %s", label, summary)
 
+                _t0 = time.monotonic()
                 try:
                     sync_ctl.tick(index_busy=debouncer.waiting() > 0)
                 except Exception as sync_err:
+                    hook_health.record(
+                        watch_health.GIT_SYNC,
+                        seconds=time.monotonic() - _t0,
+                        ok=False,
+                        error=str(sync_err),
+                    )
                     if verbose:
-                        print(f"  [{label}] git-sync tick error: {sync_err}", flush=True)
+                        logger.warning("[%s] git-sync tick error: %s", label, sync_err)
+                else:
+                    hook_health.record(
+                        watch_health.GIT_SYNC, seconds=time.monotonic() - _t0, ok=True
+                    )
 
+                _t0 = time.monotonic()
                 try:
                     merge_ctl.tick(index_busy=debouncer.waiting() > 0)
                 except Exception as merge_err:
+                    hook_health.record(
+                        watch_health.OPTIMA_MERGE,
+                        seconds=time.monotonic() - _t0,
+                        ok=False,
+                        error=str(merge_err),
+                    )
                     if verbose:
-                        print(f"  [{label}] optima-merge tick error: {merge_err}", flush=True)
+                        logger.warning(
+                            "[%s] optima-merge tick error: %s", label, merge_err
+                        )
+                else:
+                    hook_health.record(
+                        watch_health.OPTIMA_MERGE,
+                        seconds=time.monotonic() - _t0,
+                        ok=True,
+                    )
 
                 if due_poll:
                     last_scan = now
@@ -486,9 +624,8 @@ def _watch_one(
                         lock_backoff = config.WATCH_LOCK_BACKOFF_START
                 if verbose:
                     suffix = f" (backing off {lock_backoff:.0f}s)" if lock_backoff else ""
-                    print(
-                        f"  [{label}] watch cycle error (continuing){suffix}: {e}",
-                        flush=True,
+                    logger.error(
+                        "[%s] watch cycle error (continuing)%s: %s", label, suffix, e
                     )
 
             due_in = debouncer.next_due_in()
@@ -504,7 +641,7 @@ def _watch_one(
                 pass
     except KeyboardInterrupt:
         if verbose:
-            print(f"\n[{label}] stopped", flush=True)
+            logger.info("[%s] stopped", label)
     finally:
         if owns_stop:
             stop.set()

@@ -86,3 +86,12 @@ watcher status already exposed via `apo_admin(memory_status)` / `ops.watcher_sta
 (`docs/index-concurrency.md`'s `index_visibility()` neighbor). Whatever health/introspection
 capability the `index-health-doctor` work is adding is the right place to add this, once that
 work is confirmed done in that worktree.
+
+**Status (implemented):** this section, and the logging fix from the companion review, landed —
+`engine/src/apo_engine/watch_health.py` tracks `last_tick_at` / `last_tick_seconds` / `ok` / `error`
+per hook (`git_sync`, `optima_merge`, `desk_reproject`) in a small per-vault
+`.apo/watch-hooks.json`, read by `core.index_health()` (`hooks` field + `hook_error:*` /
+`hook_stale:*` flags) and printed by `apo-engine doctor`. The thread-per-hook scheduler above
+(direction 1–3) was **not** built — reviewed and rejected as overbuilt for a solo-maintainer loop
+whose peripheral calls are already either subprocess-timeout-bounded (`git_sync`) or cheap local
+I/O; a stall is now visible instead of invisible, which was the actual ask.
