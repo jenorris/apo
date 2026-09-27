@@ -355,7 +355,7 @@ def _reindex_admin(params: dict[str, Any], *, vault: str = "") -> dict:
     """Delegates the actual mechanic to ``ops.reindex`` (shared with ``apo-engine index``);
     this wrapper only keeps the server's per-process ``VAULTS[...].deferred`` bookkeeping
     (used by ``memory_status``) in sync with whichever queue got signaled/drained."""
-    mode = str(params.get("mode") or "rebuild").strip().lower()
+    mode = str(params.get("mode") or "flush").strip().lower()
     v_name = vault or str(params.get("vault") or "")
     if mode not in ("flush", "rebuild"):
         return _err(error="bad_request", message="mode must be flush or rebuild")
