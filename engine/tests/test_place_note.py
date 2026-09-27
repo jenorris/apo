@@ -81,6 +81,48 @@ class PlaceNoteTest(unittest.TestCase):
         self.assertFalse(src.exists())
         self.assertTrue((self.vault / "archives" / "b.md").is_file())
 
+    def test_move_stale_expected_mtime_rejected(self):
+        src = self.vault / "inbox" / "e.md"
+        src.parent.mkdir(parents=True)
+        src.write_text("# E\n", encoding="utf-8")
+        mtime = src.stat().st_mtime
+
+        stale = ops.place_note(
+            "inbox/e.md", "archives/e.md", expected_mtime=mtime - 10
+        )
+        self.assertFalse(stale["ok"], stale)
+        self.assertEqual(stale["error"], "stale_write")
+        self.assertTrue(src.exists(), "rejected move must not touch src")
+
+        moved = ops.place_note("inbox/e.md", "archives/e.md", expected_mtime=mtime)
+        self.assertTrue(moved["ok"], moved)
+        self.assertEqual(moved["mode"], "move")
+        self.assertFalse(src.exists())
+        self.assertTrue((self.vault / "archives" / "e.md").is_file())
+
+    def test_patch_entry_place_op_stale_expected_mtime_rejected(self):
+        """Same guard via patch_entry(ops=[{op: place, ...}]) — the path
+        apo-engine serve's /v1/move and /v1/place routes dispatch through."""
+        src = self.vault / "inbox" / "f.md"
+        src.parent.mkdir(parents=True)
+        src.write_text("# F\n", encoding="utf-8")
+        mtime = src.stat().st_mtime
+
+        stale = ops.patch_entry(
+            ops=[{"op": "place", "src": "inbox/f.md", "dst": "archives/f.md"}],
+            expected_mtime=mtime - 10,
+        )
+        self.assertFalse(stale["ok"], stale)
+        self.assertEqual(stale["error"], "stale_write")
+
+        moved = ops.patch_entry(
+            ops=[{"op": "place", "src": "inbox/f.md", "dst": "archives/f.md"}],
+            expected_mtime=mtime,
+        )
+        self.assertTrue(moved["ok"], moved)
+        self.assertFalse(src.exists())
+        self.assertTrue((self.vault / "archives" / "f.md").is_file())
+
     def test_fields_forbidden_on_move(self):
         src = self.vault / "inbox" / "c.md"
         src.parent.mkdir(parents=True)

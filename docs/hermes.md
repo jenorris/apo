@@ -6,16 +6,23 @@ Lyra already have **Mnemosyne** for episodic / working memory. Keep both:
 | Layer | Role |
 |-------|------|
 | **Mnemosyne** | Hermes `memory.provider` — turn sync, sleep, prefetch |
-| **Apo** | MCP or local RPC — search, filter, surgical writes over vault files |
+| **Apo** | MCP (stdio or HTTP) or `apo-local` — search, filter, surgical writes over vault files |
 
 Do **not** register Apo as Hermes’s sole MemoryProvider — that displaces
 Mnemosyne and drops episodic lifecycle hooks Apo does not implement.
 
 ## Process isolation
 
-Prefer **RPC** (`apo-engine serve` / [`local-rpc.md`](./local-rpc.md)) when the
-Hermes process should not own the stdio MCP subprocess (Grid / Desma). Cursor
-and Claude Code keep stdio MCP.
+When the Hermes process should not own the stdio MCP subprocess (Grid /
+Desma), prefer **`apo-mcp`'s HTTP transport** (FastMCP, default `:8878`) or
+**`apo-local`** for in-process/no-daemon calls. Cursor and Claude Code keep
+stdio MCP.
+
+The legacy hand-rolled RPC server (`apo-engine serve` /
+[`local-rpc.md`](./local-rpc.md)) is **deprecated** — do not point new Hermes
+integrations at it. It is kept only for a known-but-unverified external
+consumer (`apo-enterprise`); its one confirmed real consumer has already
+migrated to `apo-local`.
 
 ## Desk projection
 

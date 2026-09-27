@@ -1,5 +1,20 @@
 # Local RPC
 
+> **Deprecated.** `apo-engine serve` (`engine/src/apo_engine/rpc.py`) is legacy
+> and frozen — no new routes or features. Its only confirmed real consumer
+> (`ingest-pull-gmail.py`) has been migrated to call `apo-local write` directly
+> (2026-09); no launchd job has ever run `apo-engine serve` in production
+> (12,030 failed attempts logged, 0 successes). The Laravel gateway below
+> (`apo-enterprise`) is a known-but-unverified external consumer — last
+> committed 2026-07-20, out of scope to chase here.
+>
+> For new work, prefer:
+> - **`apo-mcp`'s HTTP transport** (FastMCP, default `:8878`) — the same tool
+>   surface as stdio MCP, over HTTP, plus the Go `apo` client as a ready CLI.
+> - **`apo-local`** for in-process calls with no daemon at all.
+>
+> This doc describes the legacy surface as-is, for anyone still depending on it.
+
 Gateway and other non-stdio clients talk to the engine over **loopback HTTP** (or an optional Unix domain socket). The stdio MCP for Cursor/Claude Code is unchanged.
 
 ## Start

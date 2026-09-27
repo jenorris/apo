@@ -216,7 +216,11 @@ def main(argv: list[str] | None = None) -> int:
 
     pr = sub.add_parser(
         "serve",
-        help="local JSON HTTP RPC for gateways (loopback; optional Unix socket)",
+        help=(
+            "DEPRECATED — legacy local JSON HTTP RPC for gateways (loopback; "
+            "optional Unix socket). Prefer apo-mcp's HTTP transport (:8878) or "
+            "apo-local; see docs/local-rpc.md."
+        ),
     )
     pr.add_argument("--host", default="", help="bind host (default APO_RPC_HOST or 127.0.0.1)")
     pr.add_argument("--port", type=int, default=0, help="bind port (default APO_RPC_PORT or 8765)")
