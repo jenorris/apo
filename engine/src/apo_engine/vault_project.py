@@ -6,6 +6,7 @@ Deterministic — no LLM. Returns shared ``body`` + optional ``guidance`` for pl
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -13,6 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from apo_engine.note_format import NOTE_SUFFIXES
+
+# Child of "apo" — see git_sync.py's logger comment; `maybe_reproject` is
+# called from the watch loop with `verbose=True` in production.
+logger = logging.getLogger("apo.vault_project")
 
 # Deterministic lines for usage-contract ``write_habits`` ids (projected into apo-desk).
 _WRITE_HABIT_LINES: dict[str, str] = {
@@ -1282,10 +1287,9 @@ def maybe_reproject(
         _last_desk_mtime = desk_mt
         _last_contracts_sig = sig
         if verbose:
-            print(
-                f"  [desk-project] desk/contracts changed ({reason or 'auto'}) — "
-                "run desk-project to render",
-                flush=True,
+            logger.info(
+                "[desk-project] desk/contracts changed (%s) — run desk-project to render",
+                reason or "auto",
             )
         return {
             "ok": True,

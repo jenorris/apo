@@ -3935,6 +3935,15 @@ def index_health() -> dict[str, Any]:
     )
     quarantined = _count("SELECT COUNT(*) FROM files WHERE embed_quarantined=1")
 
+    # Watch-loop hook health (git-sync / optima-merge / desk-reprojection) —
+    # a small persisted heartbeat the watcher writes per vault; see
+    # `watch_health.py`. Read-side only here: a stalled or hung hook needs to
+    # surface through the same `index_health()`/`apo-engine doctor` path an
+    # operator already checks, per docs/watcher-scheduler-separation.md.
+    from . import watch_health
+
+    hooks = watch_health.read_hook_health(vaults.notes_root())
+
     flags: list[str] = []
     if vec_chunks_orphans > 0:
         flags.append("vec_orphans")
@@ -3946,6 +3955,7 @@ def index_health() -> dict[str, Any]:
         flags.append("wal_over_limit")
     if quarantined > 0:
         flags.append("embed_quarantined")
+    flags.extend(watch_health.hook_health_flags(hooks))
 
     return {
         "index": str(idx_path),
@@ -3961,6 +3971,7 @@ def index_health() -> dict[str, Any]:
         "vec_chunks_orphans": vec_chunks_orphans,
         "fts_orphans": fts_orphans,
         "quarantined": quarantined,
+        "hooks": hooks,
         "flags": flags,
     }
 

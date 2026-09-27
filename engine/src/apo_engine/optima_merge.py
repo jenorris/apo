@@ -6,6 +6,7 @@ this module only reads vault paths and writes Optima outputs. No ``gws``/GCal.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import datetime
@@ -19,6 +20,10 @@ from . import optima_contract, vaults
 from .optima_contract import MergeSettings, SourceSpec
 
 TZ = ZoneInfo("America/New_York")
+
+# Child of "apo" — see git_sync.py's logger comment; same reasoning applies to
+# VaultMergeController.tick's verbose prints.
+logger = logging.getLogger("apo.optima_merge")
 
 KIND_PRIORITY = [
     "incident",
@@ -469,16 +474,16 @@ class VaultMergeController:
             result = run_merge(self.root, settings=settings)
         except Exception as exc:
             if self.verbose:
-                print(f"  [{self.root.name}] optima-merge error: {exc}", flush=True)
+                logger.warning("[%s] optima-merge error: %s", self.root.name, exc)
             return
         if self.verbose and result.get("ok") and result.get("wrote"):
-            print(
-                f"  [{self.root.name}] optima-merge: {result.get('kind')} — "
-                f"{result.get('theme') or 'free'}",
-                flush=True,
+            logger.info(
+                "[%s] optima-merge: %s — %s",
+                self.root.name,
+                result.get("kind"),
+                result.get("theme") or "free",
             )
         elif self.verbose and not result.get("ok"):
-            print(
-                f"  [{self.root.name}] optima-merge failed: {result.get('message')}",
-                flush=True,
+            logger.warning(
+                "[%s] optima-merge failed: %s", self.root.name, result.get("message")
             )
