@@ -21,7 +21,7 @@ Do **not** confuse templates here with a setting in MCP config. Opt-in means: pu
 | [okf-bundle.md](./okf-bundle.md) | **Ship** | OKF Knowledge Bundle — `okf_type` primary; vault YAML stamp/soft/hard |
 | [yaml-notes.md](./yaml-notes.md) | **Ship** | Standalone `.yaml` / `.yml` catalog notes (filter + field patch) |
 | [git.md](./git.md) | **Ship** | Vault backup / remote + `history(path=)` + optional `sync.enabled` commit/pull — [git-contract.schema.yaml](./git-contract.schema.yaml) |
-| [search-contract.schema.yaml](./search-contract.schema.yaml) | **Ship** | Per-vault default exclude globs for unscoped search + history browse — [search-contract.schema.yaml](./search-contract.schema.yaml) |
+| [search-contract.schema.yaml](./search-contract.schema.yaml) | **Ship** | Per-vault default exclude globs for unscoped search + history browse, plus `boost_vocab` (vault-specific architecture/system terms for the ranking arch-query boost) — [search-contract.schema.yaml](./search-contract.schema.yaml) |
 | [table-contract.schema.yaml](./table-contract.schema.yaml) | **Ship** | Per-pattern GFM table rules: `key_column` (index `row_key` + `patch_table` row lookup / upsert key), `replace_table` defaults (`merge`, `allow_new_columns`) and `header_synonyms` |
 | [mermaid-contract.schema.yaml](./mermaid-contract.schema.yaml) | **Ship** | Diagram chunking, catalog join, `validation: hard` write gate — [mermaid-notes.md](./mermaid-notes.md) |
 | [usage-contract.schema.yaml](./usage-contract.schema.yaml) | **Ship** | Host-neutral vault usage IR for harness / `vault(project)` — **not** interpreted by the engine for search/write |

@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from apo_engine import config, core, ops, vaults
+from apo_engine import config, core, ops, ranking, vaults
 
 _DIM = 16
 
@@ -79,8 +79,8 @@ class RetrievalGapsTest(unittest.TestCase):
         for patch in self._patches:
             patch.stop()
         vaults._usage_layout_cache.clear()
-        core._backlink_count_cache.clear()
-        core._frontmatter_boost_cache.clear()
+        ranking._backlink_count_cache.clear()
+        ranking._frontmatter_boost_cache.clear()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_slug_boost_ranks_ticket_thread_first(self):
