@@ -1,17 +1,24 @@
-// Command apo is a thin MCP client for a running apo-engine server
+// Command apo-remote is a thin MCP client for a running apo-engine server
 // (streamable-HTTP transport, engine/mcp/server.py APO_MCP_TRANSPORT=http).
 //
 // It has no local vault access and no engine dependencies (duckdb,
 // sqlite-vec, watchdog, ...) — every command is a single MCP tool call over
 // the wire. For the same commands run in-process against a local vault with
 // no server required, see the apo-local console script (apo_engine.cli_ops,
-// Python, part of the apo-engine package).
+// Python, part of the apo-engine package) — or the unified `apo` entry
+// point's bare note verbs, which call the same backend.
 //
-// Any tool the server exposes can be reached via `apo call <tool> --args
-// '<json>'` — the generic path is the source of truth, so this binary never
-// goes stale when the server adds or changes a tool's schema. `read` and
-// `search` exist as convenience wrappers around the two most common,
-// stable-shaped calls.
+// Named apo-remote, not apo: naming-consolidation pass (0.29) gave the
+// Python-side unified CLI the `apo` console script name (apo_engine.cli_apo,
+// dispatching in-process to the apo-engine/apo-local backends). This binary
+// had reserved `apo` for itself since 0.27.0 but has essentially no
+// adoption yet, so it gives the name up rather than the other way around.
+//
+// Any tool the server exposes can be reached via `apo-remote call <tool>
+// --args '<json>'` — the generic path is the source of truth, so this
+// binary never goes stale when the server adds or changes a tool's schema.
+// `read` and `search` exist as convenience wrappers around the two most
+// common, stable-shaped calls.
 package main
 
 import (
@@ -28,7 +35,7 @@ const defaultServerURL = "http://127.0.0.1:8878/mcp"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "apo: "+err.Error())
+		fmt.Fprintln(os.Stderr, "apo-remote: "+err.Error())
 		os.Exit(1)
 	}
 }
@@ -45,7 +52,7 @@ func run(args []string) error {
 		return nil
 	}
 	if cmd == "-V" || cmd == "--version" || cmd == "version" {
-		fmt.Println("apo " + version)
+		fmt.Println("apo-remote " + version)
 		return nil
 	}
 
@@ -61,19 +68,19 @@ func run(args []string) error {
 	case "append":
 		return cmdAppend(rest)
 	default:
-		return fmt.Errorf("unknown command %q — run `apo help`", cmd)
+		return fmt.Errorf("unknown command %q — run `apo-remote help`", cmd)
 	}
 }
 
 func usage() {
-	fmt.Print(`apo — thin MCP client for a running apo-engine server
+	fmt.Print(`apo-remote — thin MCP client for a running apo-engine server
 
 Usage:
-  apo tools                                  list tools the server exposes
-  apo call <tool> [--args '<json>']          call any tool by name (reads stdin if --args omitted)
-  apo search <query> [--folder F] [--vault V] [--limit N]
-  apo read <path> [--heading H]
-  cmd | apo append <path> [--heading H] [--chunk-hash C] [--vault V] [--position start|end] [--create]
+  apo-remote tools                                  list tools the server exposes
+  apo-remote call <tool> [--args '<json>']          call any tool by name (reads stdin if --args omitted)
+  apo-remote search <query> [--folder F] [--vault V] [--limit N]
+  apo-remote read <path> [--heading H]
+  cmd | apo-remote append <path> [--heading H] [--chunk-hash C] [--vault V] [--position start|end] [--create]
                                               pipe stdout straight into a note (append_note; errors if the
                                               note doesn't exist unless --create is given)
 
@@ -83,7 +90,7 @@ Global flags (any subcommand):
 
 Every MCP tool the server exposes is reachable via 'call', regardless of
 whether this binary has a dedicated subcommand for it — e.g.:
-  apo call write_note --args '{"path":"areas/threads/x.md","content":"..."}'
+  apo-remote call write_note --args '{"path":"areas/threads/x.md","content":"..."}'
 `)
 }
 
@@ -170,7 +177,7 @@ func cmdCall(args []string) error {
 	sf, rest := splitFlags(args)
 	positionals, flags := partition(rest, map[string]bool{"args": true})
 	if len(positionals) < 1 {
-		return fmt.Errorf("usage: apo call <tool> [--args '<json>']")
+		return fmt.Errorf("usage: apo-remote call <tool> [--args '<json>']")
 	}
 	tool := positionals[0]
 
@@ -199,7 +206,7 @@ func cmdSearch(args []string) error {
 	sf, rest := splitFlags(args)
 	positionals, flags := partition(rest, map[string]bool{"folder": true, "vault": true, "limit": true})
 	if len(positionals) < 1 {
-		return fmt.Errorf("usage: apo search <query> [--folder F] [--vault V] [--limit N]")
+		return fmt.Errorf("usage: apo-remote search <query> [--folder F] [--vault V] [--limit N]")
 	}
 	query := strings.Join(positionals, " ")
 
@@ -224,7 +231,7 @@ func cmdRead(args []string) error {
 	sf, rest := splitFlags(args)
 	positionals, flags := partition(rest, map[string]bool{"heading": true})
 	if len(positionals) < 1 {
-		return fmt.Errorf("usage: apo read <path> [--heading H]")
+		return fmt.Errorf("usage: apo-remote read <path> [--heading H]")
 	}
 	toolArgs := map[string]any{"path": positionals[0]}
 	if v := flags["heading"]; v != "" {
@@ -235,7 +242,7 @@ func cmdRead(args []string) error {
 
 // cmdAppend wraps append_note for the common "pipe a command's output into a
 // note" case. Unlike cmdCall (JSON args from stdin), stdin here is the note
-// text itself — no JSON envelope, so `some-command | apo append path.md`
+// text itself — no JSON envelope, so `some-command | apo-remote append path.md`
 // works with zero ceremony. create defaults to false, matching append_note's
 // own default: this never conjures a new note out of a typo'd path unless
 // asked to.
@@ -244,13 +251,13 @@ func cmdAppend(args []string) error {
 	create, rest := hasBoolFlag(rest, "create")
 	positionals, flags := partition(rest, map[string]bool{"heading": true, "chunk-hash": true, "vault": true, "position": true})
 	if len(positionals) < 1 {
-		return fmt.Errorf("usage: cmd | apo append <path> [--heading H] [--chunk-hash C] [--vault V] [--position start|end] [--create]")
+		return fmt.Errorf("usage: cmd | apo-remote append <path> [--heading H] [--chunk-hash C] [--vault V] [--position start|end] [--create]")
 	}
 	path := positionals[0]
 
 	stat, _ := os.Stdin.Stat()
 	if stat == nil || (stat.Mode()&os.ModeCharDevice) != 0 {
-		return fmt.Errorf("apo append reads note text from stdin — pipe something in, e.g. `echo hi | apo append %s`", path)
+		return fmt.Errorf("apo-remote append reads note text from stdin — pipe something in, e.g. `echo hi | apo-remote append %s`", path)
 	}
 	b, err := io.ReadAll(os.Stdin)
 	if err != nil {

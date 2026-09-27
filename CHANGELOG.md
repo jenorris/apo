@@ -4,6 +4,30 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- **`apo` unified console script** (`apo_engine.cli_apo:main`) — additive,
+  dispatches by leading token: bare note verbs (`read`/`search`/`write`/
+  `append`/`patch`/`patch-table`/`graph-neighbors`/`filter`/`backlinks`/
+  `history`) go to the same backend as `apo-local`; `apo engine <cmd>` goes
+  to the same backend as `apo-engine` (`index`/`search`/`search-eval`/
+  `stats`/`watch`/`desk-project`/`okf`/`serve`/`optima-merge`); `apo mcp`
+  runs the same MCP server as `apo-mcp`. Resolves the long-standing
+  `search` name collision between the two backends by namespacing
+  `apo-engine`'s version under `engine`. `apo-engine`/`apo-local`/`apo-mcp`
+  are unchanged and keep working as their own console scripts — nothing
+  that pins those exact names (launchd plists, shell aliases, MCP host
+  config) needs to change.
+
+### Changed
+
+- **Go network client (`client/`) renamed `apo` → `apo-remote`.** Frees the
+  `apo` name for the new unified console script above. This binary had
+  reserved `apo` since 0.27.0 but has essentially no adoption yet, so it
+  gives the name up. Update any build scripts installing it to
+  `-o /usr/local/bin/apo-remote` and any invocations from `apo ...` to
+  `apo-remote ...` — see `client/README.md`.
+
 ## [0.28.3] — 2026-09-26
 
 ### Fixed
