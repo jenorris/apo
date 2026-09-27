@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from apo_engine import config, core, ops, vaults
+from apo_engine import config, core, ops, ranking, vaults
 
 
 _DIM = 16
@@ -64,8 +64,8 @@ class SearchPerfTest(unittest.TestCase):
         vaults._usage_layout_cache.clear()
         core.clear_query_embed_cache()
         ops._lint_sweep_cache.clear()
-        core._frontmatter_boost_cache.clear()
-        core._backlink_count_cache.clear()
+        ranking._frontmatter_boost_cache.clear()
+        ranking._backlink_count_cache.clear()
         note_lint = __import__("apo_engine.note_lint", fromlist=["note_lint"])
         note_lint._wiki_index_cache.clear()
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -89,12 +89,12 @@ class SearchPerfTest(unittest.TestCase):
 
     def test_prefetch_path_boost_data_warms_caches(self):
         path = "areas/threads/alpha-note.md"
-        core._frontmatter_boost_cache.clear()
-        core._backlink_count_cache.clear()
-        core._prefetch_path_boost_data([path])
+        ranking._frontmatter_boost_cache.clear()
+        ranking._backlink_count_cache.clear()
+        ranking._prefetch_path_boost_data([path])
         with mock.patch.object(core, "reader_connect") as rc:
-            core._frontmatter_boost_fields(path)
-            core._backlink_count(path)
+            ranking._frontmatter_boost_fields(path)
+            ranking._backlink_count(path)
             rc.assert_not_called()
 
 

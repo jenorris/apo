@@ -5,6 +5,12 @@ Active when ``system/contracts/search-contract.schema.yaml`` (or legacy
 Used by ``search`` and ``history`` browse when ``exclude=`` is omitted and
 ``folder=`` is empty.
 
+Also carries ``boost_vocab`` — a per-vault list of architecture/system terms
+consumed by :mod:`apo_engine.ranking` to decide when an unscoped query counts
+as an "architecture query" (vault-wide diagram/mermaid boost). A vault with no
+``boost_vocab`` key gets no such boost at all — there is no built-in fallback
+list.
+
 Fallback: ``APO_SEARCH_EXCLUDE`` env (deprecated desk-wide default).
 """
 
@@ -50,7 +56,8 @@ def load_search_contract(vault_root: Path, explicit: str | None = None) -> dict[
     return data if isinstance(data, dict) else None
 
 
-def _normalize_exclude_list(raw: Any) -> list[str]:
+def _normalize_str_list(raw: Any) -> list[str]:
+    """Filter a YAML value down to its non-empty, stripped string entries."""
     if not isinstance(raw, list):
         return []
     out: list[str] = []
@@ -83,10 +90,10 @@ def _folder_exclude_globs(
         when = str(rule.get("folder") or rule.get("when_folder") or "").strip("/")
         if not when or folder != when:
             continue
-        unless = _normalize_exclude_list(rule.get("unless_query"))
+        unless = _normalize_str_list(rule.get("unless_query"))
         if unless and _query_has_any(query, unless):
             continue
-        out.extend(_normalize_exclude_list(rule.get("exclude")))
+        out.extend(_normalize_str_list(rule.get("exclude")))
     return out
 
 
@@ -112,7 +119,7 @@ def resolve_search_exclude(
             return folder_ex, folder_ex, "folder_exclude"
         return None, None, "folder"
     if data is not None:
-        vault_defaults = _normalize_exclude_list(data.get("default_exclude"))
+        vault_defaults = _normalize_str_list(data.get("default_exclude"))
         if vault_defaults:
             return vault_defaults, vault_defaults, "vault"
         return None, None, "vault"
@@ -120,6 +127,19 @@ def resolve_search_exclude(
         env_defaults = list(config.SEARCH_EXCLUDE_DEFAULT)
         return env_defaults, env_defaults, "env"
     return None, None, "none"
+
+
+def load_boost_vocab(vault_root: Path, explicit: str | None = None) -> list[str]:
+    """Vault-specific architecture/system vocabulary for ranking's arch-query boost.
+
+    Returns ``[]`` when the contract is missing, or present without a
+    ``boost_vocab`` key — callers must treat that as "no boost", never a
+    fallback to some other vault's vocabulary.
+    """
+    data = load_search_contract(vault_root, explicit)
+    if not data:
+        return []
+    return _normalize_str_list(data.get("boost_vocab"))
 
 
 def clear_default_exclude_cache() -> None:

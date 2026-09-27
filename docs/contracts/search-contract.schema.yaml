@@ -29,3 +29,30 @@ default_exclude:
 #     unless_query:
 #       - confluence
 #       - page body
+
+# Vault-specific architecture/system vocabulary for the unscoped "architecture
+# query" boost (promotes diagrams/mermaid-catalog recall vault-wide when the
+# query looks like a DFD/CDE/payment-flow question — folder-scoped
+# mermaid-catalog search already boosts regardless of this list).
+# Terms match case-insensitively; multi-word phrases tolerate a hyphen or
+# extra whitespace in place of a space, and a literal "." is optional (so
+# "authorize.net" also matches "authorizenet").
+# Leave this unset (or empty) for vaults with no internal system/vendor names
+# worth boosting — there is no built-in fallback list, so no boost_vocab means
+# no architecture-query boost at all.
+# boost_vocab:
+#   - cde
+#   - chd
+#   - pci
+#   - pan
+#   - cardholder
+#   - segmentation
+#   - architecture
+#   - data flow
+#   - network diagram
+#   - payment processor
+#   - diagram.mmd
+#   - mermaid
+#   # - <your-vendor-or-internal-system-name>
+#   # - <another-one>
+
