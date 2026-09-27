@@ -226,12 +226,6 @@ QUERY_EXPAND_TIMEOUT: float = float(os.environ.get("APO_QUERY_EXPAND_TIMEOUT", "
 # may deliberately want at 0 for other consumers).
 QUERY_EXPAND_KEEP_ALIVE: str = os.environ.get("APO_QUERY_EXPAND_KEEP_ALIVE", "5m")
 
-# Local RPC (apo-engine serve) — loopback HTTP for Laravel / other gateways.
-RPC_HOST: str = os.environ.get("APO_RPC_HOST", "127.0.0.1")
-RPC_PORT: int = int(os.environ.get("APO_RPC_PORT", "8765"))
-RPC_SOCKET: str = os.environ.get("APO_RPC_SOCKET", "").strip()
-RPC_TOKEN: str = os.environ.get("APO_RPC_TOKEN", "").strip()
-
 # send_note: copy host .md into the vault (token-cheap promote).
 # Colon-separated absolute roots; empty → Path.home() only.
 SEND_ALLOW_ROOTS: str = os.environ.get("APO_SEND_ALLOW_ROOTS", "").strip()

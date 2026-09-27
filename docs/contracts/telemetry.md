@@ -31,8 +31,6 @@ Ship `paths: vault_relative` + `expose_paths: true` so habit rollups can identif
 | **`vault(request={action: "stats"})`** | **Agent MCP** — habit KPI rollups (`folder_scoped_pct`, chunk-read ratio, validation tips) |
 | **OTLP spans → collector** | **Session / tool traces** — emitted by the engine itself (`store.backend: otlp`), fanned out to Jaeger + otlp-mcp |
 
-RPC: `POST /v1/vault` with `action=stats` (+ optional `days=`). `POST /v1/telemetry` and `POST /v1/session_stats` are **deprecated** (delegate to `stats` or return `bad_action`).
-
 ### Current state (2026-08-24)
 
 The engine **does** now export OTLP directly — see [OTLP export](#otlp-export) (`store.backend: otlp`, selectable in place of DuckDB). This supersedes the earlier note that OTLP existed only as an external Cursor-hook pipeline on another machine; that pipeline is not what runs here. Separately, [OTLP forwarding](#otlp-forwarding-optional-additive) (`otel` extra) fans each already-recorded DuckDB event out to Jaeger as well — additive, not a replacement for the DuckDB store — so the two live side by side: pick `store.backend: otlp|both` to make OTLP the store, or leave `embedded` and turn on forwarding to get spans without changing the store.
@@ -93,13 +91,12 @@ otel:
 
 ## Session identity (MCP wire)
 
-Per-call attribution — safe for **multiple concurrent sessions** and **remote Apo** (gateway/RPC):
+Per-call attribution — safe for **multiple concurrent sessions**:
 
 | Transport | Field | Example |
 |-----------|-------|---------|
 | MCP `_meta` | `apo/conversation_id` | Standard request meta (preferred for HTTP MCP) |
-| MCP / RPC args | `_apo.conversation_id` | Stripped before tool validation |
-| RPC body | `_apo` or top-level `conversation_id` | Laravel gateway |
+| MCP args | `_apo.conversation_id` | Stripped before tool validation |
 | Legacy | `APO_CONVERSATION_ID` env, `active-session.json` | Local stdio fallback only |
 | Process | generated at startup, `APO_SESSION_ID` overrides | **Last resort** — see below |
 

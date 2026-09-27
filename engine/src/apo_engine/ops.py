@@ -1,4 +1,5 @@
-"""Shared vault operations — MCP and local RPC return the same {ok,…} shapes.
+"""Shared vault operations — MCP and the CLIs (apo-engine/apo-local) return the
+same {ok,…} shapes.
 
 Read + write paths for gateways. Index writes stay watcher-owned (deferred enqueue).
 """
@@ -15,7 +16,6 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from apo_engine import (
-    __version__,
     archival_contract,
     config,
     core,
@@ -939,17 +939,6 @@ def _missing_folder_warning(root: Path, folder_clean: str, vault_name: str) -> s
         "results are empty by construction; check spelling or pass vault=. "
         f"Top-level dirs: {_top_level_dirs(root)}"
     )
-
-
-def health() -> dict[str, Any]:
-    default, bindings = vaults.load_bindings()
-    return {
-        "ok": True,
-        "service": "apo-engine-rpc",
-        "version": __version__,
-        "default_vault": default,
-        "vaults": sorted(bindings),
-    }
 
 
 def stats(*, vault: str = "") -> dict[str, Any]:
@@ -2124,16 +2113,6 @@ def _read_note_at_ref(
         )
         out = _attach_flaws(out, lint_flaws)
     return _stamp_qualified(out, vault=b.name, path=path_s)
-
-
-def expand_section(
-    chunk_hash: str,
-    *,
-    vault: str = "",
-    force: bool = False,
-) -> dict[str, Any]:
-    """Deprecated internal/RPC alias — prefer read_note(chunk_hash=)."""
-    return _read_from_chunk(chunk_hash, vault=vault, force=force)
 
 
 def filter_notes(

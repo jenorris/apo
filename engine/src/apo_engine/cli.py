@@ -1,4 +1,4 @@
-"""Command-line interface: index | search | stats | doctor | watch | desk-project | serve."""
+"""Command-line interface: index | search-eval | stats | doctor | watch | desk-project."""
 from __future__ import annotations
 
 import argparse
@@ -8,7 +8,6 @@ import sys
 import time
 
 from . import __version__, core, ops as apo_ops, vaults
-from .rpc import run_rpc
 from .watch import run_watch
 
 
@@ -86,35 +85,6 @@ def _vacuum_index(b) -> int:
     db.execute("VACUUM")
     db.commit()
     print(f"[{b.name}] VACUUM complete in {time.monotonic() - t0:.1f}s — {vaults.index_path()}")
-    return 0
-
-
-def _cmd_search(args) -> int:
-    vault_arg = getattr(args, "vault", None) or ""
-    result = apo_ops.search(
-        args.query,
-        top_k=args.k,
-        vault=vault_arg,
-        exclude=args.exclude or None,
-        hybrid=not args.no_hybrid,
-    )
-    if result.get("warning"):
-        print(f"WARNING: {result['warning']}", file=sys.stderr)
-    if args.json:
-        print(json.dumps(result))
-        return 0 if result.get("ok") else 1
-    if not result.get("ok"):
-        print(f"error: {result.get('error')}: {result.get('message')}", file=sys.stderr)
-        return 1
-    hits = result.get("results", [])
-    if not hits:
-        print("(no results)")
-        return 0
-    for i, h in enumerate(hits, 1):
-        crumb = f"  ⟩ {h['heading']}" if h.get("heading") else ""
-        print(f"\n{i}. [{h.get('score', 0):.3f}] {h.get('source', '')}{crumb}")
-        snippet = " ".join((h.get("content") or "").split())
-        print(f"   {snippet[:280]}{'…' if len(snippet) > 280 else ''}")
     return 0
 
 
@@ -250,18 +220,6 @@ def _cmd_watch(args) -> int:
     return 0
 
 
-def _cmd_serve(args) -> int:
-    host = args.host or os.environ.get("APO_RPC_HOST", "127.0.0.1")
-    port = args.port if args.port else int(os.environ.get("APO_RPC_PORT", "8765"))
-    sock = (args.socket or os.environ.get("APO_RPC_SOCKET", "")).strip() or None
-    if args.token is not None:
-        token = args.token
-    else:
-        token = os.environ.get("APO_RPC_TOKEN", "")
-    run_rpc(host=host, port=port, socket_path=sock, token=token or None)
-    return 0
-
-
 def _cmd_desk_project(args) -> int:
     """Render desk policy body + guidance from live desk + vault contracts."""
     from . import vault_project
@@ -361,15 +319,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     pi.set_defaults(func=_cmd_index)
 
-    ps = sub.add_parser("search", help="query the index")
-    ps.add_argument("query")
-    ps.add_argument("-k", type=int, default=8, help="number of results")
-    ps.add_argument("--exclude", nargs="*", default=[], help="glob(s) of paths to drop (e.g. 'private/*')")
-    ps.add_argument("--json", action="store_true")
-    ps.add_argument("--no-hybrid", action="store_true", help="keyword-only (skip vector fusion and query embed)")
-    ps.add_argument("--vault", default=os.environ.get("APO_VAULT", ""), help="usage-contract vault_id ($APO_VAULT)")
-    ps.set_defaults(func=_cmd_search)
-
     pe = sub.add_parser(
         "search-eval",
         help="labeled search-quality eval (hit@k / MRR) — file format in docs/examples/",
@@ -426,28 +375,6 @@ def main(argv: list[str] | None = None) -> int:
     from . import okf_cli
 
     okf_cli.add_parser(sub)
-
-    pr = sub.add_parser(
-        "serve",
-        help=(
-            "DEPRECATED — legacy local JSON HTTP RPC for gateways (loopback; "
-            "optional Unix socket). Prefer apo-mcp's HTTP transport (:8878) or "
-            "apo-local; see docs/local-rpc.md."
-        ),
-    )
-    pr.add_argument("--host", default="", help="bind host (default APO_RPC_HOST or 127.0.0.1)")
-    pr.add_argument("--port", type=int, default=0, help="bind port (default APO_RPC_PORT or 8765)")
-    pr.add_argument(
-        "--socket",
-        default="",
-        help="Unix domain socket path (APO_RPC_SOCKET); overrides host/port when set",
-    )
-    pr.add_argument(
-        "--token",
-        default=None,
-        help="optional bearer token (default APO_RPC_TOKEN; empty = no auth on loopback)",
-    )
-    pr.set_defaults(func=_cmd_serve)
 
     po = sub.add_parser(
         "optima-merge",

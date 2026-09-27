@@ -7,16 +7,13 @@ import os
 import shutil
 import subprocess
 import tempfile
-import threading
 import unittest
 import unittest.mock
-import urllib.request
 from datetime import datetime
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from apo_engine import config, git_sync, ops, rpc
+from apo_engine import config, git_sync, ops
 
 
 def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -160,6 +157,13 @@ class GitSyncRepoTest(unittest.TestCase):
         for p in self._patches:
             p.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_status_reports_sync_enabled(self):
+        # Ported from the deleted RPC-transport test — enabled-contract case
+        # (test_sync_disabled_status below covers the disabled case).
+        out = ops.git_sync_op("status")
+        self.assertTrue(out["ok"], msg=out)
+        self.assertTrue(out["sync_enabled"])
 
     def test_commit_push_template_and_never_commit(self):
         (self.vault / "note.md").write_text("# N\n\nv2\n", encoding="utf-8")
@@ -459,65 +463,6 @@ class GitSyncReadOnlyVaultTest(unittest.TestCase):
         log = _git(self.vault, "log", "-1", "--pretty=%s")
         self.assertEqual(log.stdout.strip(), "initial")
         self.assertFalse(self.sentinel.exists())
-
-
-class GitSyncRpcTest(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="apo-gsync-rpc-"))
-        self.vault = self.tmp / "vault"
-        self.vault.mkdir()
-        (self.vault / "note.md").write_text("# rpc\n", encoding="utf-8")
-        _git(self.vault, "init", "-b", "main")
-        _git(self.vault, "config", "user.email", "test@example.com")
-        _git(self.vault, "config", "user.name", "Test")
-        _git(self.vault, "add", "note.md")
-        _git(self.vault, "commit", "-m", "initial")
-        _write_contract(self.vault, enabled=True)
-        self._patches = [
-            unittest.mock.patch.object(config, "NOTES_ROOT", self.vault),
-            unittest.mock.patch.object(config, "INDEX_PATH", self.tmp / "index.db"),
-            unittest.mock.patch.object(config, "COLLECTION", "gsync_rpc"),
-        ]
-        for p in self._patches:
-            p.start()
-
-        import socket
-
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            self.port = s.getsockname()[1]
-        self.token = "gsync-token"
-        rpc.RpcHandler.rpc_token = self.token
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", self.port), rpc.RpcHandler)
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
-        self.thread.start()
-
-    def tearDown(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
-        for p in self._patches:
-            p.stop()
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def _post(self, path: str, body: dict) -> tuple[int, dict]:
-        data = json.dumps(body).encode()
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}{path}",
-            data=data,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.token}",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status, json.loads(resp.read().decode())
-
-    def test_git_sync_status(self):
-        status, body = self._post("/v1/git_sync", {"action": "status"})
-        self.assertEqual(status, 200)
-        self.assertTrue(body["ok"])
-        self.assertTrue(body["sync_enabled"])
 
 
 if __name__ == "__main__":

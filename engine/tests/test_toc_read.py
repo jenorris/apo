@@ -123,6 +123,41 @@ class TocReadTest(unittest.TestCase):
         self.assertEqual(out["table"]["headers"], ["Date", "Mileage", "Service"])
         self.assertEqual(len(out["table"]["rows"]), 2)
 
+    def test_unquoted_date_frontmatter_is_native_and_json_serializable_with_default_str(self):
+        """Ported from the deleted rpc.py HTTP regression test.
+
+        An unquoted `timestamp: 2026-08-12` in frontmatter loads via PyYAML as a
+        native `datetime.date`/`datetime.datetime` — ops.read_note() does not
+        coerce it to a string (that was rpc.py's own `_json_default` job, done
+        only at its HTTP JSON-encoding boundary). Any caller serializing this
+        result to JSON — `apo-local`/`apo`'s `_print_json` (cli_ops.py), the
+        optima-merge JSON path (cli.py) — already passes `default=str`, which
+        does not crash and renders both types as their `str()` form. A caller
+        using a bare `json.dumps()` (no `default=`) would still crash — that
+        contract, not an ops.py bug, is what callers must honor now that the
+        HTTP transport (with its own coercion) is gone.
+        """
+        import datetime as dt
+        import json
+
+        (self.vault / "dated.md").write_text(
+            "---\ntitle: Dated\ntimestamp: 2026-08-12\nupdated: 2026-08-12 07:30:00\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+        core.index_vault(rebuild=True, verbose=False)
+
+        out = ops.read_note("dated.md")
+        self.assertTrue(out["ok"], out)
+        self.assertIsInstance(out["frontmatter"]["timestamp"], dt.date)
+        self.assertIsInstance(out["frontmatter"]["updated"], dt.datetime)
+
+        with self.assertRaises(TypeError):
+            json.dumps(out)
+        serialized = json.dumps(out, default=str)
+        reloaded = json.loads(serialized)
+        self.assertEqual(reloaded["frontmatter"]["timestamp"], "2026-08-12")
+        self.assertEqual(reloaded["frontmatter"]["updated"], "2026-08-12 07:30:00")
+
 
 if __name__ == "__main__":
     unittest.main()

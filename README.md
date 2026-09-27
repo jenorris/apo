@@ -115,9 +115,7 @@ just okf validate --vault-root ~/Notes/Yours --profile okf   # SPEC §11 exactly
 ```mermaid
 flowchart LR
   Agent["Cursor / Claude Code"]
-  Gateway["RPC client (optional, out of repo)"]
   MCP["stdio MCP"]
-  RPC["apo-engine serve RPC"]
   Queue["Deferred queue"]
   Watch["apo-engine watch"]
   Index["index.db"]
@@ -125,11 +123,8 @@ flowchart LR
   Embed["Ollama bge-m3"]
 
   Agent -->|"search · read · write"| MCP
-  Gateway -->|"search · read · filter"| RPC
   MCP --> Vault
   MCP --> Queue
-  RPC -->|"hybrid query / read"| Index
-  RPC --> Vault
   Queue --> Watch
   Watch -->|"chunk · embed"| Embed
   Embed --> Index
@@ -193,7 +188,7 @@ Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habit
 | Command | Routes to | Covers |
 |---------|-----------|--------|
 | `apo <note-verb> ...` | same backend as `apo-local` | `read`, `search`, `write`, `append`, `patch`, `patch-table`, `graph-neighbors`, `filter`, `backlinks`, `history` — mirrors the MCP note tools |
-| `apo engine <cmd> ...` | same backend as `apo-engine` | `index`, `search`, `search-eval`, `stats`, `watch`, `desk-project`, `okf`, `serve`, `optima-merge` |
+| `apo engine <cmd> ...` | same backend as `apo-engine` | `index`, `search-eval`, `stats`, `watch`, `desk-project`, `okf`, `optima-merge` |
 | `apo mcp` | same backend as `apo-mcp` | run the MCP server in place (stdio/http) |
 
 `apo-engine` / `apo-local` / `apo-mcp` still work unchanged as their own commands — nothing that depends on those exact names (launchd plists, shell aliases, MCP host config) needs to change. `just`'s own recipes (`search`/`stats`/`index`/`mcp`/...) still shell out to the original names too, so they keep working whether or not `apo` has been reinstalled yet.
@@ -207,12 +202,12 @@ Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habit
 4. watcher re-embeds                        → next search/filter sees the change
 ```
 
-CLI equivalent while you are wiring things up (via `just`, `apo`, or directly — `apo-engine
-search`/`stats` share the same `ops.search`/`ops.stats` backend as the MCP tools now, so the
-JSON shape matches):
+CLI equivalent while you are wiring things up (via `just`, `apo`, or directly — `apo-local`
+search / `apo-engine stats` share the same `ops.search`/`ops.stats` backend as the MCP tools
+now, so the JSON shape matches):
 
 ```bash
-just search "quarterly planning"    # == apo engine search "quarterly planning"
+just search "quarterly planning"    # == apo search "quarterly planning" (apo-local backend)
 just stats                          # == apo engine stats
 apo search "quarterly planning"     # note-verb search — mirrors search_notes, folder=/vaults=/etc.
 ```
@@ -314,7 +309,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
 | [docs/contracts/okf-bundle.md](docs/contracts/okf-bundle.md) | OKF conformance table, `apo-engine okf` CLI, type/provenance policies |
 | [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_COLLECTION_ROOT` / `APO_VAULT_PATHS`) |
-| [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC for local gateways (out-of-repo clients) |
+| [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC (removed 2026-09-27) — historical pointer only |
 | [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection (`body` + `guidance`) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |

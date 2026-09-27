@@ -64,15 +64,6 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(self.engine_calls, [["index", "--rebuild"]])
         self.assertEqual(self.ops_calls, [])
 
-    def test_engine_search_is_distinct_from_bare_search(self):
-        """The whole point of the `engine` namespace: apo-engine's `search`
-        (core.search) and apo-local's `search` (ops.search) are different
-        implementations reachable under different prefixes."""
-        cli_apo.main(["search", "q"])
-        cli_apo.main(["engine", "search", "q"])
-        self.assertEqual(self.ops_calls, [["search", "q"]])
-        self.assertEqual(self.engine_calls, [["search", "q"]])
-
     def test_engine_group_forwards_empty_rest(self):
         # No special-casing — apo-engine's own required-subparser error (or
         # --help) surfaces exactly as it would running apo-engine bare.

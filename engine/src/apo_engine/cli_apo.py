@@ -12,18 +12,21 @@ Dispatch:
   apo <note-verb> ...     -> apo_engine.cli_ops.main   (read, search, write, append,
                              patch, patch-table, graph-neighbors, filter, backlinks,
                              history — same backend as apo-local / the MCP note tools)
-  apo engine <cmd> ...     -> apo_engine.cli.main        (index, search, search-eval,
-                             stats, watch, desk-project, okf, serve, optima-merge —
-                             same as apo-engine)
+  apo engine <cmd> ...     -> apo_engine.cli.main        (index, search-eval, stats,
+                             watch, desk-project, okf, optima-merge — same as
+                             apo-engine)
   apo mcp                  -> apo_engine.mcp.server.main  (stdio/http MCP server,
                              env-configured, same as apo-mcp)
 
-Note the deliberate namespace split resolves a real collision: both
-apo-engine and apo-local have their own "search" (core.search — a simpler,
-single-vault index query — vs. ops.search — the folder/vault-fanout hybrid
-search mirroring the MCP tool). Bare ``apo search`` reaches the apo-local
-one (the everyday, MCP-mirroring command); ``apo engine search`` reaches
-the apo-engine one explicitly.
+apo-engine's own ``search`` subcommand was removed (2026-09 cleanup pass):
+v0.29.0 had already made it call the same ``ops.search`` apo-local's
+``search`` calls (previously it called ``core.search`` directly, a simpler
+single-vault query) — once both routed to the same function, keeping two
+argparse front ends for it (a strict subset of flags on the apo-engine side)
+was pure duplication, not a real capability split. Bare ``apo search`` (the
+apo-local backend) is now the only ``search`` under this dispatcher.
+``apo-engine stats``/``apo engine stats`` stay — ``ops.stats()`` (index
+size/chunk counts/orphans) has no apo-local equivalent to dedupe against.
 
 Not covered by this pass: a top-level ``vault`` or ``admin`` group mirroring
 the MCP ``vault`` / ``apo_admin`` tools. Neither has a local-CLI analogue
@@ -64,8 +67,8 @@ Usage:
   apo <note-verb> ...      note-facing ops: read, search, write, append, patch,
                            patch-table, graph-neighbors, filter, backlinks, history
                            (same backend as apo-local / the MCP note tools)
-  apo engine <cmd> ...     admin/index ops: index, search, search-eval, stats,
-                           watch, desk-project, okf, serve, optima-merge
+  apo engine <cmd> ...     admin/index ops: index, search-eval, stats,
+                           watch, desk-project, okf, optima-merge
                            (same as apo-engine)
   apo mcp                  run the MCP server in place (same as apo-mcp;
                            stdio by default, APO_MCP_TRANSPORT=http for HTTP)

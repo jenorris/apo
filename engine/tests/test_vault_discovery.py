@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from apo_engine import ops, vaults
+from apo_engine import vaults
 
 
 def _write_usage(root: Path, vault_id: str, *, default_vault: str | None = None) -> None:
@@ -97,22 +97,6 @@ class DiscoveryRegistryTests(unittest.TestCase):
         default, bindings = vaults.load_bindings()
         self.assertEqual(default, "alpha")
         self.assertEqual(set(bindings), {"alpha", "beta"})
-
-    def test_ops_health_reports_default_and_vaults(self):
-        """ops.health() (also the payload behind apo-engine serve's /health and
-        apo-mcp's health check) surfaces the resolved default vault + registry."""
-        a = self.root / "a"
-        b = self.root / "b"
-        a.mkdir()
-        b.mkdir()
-        _write_usage(a, "alpha", default_vault="alpha")
-        _write_usage(b, "beta")
-        os.environ["APO_VAULT_PATHS"] = f"{a}:{b}"
-        out = ops.health()
-        self.assertTrue(out["ok"], out)
-        self.assertEqual(out["service"], "apo-engine-rpc")
-        self.assertEqual(out["default_vault"], "alpha")
-        self.assertEqual(out["vaults"], ["alpha", "beta"])
 
     def test_apo_vaults_shim_ignores_json_keys(self):
         meta = self.root / "Meta"
