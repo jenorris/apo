@@ -175,7 +175,7 @@ sequenceDiagram
 git clone https://github.com/jenorris/apo.git ~/Code/apo   # or your preferred path
 cd ~/Code/apo
 brew install ollama just              # Ollama is required for default embeddings; Python 3.11+
-cp config.env.example .env            # set APO_NOTES_ROOT
+cp .env.example .env                  # set APO_NOTES_ROOT
 just setup
 just ollama && ollama pull bge-m3     # local embed daemon + model
 just index

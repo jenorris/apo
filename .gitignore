@@ -4,7 +4,6 @@
 .env
 .env.*
 !.env.example
-config.env
 *.key
 
 # data / indexes — NEVER commit (embeddings of your entire vault)

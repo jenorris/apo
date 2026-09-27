@@ -9,8 +9,8 @@ by a local Ollama daemon (or a local ONNX model).
 
 - **Your index (`index.db`)** contains embeddings of your notes. It is
   git-ignored by default — keep it that way.
-- **Your `.env` / `config.env`** hold absolute vault paths. These are
-  git-ignored; only `config.env.example` is tracked.
+- **Your `.env`** holds absolute vault paths. It is git-ignored; only
+  `.env.example` is tracked.
 
 ## Reporting a vulnerability
 

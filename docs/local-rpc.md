@@ -20,7 +20,7 @@ Gateway and other non-stdio clients talk to the engine over **loopback HTTP** (o
 ## Start
 
 ```bash
-# from apo repo root (env from .env / config.env)
+# from apo repo root (env from .env)
 just rpc                 # apo-engine serve — http://127.0.0.1:8765
 # or:
 apo-engine serve --host 127.0.0.1 --port 8765
