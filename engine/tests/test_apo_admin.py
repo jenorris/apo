@@ -19,6 +19,7 @@ _SERVER = _SRC / "apo_engine" / "mcp" / "server.py"
 _ADMIN_CAPABILITIES = frozenset({
     "reload_config",
     "memory_status",
+    "index_health",
     "reindex",
     "delete_note",
     "git_sync",

@@ -838,6 +838,40 @@ def stats(*, vault: str = "") -> dict[str, Any]:
     return data
 
 
+def index_health(*, vault: str = "") -> dict[str, Any]:
+    """Per-vault index diagnostics (db/WAL sizes, row-count parity, orphans,
+    backlinks blowup, embed quarantine) plus global watcher state.
+
+    Empty ``vault`` (the default) reports every registered vault, not just the
+    registry default — unlike ``stats()``/``_binding()``, since this is a
+    fleet-health check, not a per-call vault selector.
+    """
+    default, bindings = vaults.load_bindings()
+    vault_s = (vault or "").strip()
+    if vault_s:
+        if vault_s not in bindings:
+            return _err(
+                error="bad_vault",
+                message=f"unknown vault {vault_s!r}; available: {sorted(bindings)}",
+            )
+        targets = {vault_s: bindings[vault_s]}
+    else:
+        targets = bindings
+
+    out_vaults: dict[str, Any] = {}
+    for name, b in targets.items():
+        with vaults.bind(b):
+            out_vaults[name] = core.index_health()
+
+    return {
+        "ok": True,
+        "default_vault": default,
+        "vaults": out_vaults,
+        "watcher": watcher_status(),
+        "index_visibility": index_visibility(),
+    }
+
+
 def _dedupe_vault_names(names: list[str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()

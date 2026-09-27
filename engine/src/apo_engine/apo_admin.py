@@ -32,6 +32,21 @@ _ADMIN_CATALOG: dict[str, dict[str, Any]] = {
         "confirm_policy": None,
         "parameters": {},
     },
+    "index_health": {
+        "description": (
+            "Per-vault index diagnostics: db/WAL file sizes on disk, row counts across "
+            "files/chunks/vec_chunks/chunks_fts/backlinks, vec_chunks/chunks_fts orphan "
+            "rows with no matching chunks.id (vec0-rollback bug class), per-source "
+            "backlinks blowup (unbounded-growth bug class), embed-quarantine count, and "
+            "computed flags. Read-only."
+        ),
+        "read_only": True,
+        "destructive": False,
+        "confirm_policy": None,
+        "parameters": {
+            "vault": "vault name (empty = every registered vault)",
+        },
+    },
     "reindex": {
         "description": (
             "Index maintenance: mode=flush wakes deferred queue (empty vault = all vaults); "

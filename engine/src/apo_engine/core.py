@@ -3862,6 +3862,101 @@ def stats() -> dict:
     return out
 
 
+# Heuristic threshold for "one source file has an implausible number of link
+# occurrences" (the v0.28.1 backlinks-unbounded-growth bug: 1,954,634 backlinks
+# rows for 56 real links in one 30KB file — a ~35,000x blowup). A legitimate
+# note, even a heavily cross-linked MOC/hub page, rarely carries more than a
+# few hundred distinct wiki-link occurrences in its body. 500 sits comfortably
+# above normal hub-note authoring while still catching runaway growth many
+# orders of magnitude before the db file balloons to gigabytes.
+BACKLINKS_PER_FILE_WARN = int(os.environ.get("APO_BACKLINKS_PER_FILE_WARN", "500"))
+
+
+def index_health() -> dict[str, Any]:
+    """Point-in-time diagnostics for the active vault's index db.
+
+    Surfaces the signals that would have caught the two most recent production
+    bugs before someone had to read the raw sqlite files by hand:
+
+    * v0.28.1 — a ``backlinks`` row per source file growing unbounded
+      (``backlinks_per_file_max`` / ``flags: backlinks_runaway``).
+    * v0.28.3 — ``vec_chunks`` (and, in principle, ``chunks_fts``) rows
+      surviving a vec0 batch insert that didn't honor SQL rollback, leaving
+      rows with no matching ``chunks.id`` (``vec_chunks_orphans`` /
+      ``fts_orphans`` / ``flags: vec_orphans`` / ``fts_orphans``).
+
+    Scoped to whatever vault is active via ``vaults.bind()`` (or the legacy
+    single-vault config when nothing is bound) — callers that want every
+    registered vault iterate bindings and call this once per vault, the same
+    pattern ``stats()`` callers already use.
+    """
+    idx_path = Path(vaults.index_path()).resolve()
+    db = reader_connect()
+
+    def _count(sql: str) -> int:
+        try:
+            row = db.execute(sql).fetchone()
+        except sqlite3.OperationalError:
+            return 0
+        return int(row[0]) if row and row[0] is not None else 0
+
+    try:
+        db_bytes = idx_path.stat().st_size if idx_path.is_file() else 0
+        last_index_ts = idx_path.stat().st_mtime if idx_path.is_file() else None
+    except OSError:
+        db_bytes = 0
+        last_index_ts = None
+
+    files = _count("SELECT COUNT(*) FROM files")
+    chunks = _count("SELECT COUNT(*) FROM chunks")
+    vec_chunks = _count("SELECT COUNT(*) FROM vec_chunks")
+    fts_rows = _count("SELECT COUNT(*) FROM chunks_fts")
+    backlinks_rows = _count("SELECT COUNT(*) FROM backlinks")
+    backlinks_per_file_max = _count(
+        "SELECT COALESCE(MAX(c), 0) FROM (SELECT COUNT(*) AS c FROM backlinks GROUP BY source)"
+    )
+    # rowid on both vec_chunks and chunks_fts is chunks.id by construction
+    # (_insert_pending_chunks shares one explicit id across all three inserts) —
+    # any row whose rowid has no matching chunks.id is debris from an aborted
+    # batch that vec0/fts5 didn't roll back with the rest of the transaction.
+    vec_chunks_orphans = _count(
+        "SELECT COUNT(*) FROM vec_chunks WHERE rowid NOT IN (SELECT id FROM chunks)"
+    )
+    fts_orphans = _count(
+        "SELECT COUNT(*) FROM chunks_fts WHERE rowid NOT IN (SELECT id FROM chunks)"
+    )
+    quarantined = _count("SELECT COUNT(*) FROM files WHERE embed_quarantined=1")
+
+    flags: list[str] = []
+    if vec_chunks_orphans > 0:
+        flags.append("vec_orphans")
+    if fts_orphans > 0:
+        flags.append("fts_orphans")
+    if backlinks_per_file_max > BACKLINKS_PER_FILE_WARN:
+        flags.append("backlinks_runaway")
+    if is_wal_over_limit(index=idx_path):
+        flags.append("wal_over_limit")
+    if quarantined > 0:
+        flags.append("embed_quarantined")
+
+    return {
+        "index": str(idx_path),
+        "db_bytes": db_bytes,
+        "wal_bytes": wal_bytes(index=idx_path),
+        "last_index_ts": last_index_ts,
+        "files": files,
+        "chunks": chunks,
+        "vec_chunks": vec_chunks,
+        "fts_rows": fts_rows,
+        "backlinks_rows": backlinks_rows,
+        "backlinks_per_file_max": backlinks_per_file_max,
+        "vec_chunks_orphans": vec_chunks_orphans,
+        "fts_orphans": fts_orphans,
+        "quarantined": quarantined,
+        "flags": flags,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Catalog queries — frontmatter filter, backlinks, recent (index-backed, no vault scan)
 # --------------------------------------------------------------------------- #
