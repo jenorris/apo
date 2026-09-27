@@ -91,7 +91,7 @@ def _span_id(seed: str) -> int:
 def _span_attributes(collection: str, event: dict[str, Any]) -> dict[str, Any]:
     attrs: dict[str, Any] = {
         "tool.name": str(event.get("tool") or "?"),
-        "tool.category": "mcp",
+        "tool.category": str(event.get("surface") or "mcp"),
         "tool.ok": bool(event.get("ok")),
         "collection": collection or "default",
         "duration_ms": float(event.get("duration_ms") or 0.0),

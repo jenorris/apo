@@ -25,11 +25,17 @@ import difflib
 import json
 import os
 import sys
+import time
 from typing import Any
+
+from pydantic import TypeAdapter, ValidationError
 
 from . import __version__
 from . import ops as apo_ops
+from . import tool_metrics
 from . import vaults
+from .patch_ops import PatchNoteOp, PatchNotesItem, TablePatchOp
+from .validation_hints import format_tool_validation_error
 
 
 # --------------------------------------------------------------------------- #
@@ -68,6 +74,20 @@ def _load_json_arg(value: str | None) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError as e:
         raise SystemExit(f"error: invalid JSON: {e}")
+
+
+def _validate(adapter: TypeAdapter, raw: Any, *, tool_name: str) -> Any:
+    """Validate raw JSON through the same pydantic model MCP validates against.
+
+    Raises SystemExit with the same agent-actionable hint text
+    ``AgentValidationMiddleware`` gives MCP callers on a schema mismatch, so
+    CLI and MCP error quality match instead of the CLI falling through to
+    whatever raw exception ``ops.py`` happens to raise deeper in the stack.
+    """
+    try:
+        return adapter.validate_python(raw)
+    except ValidationError as e:
+        raise SystemExit(f"error: {format_tool_validation_error(tool_name, e)}")
 
 
 def _parse_kv_where(pairs: list[str]) -> dict[str, Any]:
@@ -242,11 +262,45 @@ def _render(cmd: str, result: dict[str, Any], args: argparse.Namespace) -> None:
         _print_json(result)
 
 
+_INVOKED_AT: float | None = None
+
+
+def _record_cli_metrics(cmd: str, args: argparse.Namespace, result: dict[str, Any]) -> None:
+    """Best-effort tool-metrics event for a CLI invocation, tagged surface="cli".
+
+    Mirrors what ``ToolMetricsMiddleware`` records for MCP calls so `apo-local`
+    usage isn't invisible to whatever habit-KPI reads that table. Never raises —
+    a metrics-recording failure must not affect the command's own exit code.
+    """
+    try:
+        duration_ms = (time.perf_counter() - _INVOKED_AT) * 1000.0 if _INVOKED_AT else 0.0
+        default, bindings = vaults.load_bindings()
+        key = (getattr(args, "vault", "") or "").strip() or default
+        binding = bindings.get(key)
+        vault_root = binding.root if binding else None
+        vault_id = binding.name if binding else key
+        collection = binding.collection if binding else ""
+        ok = bool(result.get("ok"))
+        tool_metrics.record_call(
+            collection=collection,
+            tool=cmd.replace("-", "_"),
+            ok=ok,
+            error=None if ok else str(result.get("error") or "unknown"),
+            duration_ms=duration_ms,
+            vault_id=vault_id,
+            vault_root=vault_root,
+            surface="cli",
+        )
+    except Exception:
+        pass
+
+
 def _emit(cmd: str, result: dict[str, Any], args: argparse.Namespace) -> int:
     if getattr(args, "text", False) or getattr(args, "oneline", False):
         _render(cmd, result, args)
     else:
         _print_json(result)
+    _record_cli_metrics(cmd, args, result)
     return _exit_code(result)
 
 
@@ -346,13 +400,24 @@ def _cmd_append(args: argparse.Namespace) -> int:
     return _emit("append", result, args)
 
 
+_PATCH_ITEMS_ADAPTER = TypeAdapter(list[PatchNotesItem])
+_PATCH_OPS_ADAPTER = TypeAdapter(list[PatchNoteOp])
+_TABLE_OPS_ADAPTER = TypeAdapter(list[TablePatchOp])
+_WHERE_ADAPTER: TypeAdapter = TypeAdapter(dict[str, Any] | None)
+
+
 def _cmd_patch(args: argparse.Namespace) -> int:
     if args.items is not None:
         if args.path or args.ops is not None:
             raise SystemExit("error: --items is XOR with path+ops")
-        items = _load_json_arg(args.items)
-        if not isinstance(items, list):
+        raw_items = _load_json_arg(args.items)
+        if not isinstance(raw_items, list):
             raise SystemExit("error: --items must be a JSON array of {path, ops, expected_mtime?} objects")
+        validated_items = _validate(_PATCH_ITEMS_ADAPTER, raw_items, tool_name="patch_note")
+        # patch_notes() (unlike patch_note()) expects plain dicts, not model
+        # instances — round-trip through model_dump so validation still runs
+        # first without changing the ops-layer contract.
+        items = [it.model_dump(mode="python", exclude_none=True) for it in validated_items]
         result = apo_ops.patch_entry(
             items=items,
             strict=args.strict,
@@ -364,9 +429,10 @@ def _cmd_patch(args: argparse.Namespace) -> int:
 
     if not args.path:
         raise SystemExit("error: patch requires path+ops, or --items @file.json for a batch")
-    ops = _load_json_arg(args.ops)
-    if not isinstance(ops, list):
+    raw_ops = _load_json_arg(args.ops)
+    if not isinstance(raw_ops, list):
         raise SystemExit("error: ops-json must be a JSON array of op objects")
+    ops = _validate(_PATCH_OPS_ADAPTER, raw_ops, tool_name="patch_note")
     before = _raw_text(args.path, args.vault)
     result = apo_ops.patch_entry(
         path=args.path,
@@ -385,9 +451,10 @@ def _cmd_patch(args: argparse.Namespace) -> int:
 
 
 def _cmd_patch_table(args: argparse.Namespace) -> int:
-    ops = _load_json_arg(args.ops)
-    if not isinstance(ops, list):
+    raw_ops = _load_json_arg(args.ops)
+    if not isinstance(raw_ops, list):
         raise SystemExit("error: ops-json must be a JSON array of op objects")
+    ops = _validate(_TABLE_OPS_ADAPTER, raw_ops, tool_name="patch_table")
     before = _raw_text(args.path, args.vault)
     result = apo_ops.patch_note(
         args.path,
@@ -422,6 +489,7 @@ def _cmd_filter(args: argparse.Namespace) -> int:
         where = _parse_kv_where(args.kv)
     else:
         where = None
+    where = _validate(_WHERE_ADAPTER, where, tool_name="filter_notes")
     result = apo_ops.filter_notes(
         where,
         folder=args.folder,
@@ -464,6 +532,8 @@ def _cmd_history(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _INVOKED_AT
+    _INVOKED_AT = time.perf_counter()
     p = argparse.ArgumentParser(
         prog="apo-local",
         description=(
