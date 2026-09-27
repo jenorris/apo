@@ -3919,11 +3919,19 @@ def index_health() -> dict[str, Any]:
     # (_insert_pending_chunks shares one explicit id across all three inserts) —
     # any row whose rowid has no matching chunks.id is debris from an aborted
     # batch that vec0/fts5 didn't roll back with the rest of the transaction.
+    #
+    # Queried via each virtual table's own shadow table, not the vtab itself:
+    # vec0's rowid lives in vec_chunks_rowids.rowid (NOT its "chunk_id" column —
+    # that's vec0's own internal storage-block id, an unrelated concept that
+    # collides in name with Apo's chunks; verified against the vtab's own
+    # answer before relying on this). Going through the vtab materializes every
+    # vector (a full scan of the whole embedding blob column) just to check
+    # rowid membership — seconds on a large index vs. near-instant here.
     vec_chunks_orphans = _count(
-        "SELECT COUNT(*) FROM vec_chunks WHERE rowid NOT IN (SELECT id FROM chunks)"
+        "SELECT COUNT(*) FROM vec_chunks_rowids WHERE rowid NOT IN (SELECT id FROM chunks)"
     )
     fts_orphans = _count(
-        "SELECT COUNT(*) FROM chunks_fts WHERE rowid NOT IN (SELECT id FROM chunks)"
+        "SELECT COUNT(*) FROM chunks_fts_docsize WHERE id NOT IN (SELECT id FROM chunks)"
     )
     quarantined = _count("SELECT COUNT(*) FROM files WHERE embed_quarantined=1")
 

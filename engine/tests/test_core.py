@@ -428,6 +428,30 @@ class TestIndexLifecycle(VaultTestCase):
         self.assertGreater(health["vec_chunks_orphans"], 0)
         self.assertIn("vec_orphans", health["flags"])
 
+    def test_index_health_flags_fts_orphans(self):
+        """Same shape as the vec_chunks orphan test, for chunks_fts — index_health
+        reads chunks_fts_docsize (fts5's own shadow table) rather than the fts5
+        vtab itself; this pins that query against the vtab's own ground truth.
+        """
+        self.write("a.md", "# A\n\nalpha content\n")
+        core.index_vault(verbose=False)
+
+        db = sqlite3.connect(config.INDEX_PATH)
+        try:
+            max_id = db.execute("SELECT MAX(id) FROM chunks").fetchone()[0]
+            orphan_rowid = max_id + 1
+            db.execute(
+                "INSERT INTO chunks_fts(rowid, text) VALUES (?, ?)",
+                (orphan_rowid, "orphaned fts row"),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        health = core.index_health()
+        self.assertGreater(health["fts_orphans"], 0)
+        self.assertIn("fts_orphans", health["flags"])
+
     def test_filter_notes_equality_and_contains(self):
         self.write("a.md", "---\nstatus: active\ntags: [x]\n---\n\n# A\n\nbody a\n")
         self.write("b.md", "---\nstatus: done\ntags: [y]\n---\n\n# B\n\nbody b\n")
