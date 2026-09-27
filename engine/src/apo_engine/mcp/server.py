@@ -1065,7 +1065,7 @@ async def vault(
     return await asyncio.to_thread(apo_ops.vault_op, request.action, **kwargs)
 
 
-@mcp.tool(annotations=_RO)
+@mcp.tool(annotations=_MUTATE)
 async def apo_admin(
     action: Annotated[
         str,
