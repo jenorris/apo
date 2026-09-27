@@ -35,7 +35,10 @@ _ADMIN_CATALOG: dict[str, dict[str, Any]] = {
     "reindex": {
         "description": (
             "Index maintenance: mode=flush wakes deferred queue (empty vault = all vaults); "
-            "mode=rebuild signals full rebuild (single vault). force=true re-embeds all."
+            "mode=rebuild signals full rebuild (single vault) when a watcher is live, or runs "
+            "it inline when no watcher is running (no concurrent-writer risk). force=true "
+            "re-embeds all. wait=true blocks (up to timeout seconds) for a watcher-signaled "
+            "rebuild to finish."
         ),
         "read_only": False,
         "destructive": False,
@@ -44,6 +47,8 @@ _ADMIN_CATALOG: dict[str, dict[str, Any]] = {
             "mode": "flush | rebuild (default rebuild)",
             "force": "bool — rebuild only; re-embed all chunks (default false)",
             "vault": "vault name (empty = all vaults for flush only)",
+            "wait": "bool — rebuild only; block until a watcher-signaled rebuild completes (default false)",
+            "timeout": "seconds — max time to wait when wait=true (default 30)",
         },
     },
     "delete_note": {

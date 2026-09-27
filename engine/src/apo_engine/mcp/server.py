@@ -330,59 +330,6 @@ def _memory_status_sync() -> dict:
     }
 
 
-def _reindex_deferred_sync(vault: str = "") -> dict:
-    try:
-        targets = list(VAULTS.values()) if not vault.strip() else [_vault(vault)]
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-
-    queued = 0
-    for v in targets:
-        index_deferred.touch_wake(v.collection)
-        v.deferred = index_deferred.load_index_queue(v.collection)
-        queued += len(v.deferred)
-
-    watcher = apo_ops.watcher_status()
-    out: dict[str, Any] = {
-        "ok": True,
-        "queued": queued,
-        "signaled": True,
-        "watcher_running": watcher["running"],
-    }
-    if not watcher["running"]:
-        out["warning"] = (
-            "no watcher detected — the deferred queue is signaled but nothing will consume it "
-            "until apo-engine watch is running (just watch-status)"
-        )
-    return out
-
-
-def _reindex_sync(force: bool = False, vault: str = "") -> dict:
-    try:
-        v = _vault(vault)
-        index_deferred.signal_rebuild(v.collection, force=force)
-        v.deferred.clear()
-        index_deferred.save_index_queue(v.collection, set())
-        watcher = apo_ops.watcher_status()
-        out: dict[str, Any] = {
-            "ok": True,
-            "vault": v.name,
-            "rebuild_signaled": True,
-            "force": force,
-            "watcher_running": watcher["running"],
-        }
-        if not watcher["running"]:
-            out["warning"] = (
-                "no watcher detected — the rebuild is signaled but will never run "
-                "until apo-engine watch is running (just watch-status)"
-            )
-        return out
-    except VaultError as e:
-        return _err(error="bad_vault", message=str(e))
-    except Exception as e:
-        return _err(error="reindex_failed", message=str(e))
-
-
 def _git_sync_admin(params: dict[str, Any], *, vault: str = "") -> dict:
     action = str(params.get("action") or "status").strip()
     message = str(params.get("message") or "")
@@ -405,18 +352,41 @@ def _delete_note_admin(params: dict[str, Any], *, vault: str = "") -> dict:
 
 
 def _reindex_admin(params: dict[str, Any], *, vault: str = "") -> dict:
+    """Delegates the actual mechanic to ``ops.reindex`` (shared with ``apo-engine index``);
+    this wrapper only keeps the server's per-process ``VAULTS[...].deferred`` bookkeeping
+    (used by ``memory_status``) in sync with whichever queue got signaled/drained."""
     mode = str(params.get("mode") or "rebuild").strip().lower()
-    v = vault or str(params.get("vault") or "")
-    if mode == "flush":
-        return _reindex_deferred_sync(vault=v)
-    if mode != "rebuild":
+    v_name = vault or str(params.get("vault") or "")
+    if mode not in ("flush", "rebuild"):
         return _err(error="bad_request", message="mode must be flush or rebuild")
     force = bool(params.get("force"))
-    return _reindex_sync(force=force, vault=v)
+    wait = bool(params.get("wait"))
+    timeout = float(params.get("timeout") or 30.0)
+
+    out = apo_ops.reindex(vault=v_name, mode=mode, force=force, wait=wait, timeout=timeout)
+    if not out.get("ok"):
+        return out
+
+    if mode == "flush":
+        try:
+            targets = list(VAULTS.values()) if not v_name.strip() else [_vault(v_name)]
+        except VaultError:
+            targets = []
+        for v in targets:
+            v.deferred = index_deferred.load_index_queue(v.collection)
+    else:
+        try:
+            v = _vault(v_name)
+        except VaultError:
+            v = None
+        if v is not None:
+            v.deferred.clear()
+            index_deferred.save_index_queue(v.collection, set())
+    return out
 
 
 def _reindex_deferred_legacy_admin(params: dict[str, Any], *, vault: str = "") -> dict:
-    out = _reindex_deferred_sync(vault=vault or str(params.get("vault") or ""))
+    out = _reindex_admin({**params, "mode": "flush"}, vault=vault)
     if out.get("ok"):
         out = dict(out)
         out["tip"] = "reindex_deferred renamed — use reindex(mode=flush)"

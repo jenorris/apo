@@ -291,6 +291,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
         vaults=args.vaults or None,
         snippet_chars=args.snippet_chars,
         exclude=args.exclude or None,
+        hybrid=not args.no_hybrid,
         limit=args.limit,
         offset=args.offset,
         ref=args.ref,
@@ -492,6 +493,11 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--limit", type=int, default=None)
     ps.add_argument("--offset", type=int, default=0)
     ps.add_argument("--exclude", nargs="*", default=None, help="path globs to drop")
+    ps.add_argument(
+        "--no-hybrid",
+        action="store_true",
+        help="keyword-only (BM25) — skip vector fusion and query embed",
+    )
     ps.add_argument("--ref", default="", help="FTS-only search at a git tip (no embeddings)")
     ps.add_argument("--expand", action="store_true", help="RRF-fuse lex+vec sub-queries")
     ps.add_argument("--intent", default="", help="disambiguation context for --expand")

@@ -7,8 +7,14 @@ launchd watcher. SQLite WAL allows concurrent readers but **only one writer** at
 
 | Process | Reads `index.db` | Writes `index.db` |
 |---------|------------------|-------------------|
-| **MCP** (`apo-mcp`) | Yes — search, read, backlinks | **Never** |
-| **Watcher** (`apo-engine watch`) | Yes | **Sole writer** |
+| **MCP** (`apo-mcp`) | Yes — search, read, backlinks | Only via `apo_admin(reindex)` **when no watcher is live** (see below) |
+| **CLI** (`apo-engine index`) | Yes | Only via `--inline`/`--force-inline`, or automatically **when no watcher is live** |
+| **Watcher** (`apo-engine watch`) | Yes | **Sole writer whenever it is running** |
+
+A live watcher is still the single source of truth for concurrent writes: MCP and the CLI
+never write `index.db` *while a watcher is running* — they only signal it. The only case
+either writes directly is when **no watcher is running at all**, so there is no second writer
+to race.
 
 MCP enqueues work under `~/.apo/`:
 
@@ -16,12 +22,39 @@ MCP enqueues work under `~/.apo/`:
 |------|---------|
 | `deferred-{collection}.json` | Absolute paths to index |
 | `purge-{collection}.json` | Absolute paths to purge from index |
-| `rebuild-{collection}.json` | Full vault scan signal (`{"force": bool}`) |
+| `rebuild-{collection}.json` | Full vault scan signal (`{"force": bool}`) — cleared the instant the watcher picks it up |
+| `rebuild-busy-{collection}.json` | Present only while the watcher is *actively running* the signaled rebuild (scoped marker for `ops.reindex(wait=True)` polling — not a general health file) |
 | `wake-{collection}` | Touch file — watcher processes queues immediately |
 
 Write enqueue already wakes the watcher (`wake-*`). Lean desk hides `reindex_deferred`
 (`apo_admin` → `memory_status`); use it only for diagnostics. Otherwise the watcher picks up
 queues on fsevents or the periodic hash scan (`WATCH_INTERVAL`, default 30s).
+
+## Watcher-aware `index` / `reindex`
+
+`ops.reindex(vault="", mode="flush", force=False, wait=False, timeout=30.0)` is the one place
+this logic lives — both `apo-engine index` and the MCP `apo_admin(reindex)` capability call it,
+so "reindex" means the same thing everywhere:
+
+* `mode="flush"` — wake the watcher to drain its already-enqueued deferred index queue.
+  Does nothing if no watcher is running (nothing will ever consume that queue).
+* `mode="rebuild"` — full vault scan (`force=True` drops and rebuilds from scratch, same as
+  `core.index_vault(rebuild=...)`).
+  * Watcher live → **signals** it (`deferred.signal_rebuild` + wake), the same mechanism the
+    admin handler always used. No second writer.
+  * No watcher live → runs the scan **inline**, in this process, immediately — no
+    concurrent-writer risk since nothing else can be writing `index.db`.
+* `wait=True` (rebuild + live watcher only) blocks up to `timeout` seconds, polling the
+  `rebuild-{collection}.json` (pending) and `rebuild-busy-{collection}.json` (watcher currently
+  inside `index_vault`) markers until both clear or the timeout elapses. `completed: false` in
+  the result means the rebuild is still running in the watcher, not that it failed — retry with
+  a longer timeout or check back later; it is not cancelled.
+
+`apo-engine index` defaults to `--wait` (30s timeout, `--timeout` to change it; `--no-wait` to
+fire-and-forget). `--inline` forces today's direct `core.index_vault` in-process behavior and is
+**refused if a watcher is detected running** (a second writer); `--force-inline` overrides that
+refusal. `--limit` (smoke-test only) implies `--inline` since a watcher-signaled rebuild can't
+honor a note-count cap.
 
 ## Read-after-write visibility bound
 
@@ -120,8 +153,13 @@ TTL cache ~15ms. To go lower:
 ```bash
 just watch-status
 tail -f ~/.apo/watch-launchd.log
-just index          # manual full index from CLI (also writes DB — stop watcher first if lock errors)
+just index          # watcher-aware: signals + waits (30s) if a watcher is live, else runs inline
 ```
+
+`apo-engine index --rebuild` (what `just reindex` runs) is watcher-aware the same way — it no
+longer races the watcher as a second writer. Use `--no-wait` to fire-and-forget instead of
+blocking, or `--inline`/`--force-inline` to force today's old direct-write behavior (refused
+with a live watcher unless you pass `--force-inline`).
 
 ### Lock / WAL runaway (last resort)
 
@@ -143,8 +181,7 @@ Embed drops retry with backoff; after `APO_EMBED_FAIL_QUARANTINE` consecutive fa
 same content hash the file is stamped `embed_quarantined` (no vectors) until the hash changes.
 Git idle pull is skipped while the index is in lock-backoff or over the WAL limit.
 
-If MCP and watcher contend during a manual `just index`, stop the watcher first:
-
-```bash
-just watch-stop && just index && just watch-start
-```
+A manual full index no longer needs the watcher stopped first — `apo-engine index` (no
+`--inline`) signals the watcher and waits, rather than writing `index.db` itself, whenever a
+watcher is live. Stopping the watcher first is only needed if you deliberately want
+`--force-inline`.

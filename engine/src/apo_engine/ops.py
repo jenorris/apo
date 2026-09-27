@@ -702,6 +702,136 @@ def index_visibility(*, woken: bool = True, running: bool | None = None) -> dict
     }
 
 
+def reindex(
+    vault: str = "",
+    *,
+    mode: str = "flush",
+    force: bool = False,
+    wait: bool = False,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    """Watcher-aware index maintenance — shared by ``apo-engine index`` and the
+    MCP ``apo_admin`` ``reindex`` capability, so both surfaces mean the same thing.
+
+    ``mode="flush"``: wake the watcher to drain its already-enqueued deferred
+    index queue (``vault=""`` targets every registered vault). Does not itself
+    index anything — a no-op if no watcher is running.
+
+    ``mode="rebuild"``: full vault scan (``force=True`` drops and rebuilds from
+    scratch, matching ``core.index_vault(rebuild=...)``; single vault only).
+    A live watcher is the sole ``index.db`` writer (docs/index-concurrency.md),
+    so when one is running this only *signals* it — the same
+    ``deferred.signal_rebuild`` + wake mechanism the legacy admin handlers used —
+    rather than running a second concurrent writer in this process. With no
+    watcher live there is no concurrent-writer risk, so this runs the scan
+    inline (today's direct ``core.index_vault`` behavior).
+
+    ``wait=True`` (rebuild + live watcher only) polls up to ``timeout`` seconds
+    for the signaled rebuild to be picked up and finish, using the rebuild
+    request marker and a busy marker the watcher holds for the duration of its
+    ``index_vault`` call (see ``deferred.rebuild_pending`` / ``rebuild_running``).
+    This is a narrow completion signal for this one wait loop, not a general
+    index-health report.
+    """
+    mode_s = (mode or "flush").strip().lower()
+    if mode_s not in ("flush", "rebuild"):
+        return _err(error="bad_request", message="mode must be flush or rebuild")
+
+    if mode_s == "flush":
+        vault_s = (vault or "").strip()
+        if vault_s:
+            try:
+                targets = [_binding(vault_s)]
+            except OpsError as e:
+                return _err(error=e.code, message=e.message)
+        else:
+            _default, bindings = vaults.load_bindings()
+            targets = list(bindings.values())
+        queued = 0
+        for b in targets:
+            index_deferred.touch_wake(b.collection)
+            queued += len(index_deferred.load_index_queue(b.collection))
+        watcher = watcher_status()
+        out: dict[str, Any] = {
+            "ok": True,
+            "mode": "flush",
+            "queued": queued,
+            "signaled": True,
+            "watcher_running": watcher["running"],
+        }
+        if not watcher["running"]:
+            out["warning"] = (
+                "no watcher detected — the deferred queue is signaled but nothing will "
+                "consume it until apo-engine watch is running (just watch-status)"
+            )
+        return out
+
+    # mode == "rebuild"
+    try:
+        b = _binding(vault)
+    except OpsError as e:
+        return _err(error=e.code, message=e.message)
+
+    watcher = watcher_status()
+    if not watcher.get("running"):
+        t0 = time.monotonic()
+        try:
+            with vaults.bind(b):
+                stats = core.index_vault(rebuild=force)
+        except Exception as e:
+            if err := _sqlite_index_err(e):
+                return err
+            return _err(error="reindex_failed", message=str(e))
+        return {
+            "ok": True,
+            "mode": "rebuild",
+            "vault": b.name,
+            "inline": True,
+            "watcher_running": False,
+            "force": force,
+            "seconds": round(time.monotonic() - t0, 2),
+            "added": stats.added,
+            "changed": stats.changed,
+            "removed": stats.removed,
+            "chunks": stats.chunks,
+        }
+
+    index_deferred.signal_rebuild(b.collection, force=force)
+    out = {
+        "ok": True,
+        "mode": "rebuild",
+        "vault": b.name,
+        "inline": False,
+        "rebuild_signaled": True,
+        "force": force,
+        "watcher_running": True,
+        "waited": False,
+    }
+    if not wait:
+        return out
+
+    out["waited"] = True
+    out["timeout"] = float(timeout)
+    def _settled() -> bool:
+        return not index_deferred.rebuild_pending(b.collection) and not index_deferred.rebuild_running(
+            b.collection
+        )
+
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    poll_s = 0.25
+    completed = _settled()
+    while not completed and time.monotonic() < deadline:
+        time.sleep(poll_s)
+        completed = _settled()
+    out["completed"] = completed
+    if not completed:
+        out["warning"] = (
+            f"rebuild still in progress after {timeout}s — it keeps running in the watcher; "
+            "retry with a longer timeout, or poll apo_admin(memory_status)"
+        )
+    return out
+
+
 def _attach_watcher_tip(out: dict[str, Any]) -> dict[str, Any]:
     """Surface missing watcher on successful writes."""
     if not out.get("ok"):
