@@ -1,8 +1,8 @@
 # Apo search contract — template / example
 # Copy to <vault>/system/contracts/search-contract.schema.yaml and edit.
 # Legacy path system/config/search-contract.schema.yaml still loaded.
-# Runtime: unscoped search_notes / CLI search / RPC /v1/search and history browse
-# when exclude= is omitted and folder= is empty. Caller exclude= always wins.
+# Runtime: unscoped search_notes / CLI search and history browse when
+# exclude= is omitted and folder= is empty. Caller exclude= always wins.
 
 search_contract_version: "0.1"
 

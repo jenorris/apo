@@ -1,10 +1,8 @@
 """Shared Apo toolset-routing instructions.
 
 Single source of truth for the text handed to every Apo client: the stdio MCP
-server passes it as ``FastMCP(..., instructions=...)`` in its handshake, and
-the local RPC server (``rpc.py``) serves it over ``GET /v1/instructions`` for
-non-MCP HTTP clients (e.g. the Hermes/Lyra memory-provider plugin) that have
-no stdio transport to receive it from.
+server passes it as ``FastMCP(..., instructions=...)`` in its handshake; the
+same server's HTTP transport (default ``:8878``) hands it over on connect too.
 """
 
 from __future__ import annotations

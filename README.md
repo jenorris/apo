@@ -115,9 +115,7 @@ just okf validate --vault-root ~/Notes/Yours --profile okf   # SPEC §11 exactly
 ```mermaid
 flowchart LR
   Agent["Cursor / Claude Code"]
-  Gateway["RPC client (optional, out of repo)"]
   MCP["stdio MCP"]
-  RPC["apo-engine serve RPC"]
   Queue["Deferred queue"]
   Watch["apo-engine watch"]
   Index["index.db"]
@@ -125,11 +123,8 @@ flowchart LR
   Embed["Ollama bge-m3"]
 
   Agent -->|"search · read · write"| MCP
-  Gateway -->|"search · read · filter"| RPC
   MCP --> Vault
   MCP --> Queue
-  RPC -->|"hybrid query / read"| Index
-  RPC --> Vault
   Queue --> Watch
   Watch -->|"chunk · embed"| Embed
   Embed --> Index
@@ -314,7 +309,7 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
 | [docs/contracts/okf-bundle.md](docs/contracts/okf-bundle.md) | OKF conformance table, `apo-engine okf` CLI, type/provenance policies |
 | [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_COLLECTION_ROOT` / `APO_VAULT_PATHS`) |
-| [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC for local gateways (out-of-repo clients) |
+| [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC (removed 2026-09-27) — historical pointer only |
 | [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection (`body` + `guidance`) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |

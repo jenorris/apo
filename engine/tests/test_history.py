@@ -3,19 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import shutil
 import subprocess
 import tempfile
-import threading
 import unittest
 import unittest.mock
-import urllib.request
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from apo_engine import config, core, ops, rpc
+from apo_engine import config, core, ops
 from apo_engine import git_contract
 
 _DIM = 16
@@ -191,6 +187,24 @@ class TestHistory(unittest.TestCase):
             self.assertIn("date", c)
             self.assertIn("subject", c)
 
+    def test_browse_since_until_preview_last_and_fields_combo(self):
+        # Ported from the deleted RPC-transport test (rpc.py's /v1/history route
+        # forwarded these params from a JSON body) — same combo, direct ops call.
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        h = ops.history(
+            limit=5,
+            since=today,
+            until=today,
+            preview="last",
+            fields=["title"],
+        )
+        self.assertTrue(h["ok"], msg=h)
+        self.assertEqual(h.get("preview"), "last")
+        self.assertIn("frontmatter", h["notes"][0])
+
     def test_nested_vault_under_parent_git(self):
         """Meta-style: contract on vault subdir; .git on parent (foam)."""
         parent = self.tmp / "notes"
@@ -227,82 +241,6 @@ class TestHistory(unittest.TestCase):
         self.assertEqual(out["commits"][0]["subject"], "add meta note")
 
 
-class TestHistoryRpc(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.vault = self.tmp / "vault"
-        self.vault.mkdir()
-        (self.vault / "note.md").write_text("# Alpha\n\nalpha\n", encoding="utf-8")
-        self.index = self.tmp / "index.db"
-        self._patches = [
-            unittest.mock.patch.object(config, "NOTES_ROOT", self.vault),
-            unittest.mock.patch.object(config, "INDEX_PATH", self.index),
-            unittest.mock.patch.object(config, "COLLECTION", "history_rpc"),
-            unittest.mock.patch.object(config, "VAULTS_CONFIG", ""),
-            unittest.mock.patch.object(core, "embed", _fake_embed),
-            unittest.mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
-        ]
-        for p in self._patches:
-            p.start()
-        core.index_vault(rebuild=True, verbose=False)
-
-        import socket
-
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            self.port = s.getsockname()[1]
-        self.token = "hist-token"
-        rpc.RpcHandler.rpc_token = self.token
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", self.port), rpc.RpcHandler)
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
-        self.thread.start()
-
-    def tearDown(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
-        for p in self._patches:
-            p.stop()
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def _post(self, path: str, body: dict) -> tuple[int, dict]:
-        data = json.dumps(body).encode()
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}{path}",
-            data=data,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.token}",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status, json.loads(resp.read().decode())
-
-    def test_history(self):
-        s1, h = self._post("/v1/history", {"limit": 3})
-        self.assertEqual(s1, 200)
-        self.assertTrue(h["ok"])
-        self.assertGreaterEqual(len(h["notes"]), 1)
-
-    def test_history_digest_params(self):
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-
-        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
-        s1, h = self._post(
-            "/v1/history",
-            {
-                "limit": 5,
-                "since": today,
-                "until": today,
-                "preview": "last",
-                "fields": ["title"],
-            },
-        )
-        self.assertEqual(s1, 200)
-        self.assertTrue(h["ok"], msg=h)
-        self.assertEqual(h.get("preview"), "last")
-        self.assertIn("frontmatter", h["notes"][0])
 
 
 if __name__ == "__main__":

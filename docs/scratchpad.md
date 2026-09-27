@@ -1,15 +1,12 @@
 # Scratchpad (JSON/YAML payload workshop)
 
-Ephemeral buffer for **JSON/YAML catalog payloads** before a vault write. One MCP/RPC tool.
+Ephemeral buffer for **JSON/YAML catalog payloads** before a vault write. One MCP tool.
 
 MCP: one `request` param, a discriminated union on `action` — each action's own params, only:
 
 ```text
 scratchpad(request={action: create|read|patch|commit|discard, …})
 ```
-
-RPC/HTTP keeps the flat body (`POST /v1/scratchpad`, see [local-rpc.md](./local-rpc.md)):
-`{action, session_id?, format?, content?, ops?, vault?, destination_path?, schema_path?, schema_type?}`.
 
 Spill lives under `~/.apo/scratchpads/<session_id>/` (override with `APO_SCRATCHPADS_ROOT`). Default TTL is 24h.
 
@@ -53,4 +50,3 @@ scratchpad(request={action: "commit", session_id: <id>, vault: work, destination
 
 - [agent-throughput.md](./agent-throughput.md) — when to use scratchpad vs direct write
 - [patch-note-ops.md](./patch-note-ops.md) — full ops dialect lives on `patch_note`; scratchpad exposes `set_field` / `delete_field` only
-- [local-rpc.md](./local-rpc.md) — `POST /v1/scratchpad`

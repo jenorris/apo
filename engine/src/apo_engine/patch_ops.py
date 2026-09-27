@@ -332,7 +332,8 @@ OPS_FIELD_DESC = (
     "replace_section(heading|target|chunk_hash,text); "
     "append/prepend(text,heading|target|chunk_hash); append_eof(text); "
     "place(src,dst,overwrite?,fields?,allow_cross_vault?). "
-    "Standalone add → append_note. Multi-path batch → RPC patch_notes only."
+    "Standalone add → append_note. Multi-path batch → apo-local/apo `patch --items` "
+    "only (no MCP tool for it)."
 )
 
 TABLE_OPS_FIELD_DESC = (

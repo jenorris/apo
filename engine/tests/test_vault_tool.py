@@ -6,15 +6,11 @@ import json
 import os
 import shutil
 import tempfile
-import threading
 import unittest
 import unittest.mock
-import urllib.error
-import urllib.request
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from apo_engine import ops, rpc, vault_contracts, vault_project
+from apo_engine import ops, vault_contracts, vault_project
 
 
 class ContractIdTest(unittest.TestCase):
@@ -1154,63 +1150,6 @@ class PreferContractsDirTest(unittest.TestCase):
             git_contract.resolve_git_contract_path(self.vault),
             preferred / "git-contract.schema.yaml",
         )
-
-
-class VaultRpcTest(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="apo-vault-rpc-"))
-        self.vault = self.tmp / "vault"
-        self.vault.mkdir()
-        self._env = unittest.mock.patch.dict(
-            os.environ,
-            {
-                "APO_VAULTS": "",
-                "APO_NOTES_ROOT": str(self.vault),
-                "APO_INDEX": str(self.tmp / "index.db"),
-                "APO_COLLECTION": "vault_rpc_test",
-            },
-            clear=False,
-        )
-        self._env.start()
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), rpc.RpcHandler)
-        self.httpd.RequestHandlerClass.rpc_token = ""
-        self.port = self.httpd.server_address[1]
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
-        self.thread.start()
-
-    def tearDown(self):
-        self.httpd.shutdown()
-        self._env.stop()
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def _post(self, path: str, body: dict) -> dict:
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}{path}",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-
-    def test_rpc_list(self):
-        out = self._post("/v1/vault", {"action": "list"})
-        self.assertTrue(out["ok"])
-        self.assertIn("default", out["vaults"])
-
-    def test_rpc_clone_to_and_dry_run_reach_ops(self):
-        # No second vault registered here — proves `to=`/`dry_run=` are actually
-        # forwarded over the wire (unknown `to=` surfaces ops.vault_op's own
-        # bad_vault, not a body-parsing failure).
-        try:
-            self._post(
-                "/v1/vault", {"action": "clone", "to": "does-not-exist", "dry_run": True}
-            )
-            self.fail("expected an error response")
-        except urllib.error.HTTPError as e:
-            out = json.loads(e.read().decode("utf-8"))
-        self.assertFalse(out["ok"])
-        self.assertEqual(out["error"], "bad_vault")
 
 
 if __name__ == "__main__":

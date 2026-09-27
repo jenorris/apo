@@ -91,10 +91,6 @@ okf *ARGS:
 vault-tools *ARGS:
     just --justfile "{{ justfile_directory() }}/vault-tools/justfile" {{ARGS}}
 
-# Local JSON HTTP RPC for gateways (default http://127.0.0.1:8765).
-rpc *ARGS:
-    {{eng}} serve {{ARGS}}
-
 watch-fg:
     {{eng}} watch
 

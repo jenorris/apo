@@ -1,4 +1,4 @@
-"""Command-line interface: index | search | stats | doctor | watch | desk-project | serve."""
+"""Command-line interface: index | search | stats | doctor | watch | desk-project."""
 from __future__ import annotations
 
 import argparse
@@ -8,7 +8,6 @@ import sys
 import time
 
 from . import __version__, core, ops as apo_ops, vaults
-from .rpc import run_rpc
 from .watch import run_watch
 
 
@@ -220,18 +219,6 @@ def _cmd_watch(args) -> int:
     return 0
 
 
-def _cmd_serve(args) -> int:
-    host = args.host or os.environ.get("APO_RPC_HOST", "127.0.0.1")
-    port = args.port if args.port else int(os.environ.get("APO_RPC_PORT", "8765"))
-    sock = (args.socket or os.environ.get("APO_RPC_SOCKET", "")).strip() or None
-    if args.token is not None:
-        token = args.token
-    else:
-        token = os.environ.get("APO_RPC_TOKEN", "")
-    run_rpc(host=host, port=port, socket_path=sock, token=token or None)
-    return 0
-
-
 def _cmd_desk_project(args) -> int:
     """Render desk policy body + guidance from live desk + vault contracts."""
     from . import vault_project
@@ -396,28 +383,6 @@ def main(argv: list[str] | None = None) -> int:
     from . import okf_cli
 
     okf_cli.add_parser(sub)
-
-    pr = sub.add_parser(
-        "serve",
-        help=(
-            "DEPRECATED — legacy local JSON HTTP RPC for gateways (loopback; "
-            "optional Unix socket). Prefer apo-mcp's HTTP transport (:8878) or "
-            "apo-local; see docs/local-rpc.md."
-        ),
-    )
-    pr.add_argument("--host", default="", help="bind host (default APO_RPC_HOST or 127.0.0.1)")
-    pr.add_argument("--port", type=int, default=0, help="bind port (default APO_RPC_PORT or 8765)")
-    pr.add_argument(
-        "--socket",
-        default="",
-        help="Unix domain socket path (APO_RPC_SOCKET); overrides host/port when set",
-    )
-    pr.add_argument(
-        "--token",
-        default=None,
-        help="optional bearer token (default APO_RPC_TOKEN; empty = no auth on loopback)",
-    )
-    pr.set_defaults(func=_cmd_serve)
 
     po = sub.add_parser(
         "optima-merge",

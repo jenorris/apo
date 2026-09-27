@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import tempfile
-import threading
 import unittest
 import unittest.mock
-import urllib.request
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from apo_engine import config, ops, rpc
+from apo_engine import config, ops
 
 
 class PatchNotesTest(unittest.TestCase):
@@ -122,64 +118,6 @@ class PatchNotesTest(unittest.TestCase):
         )
         self.assertTrue(out["ok"], msg=out)
         self.assertEqual(out["applied_paths"], 1)
-
-
-class PatchNotesRpcTest(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="apo-pn-rpc-"))
-        self.vault = self.tmp / "vault"
-        self.vault.mkdir()
-        (self.vault / "n.md").write_text("---\nx: 1\n---\n\n# N\n", encoding="utf-8")
-        self._patches = [
-            unittest.mock.patch.object(config, "NOTES_ROOT", self.vault),
-            unittest.mock.patch.object(config, "INDEX_PATH", self.tmp / "index.db"),
-            unittest.mock.patch.object(config, "COLLECTION", "pn_rpc"),
-            unittest.mock.patch.object(config, "VAULTS_CONFIG", ""),
-        ]
-        for p in self._patches:
-            p.start()
-        import socket
-
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            self.port = s.getsockname()[1]
-        rpc.RpcHandler.rpc_token = "pn-token"
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", self.port), rpc.RpcHandler)
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
-        self.thread.start()
-
-    def tearDown(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
-        for p in self._patches:
-            p.stop()
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def test_rpc_patch_notes(self):
-        data = json.dumps(
-            {
-                "items": [
-                    {
-                        "path": "n.md",
-                        "ops": [{"op": "set_field", "field": "x", "value": 2}],
-                    }
-                ]
-            }
-        ).encode()
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/v1/patch_notes",
-            data=data,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": "Bearer pn-token",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            body = json.loads(resp.read().decode())
-        self.assertTrue(body["ok"], msg=body)
-        text = (self.vault / "n.md").read_text(encoding="utf-8")
-        self.assertRegex(text, r"x:\s*['\"]?2['\"]?")
 
 
 if __name__ == "__main__":

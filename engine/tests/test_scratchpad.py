@@ -300,29 +300,3 @@ class ScratchpadCommitTests(unittest.TestCase):
         self.assertEqual(bad["error"], "promoted")
 
 
-class ScratchpadRpcRouteTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-        self.spill = self.root / "spill"
-        self.spill.mkdir()
-        self._env = os.environ.get("APO_SCRATCHPADS_ROOT")
-        os.environ["APO_SCRATCHPADS_ROOT"] = str(self.spill)
-
-    def tearDown(self):
-        if self._env is None:
-            os.environ.pop("APO_SCRATCHPADS_ROOT", None)
-        else:
-            os.environ["APO_SCRATCHPADS_ROOT"] = self._env
-        self.tmp.cleanup()
-
-    def test_rpc_create_read_discard(self):
-        from apo_engine import rpc
-
-        created = rpc._scratchpad({"action": "create", "format": "json", "content": {"x": 1}})
-        self.assertTrue(created["ok"])
-        sid = created["session_id"]
-        read = rpc._scratchpad({"action": "read", "session_id": sid})
-        self.assertIn("buffer", read)
-        discarded = rpc._scratchpad({"action": "discard", "session_id": sid})
-        self.assertTrue(discarded["ok"])
