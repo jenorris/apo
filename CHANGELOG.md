@@ -2,7 +2,11 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
-## [Unreleased]
+## [0.29.0] — 2026-09-27
+
+An aggressive CLI/MCP-surface review turned up real gaps and drift between
+`apo-engine`, `apo-local`, `apo-mcp`, the RPC server, and the Go client — this
+release is the resulting cleanup batch.
 
 ### Added
 
@@ -18,15 +22,87 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
   are unchanged and keep working as their own console scripts — nothing
   that pins those exact names (launchd plists, shell aliases, MCP host
   config) needs to change.
+- **`index_health` capability** (new `apo_admin` MCP capability, plus
+  `apo-engine doctor [--vault NAME] [--json]`) — per-vault index size (db
+  bytes, WAL bytes), row counts across `files`/`chunks`/`vec_chunks`/
+  `chunks_fts`/`backlinks`, `backlinks_per_file_max`, orphan detection for
+  `vec_chunks`/`chunks_fts` (the exact class of bug fixed in 0.28.3), embed
+  quarantine count, and computed `flags[]`. Both recent production bugs
+  (0.28.1's backlinks growth, 0.28.3's vec_chunks orphans) were found by
+  hand-reading the SQLite files — there was previously no way to catch
+  either through Apo itself.
+- **`apo-engine index --vacuum`** — `VACUUM`s the bound vault's index db.
+  Refuses if a watcher is live (no pause/resume coordination exists yet;
+  stop the watcher first) rather than risk a lock conflict.
+- **Watcher-aware `index`/`reindex`.** `ops.reindex(vault, mode, force, wait,
+  timeout)` is now shared by `apo-engine index` and the MCP `apo_admin`
+  `reindex` capability, so both mean the same thing: `mode=flush` wakes the
+  watcher's deferred queue; `mode=rebuild` signals a live watcher (never a
+  second concurrent `index.db` writer) or runs inline when no watcher is
+  running (no writer-race risk), and `wait=true` can block up to `timeout`
+  seconds for a signaled rebuild to finish. `apo-engine index` defaults to
+  this watcher-aware path; `--inline` keeps the old direct-write behavior
+  and is refused when a watcher is detected live unless `--force-inline`.
+  **`apo_admin(reindex, mode=rebuild)` now requires `confirm=true`**
+  regardless of `force` — a rebuild can run inline (a direct write) from the
+  MCP server process itself when no watcher is live, so it's gated the same
+  as any other destructive admin capability.
+- `--version` on both `apo-engine` and `apo-local`.
+- `--no-hybrid` on `apo-local search` (matches the `hybrid=` kwarg `ops.search`
+  already accepted).
+- `--no-diff` on `apo-local`'s mutating commands (`write`/`append`/`patch`/
+  `patch-table`) — skips the extra before/after reads that exist purely to
+  print a diff, for tight scripted loops that don't need it.
+- `--items @file.json` on `apo-local patch` for batch patching from a file.
+- `okf_dry_run` wired into the MCP `vault` action schema — it existed in
+  `ops.vault_op` but was reachable from nowhere.
+- `docs/watcher-scheduler-separation.md` — a design note (not implemented)
+  proposing how to separate git-sync/Optima-merge from the watcher's
+  sole-index-writer loop, since a hang in either currently stalls indexing
+  with no timeout guard.
 
 ### Changed
 
+- `apo-engine search`/`stats` now route through `ops.search`/`ops.stats`
+  (previously called `core.*` directly) — both CLIs and the MCP tools now
+  return the same `{ok, results[], has_more, ...}` envelope shape.
+  `apo-engine` subcommands now honor `$APO_VAULT` like `apo-local` already
+  did.
+- `apply_discovery_argv`'s `--vault-path` is now the preferred spelling for
+  an explicit filesystem root (bare `--vault` kept as a back-compat alias) —
+  it collided in name, not meaning, with `apo-engine`/`apo-local`'s own
+  `--vault NAME` (a registered `vault_id`).
 - **Go network client (`client/`) renamed `apo` → `apo-remote`.** Frees the
   `apo` name for the new unified console script above. This binary had
   reserved `apo` since 0.27.0 but has essentially no adoption yet, so it
   gives the name up. Update any build scripts installing it to
   `-o /usr/local/bin/apo-remote` and any invocations from `apo ...` to
   `apo-remote ...` — see `client/README.md`.
+- `apo-local`'s `patch`/`filter` JSON input now runs through the same
+  pydantic validation MCP gets before hitting `ops.py`, instead of a raw
+  `json.loads()` straight through. CLI tool calls are now recorded in
+  `tool_metrics` (`surface="cli"`) alongside MCP calls.
+
+### Fixed
+
+- `apo_admin` was annotated `readOnlyHint: True` as a whole tool, but it
+  covers `delete_note` and `reindex(force=true)` alongside genuinely
+  read-only actions — a host that trusts that hint for auto-approval could
+  have skipped confirmation on a delete. Annotated `_MUTATE` instead.
+- `Dockerfile`'s entrypoint referenced `engine/mcp/server.py`, which moved
+  in 0.28.2 — the image wouldn't build. Uses the installed `apo-mcp`
+  console script directly now.
+
+### Deprecated
+
+- **`apo-engine serve` / `engine/src/apo_engine/rpc.py`** (the JSON-HTTP RPC
+  server) — a third, hand-rolled wire protocol duplicating what the
+  `apo-mcp` HTTP transport (:8878) and `apo-local` already provide. Its only
+  known consumer had never once succeeded in production (12,030 failed
+  requests, 0 successes — no launchd job ever ran `apo-engine serve`) and
+  has been switched to call `apo-local write` directly instead. Not removed
+  — still fully functional, now emits a deprecation warning on start. See
+  `docs/local-rpc.md`.
 
 ## [0.28.3] — 2026-09-26
 
