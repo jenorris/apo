@@ -694,12 +694,20 @@ def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
     """Parse/strip discovery flags from argv; set env for :func:`load_bindings`.
 
     Flags:
-      --vault PATH (repeatable)
+      --vault-path PATH (repeatable; --vault is a back-compat alias — see note below)
       --default NAME
       --collection-root DIR  (parent directory of vaults)
 
     Returns remaining argv (prog name preserved). Safe to call before
     ``load_bindings`` / MCP ``_load_vaults``.
+
+    Note: this is the *only* place in the codebase where bare ``--vault`` means
+    an explicit filesystem root. Everywhere else — ``apo-engine``/``apo-local``'s
+    ``add_discovery_arguments`` (which already uses ``--vault-path`` for this),
+    subcommand ``--vault``, ``okf_cli.py``, ``client/main.go`` — ``--vault`` means
+    a registered ``vault_id`` *name*. ``--vault-path`` is the preferred spelling
+    here for that reason; the bare ``--vault`` alias is kept only so an existing
+    ``apo-mcp --vault <path>`` launch command doesn't break.
     """
     import argparse
 
@@ -709,11 +717,17 @@ def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
     prog, rest = argv[0], argv[1:]
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument(
+        "--vault-path",
         "--vault",
+        dest="vault_path",
         action="append",
         default=[],
         metavar="PATH",
-        help="Explicit vault root (repeatable). Escape hatch for non-sibling roots.",
+        help=(
+            "Explicit vault root (repeatable). Escape hatch for non-sibling roots. "
+            "--vault is a back-compat alias — unlike apo-engine/apo-local's --vault "
+            "NAME (a registered vault_id), this --vault takes a filesystem PATH."
+        ),
     )
     p.add_argument(
         "--default",
@@ -733,11 +747,11 @@ def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
         os.environ["APO_COLLECTION_ROOT"] = str(Path(ns.collection_root).expanduser())
     if ns.default:
         os.environ["APO_DEFAULT_VAULT"] = str(ns.default).strip()
-    if ns.vault:
+    if ns.vault_path:
         # Merge with any existing APO_VAULT_PATHS
         existing = (os.environ.get("APO_VAULT_PATHS") or "").strip()
         parts = [p for p in existing.split(":") if p.strip()] if existing else []
-        for v in ns.vault:
+        for v in ns.vault_path:
             parts.append(str(Path(v).expanduser()))
         # de-dupe preserving order
         seen: set[str] = set()
