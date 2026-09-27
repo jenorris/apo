@@ -1,4 +1,5 @@
-# Apo MCP server (engine/mcp/server.py), streamable-HTTP transport.
+# Apo MCP server (apo_engine.mcp.server, installed as the `apo-mcp` console
+# script), streamable-HTTP transport.
 #
 # Vault data is NOT baked into this image — bind-mount it (see docker-compose
 # below, or `docker run -v`). The index (~/.apo/index-*.db) is regenerable
@@ -34,7 +35,6 @@ FROM python:3.12-slim
 RUN useradd --create-home --uid 1000 apo
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
-COPY engine/mcp ./engine/mcp
 RUN chown -R apo:apo /app
 ENV PATH="/opt/venv/bin:$PATH"
 USER apo
@@ -44,4 +44,4 @@ ENV APO_MCP_TRANSPORT=http \
     APO_MCP_HOST=0.0.0.0 \
     APO_MCP_PORT=8878
 
-ENTRYPOINT ["python", "engine/mcp/server.py"]
+ENTRYPOINT ["apo-mcp"]
