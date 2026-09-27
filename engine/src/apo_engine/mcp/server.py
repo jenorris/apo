@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from pydantic import Field
+from apo_engine import __version__ as apo_version
 from apo_engine import apo_admin as apo_admin_ops
 from apo_engine import config as apo_config
 from apo_engine import deferred as index_deferred
@@ -322,6 +323,7 @@ def _memory_status_sync() -> dict:
 
     return {
         "ok": True,
+        "version": apo_version,
         "default_vault": DEFAULT_VAULT,
         "vaults": vaults,
         "watcher": apo_ops.watcher_status(),

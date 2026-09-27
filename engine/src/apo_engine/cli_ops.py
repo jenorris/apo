@@ -27,6 +27,7 @@ import os
 import sys
 from typing import Any
 
+from . import __version__
 from . import ops as apo_ops
 from . import vaults
 
@@ -346,6 +347,23 @@ def _cmd_append(args: argparse.Namespace) -> int:
 
 
 def _cmd_patch(args: argparse.Namespace) -> int:
+    if args.items is not None:
+        if args.path or args.ops is not None:
+            raise SystemExit("error: --items is XOR with path+ops")
+        items = _load_json_arg(args.items)
+        if not isinstance(items, list):
+            raise SystemExit("error: --items must be a JSON array of {path, ops, expected_mtime?} objects")
+        result = apo_ops.patch_entry(
+            items=items,
+            strict=args.strict,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            vault=args.vault,
+        )
+        return _emit("patch", result, args)
+
+    if not args.path:
+        raise SystemExit("error: patch requires path+ops, or --items @file.json for a batch")
     ops = _load_json_arg(args.ops)
     if not isinstance(ops, list):
         raise SystemExit("error: ops-json must be a JSON array of op objects")
@@ -453,6 +471,11 @@ def main(argv: list[str] | None = None) -> int:
             "server's note/search tools. Admin/index/watch/serve stay on apo-engine."
         ),
     )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"apo-local {__version__}",
+    )
     vaults.add_discovery_arguments(p)
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -524,8 +547,13 @@ def main(argv: list[str] | None = None) -> int:
     pa.set_defaults(func=_cmd_append)
 
     pp = sub.add_parser("patch", parents=[common], help="mutate frontmatter/sections (patch_note ops)")
-    pp.add_argument("path")
-    pp.add_argument("ops", help="JSON array of ops ('-' for stdin, '@file' for a file)")
+    pp.add_argument("path", nargs="?", default="", help="omit when using --items")
+    pp.add_argument("ops", nargs="?", default=None, help="JSON array of ops ('-' for stdin, '@file' for a file); omit when using --items")
+    pp.add_argument(
+        "--items",
+        default=None,
+        help="batch mode: JSON array of {path, ops, expected_mtime?} ('-' for stdin, '@file' for a file); XOR path+ops",
+    )
     pp.add_argument("--strict", action="store_true")
     pp.add_argument("--dry-run", action="store_true")
     pp.add_argument("--verbose", action="store_true")

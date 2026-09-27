@@ -155,7 +155,17 @@ class PatchNoteSchemaTest(unittest.TestCase):
         }
         self.assertEqual(
             variant_actions,
-            {"list", "contracts", "describe", "merge", "project", "stats", "lint", "clone"},
+            {
+                "list",
+                "contracts",
+                "describe",
+                "merge",
+                "project",
+                "stats",
+                "lint",
+                "clone",
+                "okf_dry_run",
+            },
         )
 
         instr = getattr(mod.mcp, "instructions", None) or ""

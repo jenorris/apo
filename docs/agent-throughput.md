@@ -10,7 +10,7 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 4. **Need more than a snippet** → `read_note(chunk_hash=)` (not full-file `read_note`)
 5. **Append/edit from a hit** → `append_note(chunk_hash=…)` (path optional) or `patch_note` op with `chunk_hash` — do **not** `read_note` only to obtain an anchor
 6. **Dual-write** → parallel tools in one turn, same `vault=`
-7. **Multi-path patch** → `patch_note(items=…)` (not session log)
+7. **Multi-path patch** → separate `patch_note` calls per path, same `vault=` (no MCP batch `items=`; scripted batches use `apo-local patch --items @file.json`)
 8. **Structure-only atom** → prefer `write_note` / `patch_note(set_field)` on a `.yaml` path (no `append_note` / headings)
 9. **JSON/YAML payload workshop** → `scratchpad` (create → patch → commit; optional schema at commit) — see [scratchpad.md](./scratchpad.md)
 
@@ -25,7 +25,7 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 - `patch_note` ops need discriminator **`op`** and keys `field` / `find` / `replace` — never invented `key` / `old` / `new`.
 - Body keys on MCP: **`append_note` → `text=`**; **`write_note` → `content=`** only. Never pass `heading=` / `create=` to `write_note`.
 - Move/archive: **`patch_note(ops=[{op:place, src, dst, …}])`** — not a separate place tool.
-- `patch_note` wire: **`set_field`** uses `field=` (not `path`/`key`); **`replace_text`** uses `find`/`replace` (not `old_text`/`new_text`); multi-path **`items=[{path, ops}]`** — each item needs `path` unless all ops are `place`.
+- `patch_note` wire: **`set_field`** uses `field=` (not `path`/`key`); **`replace_text`** uses `find`/`replace` (not `old_text`/`new_text`). No MCP `items=` batch param — one path per call. `apo-local patch --items @file.json` batches from a file (CLI only; each item needs `path` unless all ops are `place`).
 
 ## Fast path (cheat card)
 
