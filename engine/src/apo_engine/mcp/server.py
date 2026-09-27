@@ -206,7 +206,7 @@ mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS, auth=build_auth_provider_fr
 # (FastMCP validates args before tool bodies — see apo_engine.validation_hints).
 from apo_engine.agent_validation import AgentValidationMiddleware  # noqa: E402
 
-# Apply discovery argv (``--vault``/``--default``/``--collection-root``) before
+# Apply discovery argv (``--vault-path``/``--default-vault``/``--collection-root``) before
 # the first registry load — unconditional so it applies whether this module is
 # launched as ``python server.py --vault …`` or via the ``apo-mcp`` console
 # script (which imports this module rather than executing it as __main__).

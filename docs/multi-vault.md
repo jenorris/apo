@@ -10,8 +10,8 @@ Separate indexes are intentional: isolation (no cross-vault ranking bleed), inde
 |-----------|------|
 | `APO_COLLECTION_ROOT` / `--collection-root` | **Primary autoconfigure** — parent directory of vaults. Each immediate child with a usage-contract `vault_id` is registered. Non-vault siblings (e.g. `Wiki/`) are skipped. |
 | `--vault-path PATH` (MCP; `--vault` is a back-compat alias — do not confuse with `apo-engine`/`apo-local`'s unrelated `--vault NAME`) / `APO_VAULT_PATHS` | Explicit roots (colon-separated). Workbench escape hatch for non-sibling trees (e.g. `compliance`). |
-| `APO_DEFAULT_VAULT` / `--default` | Default `vault=` when empty (required when more than one vault and no unique `memory.default_vault` claim). |
-| `APO_VAULTS` (compat) | JSON file/object — **roots only**; object keys and `collection` are ignored. Names come from usage `vault_id`. Optional `index` still honored during cutover. Emits a deprecation warning. |
+| `APO_DEFAULT_VAULT` / `--default-vault` (`--default` back-compat alias) | Default `vault=` when empty (required when more than one vault and no unique `memory.default_vault` claim). |
+| `APO_VAULTS` | JSON file/object — **roots only**; object keys and `collection` are ignored. Names come from usage `vault_id`. Optional `index` still honored. Also the only way to register a **read-only** vault (`"read_only": true`) — how `apo-engine okf ingest` mounts a foreign OKF bundle. Prefer `APO_COLLECTION_ROOT` / `APO_VAULT_PATHS` for ordinary (writable) registration; using `APO_VAULTS` for that emits a one-shot stderr note. |
 | `APO_NOTES_ROOT` | Legacy single-root when nothing above is set. |
 
 A path is a vault iff it has a readable usage contract with non-empty `vault_id` and is not marked `system/contracts/.apo-disabled`. Duplicate `vault_id` across roots → hard fail.
@@ -20,7 +20,7 @@ A path is a vault iff it has a readable usage contract with non-empty `vault_id`
 
 ### Default vault resolution
 
-1. `APO_DEFAULT_VAULT` / `--default` if set (must match a loaded `vault_id`)
+1. `APO_DEFAULT_VAULT` / `--default-vault` if set (must match a loaded `vault_id`)
 2. Compat `default` field from `APO_VAULTS` when it matches a loaded `vault_id`
 3. Exactly one vault → that vault
 4. Exactly one loaded usage-contract with `memory.default_vault` uniquely naming a loaded vault
@@ -29,6 +29,8 @@ A path is a vault iff it has a readable usage contract with non-empty `vault_id`
 ### Indexes
 
 Default path: `~/.apo/index-{collection_id}.db`. If that file is missing but a legacy `~/.apo/index-{vault_id}.db` exists, the legacy path is used (cutover). Soft-removing a vault keeps its index and deferred queue on disk.
+
+There is no per-vault-name alias table — the collection-id / vault-id-name fallback above is the whole rule. (An earlier migration-era alias table for a few renamed personal vaults was removed once every registered vault resolved cleanly through the rule above; the old index files it existed to catch are long gone.)
 
 ## Desk recipes
 
@@ -54,12 +56,13 @@ apo-mcp \
   --vault-path ~/Notes/Contracts \
   --vault-path ~/Notes/Optima \
   --vault-path ~/Workbench/compliance \
-  --default work
+  --default-vault work
 ```
 
-(`--vault` still works as a back-compat alias for `--vault-path` here, but don't
-confuse it with `apo-engine`/`apo-local` subcommands' own `--vault NAME` — that
-one takes a registered `vault_id`, not a filesystem path.)
+(`--vault` / `--default` still work as back-compat aliases for `--vault-path` /
+`--default-vault` here, but don't confuse `--vault` with `apo-engine`/`apo-local`
+subcommands' own `--vault NAME` — that one takes a registered `vault_id`, not a
+filesystem path.)
 
 **Hard gate:** MCP and `apo-engine watch` / launchd must use the **same** discovery env. Mismatch is a support footgun.
 

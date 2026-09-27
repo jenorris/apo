@@ -45,7 +45,6 @@ class ChunkHashAnchorTest(unittest.TestCase):
             mock.patch.object(config, "NOTES_ROOT", self.vault),
             mock.patch.object(config, "INDEX_PATH", self.index),
             mock.patch.object(config, "COLLECTION", "chunk_hash_anchor_test"),
-            mock.patch.object(config, "VAULTS_CONFIG", ""),
             mock.patch.object(core, "embed", _fake_embed),
             mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
             mock.patch.object(ops, "watcher_status", lambda: {"running": True}),

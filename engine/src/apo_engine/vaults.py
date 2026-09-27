@@ -8,11 +8,14 @@ Discovery (preferred → fallback):
 
 1. ``APO_COLLECTION_ROOT`` / ``--collection-root`` — parent directory of vaults;
    each immediate child with a usage-contract ``vault_id`` is registered.
-2. ``APO_VAULT_PATHS`` / repeatable ``--vault PATH`` — explicit roots (Workbench
-   escape hatch for non-sibling trees such as ``compliance``).
-3. Compat shim: ``APO_VAULTS`` JSON — **roots only**; object keys and any
-   ``collection`` / ``index`` fields are ignored (names come from usage
-   ``vault_id``). Emits a one-shot stderr warning.
+2. ``APO_VAULT_PATHS`` / repeatable ``--vault-path PATH`` — explicit roots
+   (Workbench escape hatch for non-sibling trees such as ``compliance``).
+3. ``APO_VAULTS`` JSON registry — **roots only**; object keys and any
+   ``collection`` field are ignored (names come from usage ``vault_id``).
+   Still the only way to mark a vault ``read_only`` — this is how
+   ``apo-engine okf ingest`` mounts a foreign OKF bundle. Prefer
+   ``APO_COLLECTION_ROOT`` / ``APO_VAULT_PATHS`` for ordinary (writable)
+   multi-vault registration; emits a one-shot stderr note when used for that.
 4. Legacy single-root: ``APO_NOTES_ROOT`` / ``APO_INDEX`` / ``APO_COLLECTION``.
 
 Tool-facing name is always usage-contract ``vault_id``. Internal queue /
@@ -297,45 +300,28 @@ def _index_file_count(path: Path) -> int | None:
 
 
 def _default_index_for(root: Path, vault_id: str) -> Path:
-    """Prefer collection-id index; fall back to legacy name-keyed files if present.
+    """Prefer collection-id index; fall back to the legacy name-keyed file if present.
 
-    If a brand-new empty ``index-{collection_id}.db`` was created during cutover,
-    prefer a populated legacy alias (``meta`` / ``jeremy`` / …) instead of
-    stranding the vault on an empty index.
+    Cutover rule: a brand-new empty ``index-{collection_id}.db`` never strands a
+    vault that already has a populated legacy ``index-{vault_id}.db`` — that one
+    wins until the collection-id file catches up.
     """
     coll = compute_collection_id(root)
     apo = Path.home() / ".apo"
     by_coll = apo / f"index-{coll}.db"
     by_name = apo / f"index-{vault_id}.db"
-    aliases = {
-        "atlas": ("atlas", "meta", "jeremy", "notes_global"),
-        "jeremy": ("atlas", "meta", "jeremy", "notes_global"),
-        "meta": ("atlas", "meta", "jeremy", "notes_global"),
-    }.get(vault_id, (vault_id,))
-    candidates: list[Path] = []
-    for p in (by_coll, by_name, *(apo / f"index-{a}.db" for a in aliases)):
-        if p.exists():
-            key = str(p.resolve())
-            if key not in {str(c.resolve()) for c in candidates}:
-                candidates.append(p)
 
     if by_coll.exists():
         n = _index_file_count(by_coll)
         if n is not None and n > 0:
             return by_coll
-        # Empty / unreadable collection-id file — fall through to legacy picks.
+        # Empty / unreadable collection-id file — fall through to the legacy pick.
     if by_name.exists():
         n = _index_file_count(by_name)
         if n is not None and n > 0:
             return by_name
-
-    populated = [(p, _index_file_count(p)) for p in candidates]
-    populated = [(p, n) for p, n in populated if n is not None and n > 0]
-    if populated:
-        populated.sort(key=lambda x: x[1], reverse=True)
-        return populated[0][0]
-    if len(candidates) == 1:
-        return candidates[0]
+    if by_name.exists() and not by_coll.exists():
+        return by_name
     return by_coll
 
 
@@ -361,11 +347,13 @@ def _warn_apo_vaults_shim() -> None:
         return
     _APO_VAULTS_WARNED = True
     msg = (
-        "APO_VAULTS is deprecated: keys/collection/index are ignored; "
-        "names come from usage-contract vault_id. Prefer APO_COLLECTION_ROOT "
-        "(parent directory of vaults) or APO_VAULT_PATHS / --vault."
+        "APO_VAULTS: keys/collection are ignored; names come from usage-contract "
+        "vault_id. Still supported for read-only vault mounts (apo-engine okf "
+        "ingest) — for ordinary multi-vault registration prefer "
+        "APO_COLLECTION_ROOT (parent directory of vaults) or APO_VAULT_PATHS / "
+        "--vault-path."
     )
-    print(f"apo: warning: {msg}", file=sys.stderr)
+    print(f"apo: note: {msg}", file=sys.stderr)
 
 
 def _load_vaults_raw() -> dict | None:
@@ -390,18 +378,11 @@ def collection_root_path() -> Path | None:
 
 
 def explicit_vault_paths() -> list[Path]:
-    """Paths from ``APO_VAULT_PATHS`` (colon-separated) and ``APO_VAULT_PATH`` repeats."""
+    """Paths from ``APO_VAULT_PATHS`` (colon-separated)."""
     out: list[Path] = []
     raw = (os.environ.get("APO_VAULT_PATHS") or "").strip()
     if raw:
         for part in raw.split(":"):
-            part = part.strip()
-            if part:
-                out.append(Path(part).expanduser())
-    # Optional multi-value env used by some hosts (newline-separated).
-    multi = (os.environ.get("APO_VAULT_PATH_LIST") or "").strip()
-    if multi:
-        for part in multi.splitlines():
             part = part.strip()
             if part:
                 out.append(Path(part).expanduser())
@@ -589,7 +570,6 @@ def _bindings_fingerprint() -> str:
         (
             os.environ.get("APO_COLLECTION_ROOT", ""),
             os.environ.get("APO_VAULT_PATHS", ""),
-            os.environ.get("APO_VAULT_PATH_LIST", ""),
             os.environ.get("APO_VAULTS", ""),
             os.environ.get("APO_DEFAULT_VAULT", ""),
             os.environ.get("APO_NOTES_ROOT", ""),
@@ -695,7 +675,7 @@ def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
 
     Flags:
       --vault-path PATH (repeatable; --vault is a back-compat alias — see note below)
-      --default NAME
+      --default-vault NAME (--default is a back-compat alias)
       --collection-root DIR  (parent directory of vaults)
 
     Returns remaining argv (prog name preserved). Safe to call before
@@ -730,10 +710,15 @@ def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
         ),
     )
     p.add_argument(
+        "--default-vault",
         "--default",
+        dest="default_vault",
         default="",
         metavar="NAME",
-        help="Default usage-contract vault_id when vault= is empty.",
+        help=(
+            "Default usage-contract vault_id when vault= is empty. --default is "
+            "a back-compat alias (matches add_discovery_arguments' --default-vault)."
+        ),
     )
     p.add_argument(
         "--collection-root",
@@ -745,8 +730,8 @@ def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
 
     if ns.collection_root:
         os.environ["APO_COLLECTION_ROOT"] = str(Path(ns.collection_root).expanduser())
-    if ns.default:
-        os.environ["APO_DEFAULT_VAULT"] = str(ns.default).strip()
+    if ns.default_vault:
+        os.environ["APO_DEFAULT_VAULT"] = str(ns.default_vault).strip()
     if ns.vault_path:
         # Merge with any existing APO_VAULT_PATHS
         existing = (os.environ.get("APO_VAULT_PATHS") or "").strip()

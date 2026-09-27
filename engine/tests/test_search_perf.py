@@ -50,7 +50,6 @@ class SearchPerfTest(unittest.TestCase):
             mock.patch.object(config, "NOTES_ROOT", self.vault),
             mock.patch.object(config, "INDEX_PATH", self.index),
             mock.patch.object(config, "COLLECTION", "search_perf_test"),
-            mock.patch.object(config, "VAULTS_CONFIG", ""),
             mock.patch.object(config, "QUERY_EMBED_DISK_CACHE", True),
             mock.patch.object(core, "embed", _fake_embed),
         ]

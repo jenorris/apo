@@ -33,7 +33,6 @@ class OpsReindexTest(unittest.TestCase):
             mock.patch.object(config, "NOTES_ROOT", self.vault),
             mock.patch.object(config, "INDEX_PATH", self.tmp / "index.db"),
             mock.patch.object(config, "COLLECTION", "ops_reindex_test"),
-            mock.patch.object(config, "VAULTS_CONFIG", ""),
         ]
         for p in self._patches:
             p.start()

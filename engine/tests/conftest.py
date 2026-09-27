@@ -23,7 +23,6 @@ def _isolated_apo_runtime(tmp_path, monkeypatch):
     for key in (
         "APO_VAULTS",
         "APO_VAULT_PATHS",
-        "APO_VAULT_PATH_LIST",
         "APO_COLLECTION_ROOT",
         "APO_DEFAULT_VAULT",
     ):

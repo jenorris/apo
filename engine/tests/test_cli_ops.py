@@ -4,7 +4,7 @@ No prior test imported ``cli_ops`` at all: everything the CLI does (argparse
 wiring, JSON loading, pydantic validation, diff printing, exit codes) was
 exercised only by hand. Uses the same legacy single-vault config-patch +
 fake-embedder fixture as ``test_ops_chunk_hash_anchor.py`` (``config.NOTES_ROOT``
-etc., ``VAULTS_CONFIG=""`` so ``vaults.load_bindings()`` falls back to a
+etc., with no discovery env set so ``vaults.load_bindings()`` falls back to a
 "default" binding) rather than a usage-contract vault dir — cli_ops routes
 into the same ``ops.py`` either way.
 """
@@ -52,7 +52,6 @@ class CliOpsTest(unittest.TestCase):
             mock.patch.object(config, "NOTES_ROOT", self.vault),
             mock.patch.object(config, "INDEX_PATH", self.index),
             mock.patch.object(config, "COLLECTION", "cli_ops_test"),
-            mock.patch.object(config, "VAULTS_CONFIG", ""),
             mock.patch.object(core, "embed", _fake_embed),
             mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
         ]

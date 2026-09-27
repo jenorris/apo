@@ -30,7 +30,6 @@ class PlaceNoteTest(unittest.TestCase):
             mock.patch.object(config, "NOTES_ROOT", self.vault),
             mock.patch.object(config, "INDEX_PATH", self.index),
             mock.patch.object(config, "COLLECTION", "place_test"),
-            mock.patch.object(config, "VAULTS_CONFIG", ""),
             mock.patch.object(config, "SEND_ALLOW_ROOTS", str(self.tmp.resolve())),
             mock.patch.object(config, "SEND_MAX_BYTES", 5 * 1024 * 1024),
             mock.patch.object(config, "OKF_CONTRACT", ""),
