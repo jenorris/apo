@@ -304,7 +304,11 @@ def _emit(cmd: str, result: dict[str, Any], args: argparse.Namespace) -> int:
     return _exit_code(result)
 
 
-def _diffed_mutation(path: str, vault: str, dry_run: bool, result: dict[str, Any], before: str) -> None:
+def _diffed_mutation(
+    path: str, vault: str, dry_run: bool, result: dict[str, Any], before: str, no_diff: bool = False
+) -> None:
+    if no_diff:
+        return
     if result.get("ok") and not dry_run:
         after = _raw_text(path, vault)
         _print_diff(path, before, after)
@@ -362,7 +366,7 @@ def _cmd_write(args: argparse.Namespace) -> int:
     frontmatter = _load_json_arg(args.frontmatter) if args.frontmatter is not None else None
     if content is None and sections is None and frontmatter is None:
         raise SystemExit("error: write requires --content (or stdin), --sections, or --frontmatter")
-    before = _raw_text(args.path, args.vault)
+    before = "" if args.no_diff else _raw_text(args.path, args.vault)
     result = apo_ops.write_note(
         args.path,
         content,
@@ -374,7 +378,7 @@ def _cmd_write(args: argparse.Namespace) -> int:
         expected_content_hash=args.expected_content_hash,
         vault=args.vault,
     )
-    _diffed_mutation(args.path, args.vault, False, result, before)
+    _diffed_mutation(args.path, args.vault, False, result, before, no_diff=args.no_diff)
     return _emit("write", result, args)
 
 
@@ -382,7 +386,7 @@ def _cmd_append(args: argparse.Namespace) -> int:
     text = _resolve_text_arg(args.body if args.body is not None else args.text_pos)
     if text is None:
         raise SystemExit("error: append requires text (positional, --text, or stdin)")
-    before = _raw_text(args.path, args.vault)
+    before = "" if args.no_diff else _raw_text(args.path, args.vault)
     result = apo_ops.append_note(
         args.path,
         text,
@@ -396,7 +400,7 @@ def _cmd_append(args: argparse.Namespace) -> int:
         expected_content_hash=args.expected_content_hash,
         vault=args.vault,
     )
-    _diffed_mutation(args.path, args.vault, False, result, before)
+    _diffed_mutation(args.path, args.vault, False, result, before, no_diff=args.no_diff)
     return _emit("append", result, args)
 
 
@@ -433,7 +437,7 @@ def _cmd_patch(args: argparse.Namespace) -> int:
     if not isinstance(raw_ops, list):
         raise SystemExit("error: ops-json must be a JSON array of op objects")
     ops = _validate(_PATCH_OPS_ADAPTER, raw_ops, tool_name="patch_note")
-    before = _raw_text(args.path, args.vault)
+    before = "" if args.no_diff else _raw_text(args.path, args.vault)
     result = apo_ops.patch_entry(
         path=args.path,
         ops=ops,
@@ -446,7 +450,7 @@ def _cmd_patch(args: argparse.Namespace) -> int:
         expected_content_hash=args.expected_content_hash,
         vault=args.vault,
     )
-    _diffed_mutation(args.path, args.vault, args.dry_run, result, before)
+    _diffed_mutation(args.path, args.vault, args.dry_run, result, before, no_diff=args.no_diff)
     return _emit("patch", result, args)
 
 
@@ -455,7 +459,7 @@ def _cmd_patch_table(args: argparse.Namespace) -> int:
     if not isinstance(raw_ops, list):
         raise SystemExit("error: ops-json must be a JSON array of op objects")
     ops = _validate(_TABLE_OPS_ADAPTER, raw_ops, tool_name="patch_table")
-    before = _raw_text(args.path, args.vault)
+    before = "" if args.no_diff else _raw_text(args.path, args.vault)
     result = apo_ops.patch_note(
         args.path,
         ops,
@@ -466,7 +470,7 @@ def _cmd_patch_table(args: argparse.Namespace) -> int:
         expected_content_hash=args.expected_content_hash,
         vault=args.vault,
     )
-    _diffed_mutation(args.path, args.vault, args.dry_run, result, before)
+    _diffed_mutation(args.path, args.vault, args.dry_run, result, before, no_diff=args.no_diff)
     return _emit("patch-table", result, args)
 
 
@@ -600,6 +604,7 @@ def main(argv: list[str] | None = None) -> int:
     pw.add_argument("--expected-frontmatter-hash", default=None)
     pw.add_argument("--expected-body-hash", default=None)
     pw.add_argument("--expected-content-hash", default=None)
+    pw.add_argument("--no-diff", action="store_true", help="skip the before/after read used to print a diff")
     pw.set_defaults(func=_cmd_write)
 
     pa = sub.add_parser("append", parents=[common], help="append text to a note (session log / History)")
@@ -614,6 +619,7 @@ def main(argv: list[str] | None = None) -> int:
     pa.add_argument("--expected-frontmatter-hash", default=None)
     pa.add_argument("--expected-body-hash", default=None)
     pa.add_argument("--expected-content-hash", default=None)
+    pa.add_argument("--no-diff", action="store_true", help="skip the before/after read used to print a diff")
     pa.set_defaults(func=_cmd_append)
 
     pp = sub.add_parser("patch", parents=[common], help="mutate frontmatter/sections (patch_note ops)")
@@ -631,6 +637,7 @@ def main(argv: list[str] | None = None) -> int:
     pp.add_argument("--expected-frontmatter-hash", default=None)
     pp.add_argument("--expected-body-hash", default=None)
     pp.add_argument("--expected-content-hash", default=None)
+    pp.add_argument("--no-diff", action="store_true", help="skip the before/after read used to print a diff")
     pp.set_defaults(func=_cmd_patch)
 
     pt = sub.add_parser("patch-table", parents=[common], help="GFM table row/cell mutators")
@@ -641,6 +648,7 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--verbose", action="store_true")
     pt.add_argument("--expected-mtime", type=float, default=None)
     pt.add_argument("--expected-content-hash", default=None)
+    pt.add_argument("--no-diff", action="store_true", help="skip the before/after read used to print a diff")
     pt.set_defaults(func=_cmd_patch_table)
 
     pg = sub.add_parser("graph-neighbors", parents=[common], help="wiki-link graph traversal")
