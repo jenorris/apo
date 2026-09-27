@@ -30,7 +30,6 @@ class PatchNotesTest(unittest.TestCase):
             unittest.mock.patch.object(config, "NOTES_ROOT", self.vault),
             unittest.mock.patch.object(config, "INDEX_PATH", self.tmp / "index.db"),
             unittest.mock.patch.object(config, "COLLECTION", "pn_test"),
-            unittest.mock.patch.object(config, "VAULTS_CONFIG", ""),
         ]
         for p in self._patches:
             p.start()
@@ -134,7 +133,6 @@ class PatchNotesRpcTest(unittest.TestCase):
             unittest.mock.patch.object(config, "NOTES_ROOT", self.vault),
             unittest.mock.patch.object(config, "INDEX_PATH", self.tmp / "index.db"),
             unittest.mock.patch.object(config, "COLLECTION", "pn_rpc"),
-            unittest.mock.patch.object(config, "VAULTS_CONFIG", ""),
         ]
         for p in self._patches:
             p.start()

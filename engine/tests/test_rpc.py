@@ -57,7 +57,6 @@ class TestLocalRpc(unittest.TestCase):
             unittest.mock.patch.object(config, "NOTES_ROOT", self.vault),
             unittest.mock.patch.object(config, "INDEX_PATH", self.index),
             unittest.mock.patch.object(config, "COLLECTION", "rpc_test"),
-            unittest.mock.patch.object(config, "VAULTS_CONFIG", ""),
             unittest.mock.patch.object(core, "embed", _fake_embed),
             unittest.mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
         ]

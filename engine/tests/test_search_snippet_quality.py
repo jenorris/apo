@@ -194,7 +194,6 @@ class IndexTextSeparationIntegrationTest(unittest.TestCase):
             mock.patch.object(config, "NOTES_ROOT", self.vault),
             mock.patch.object(config, "INDEX_PATH", self.index),
             mock.patch.object(config, "COLLECTION", "index_text_separation_test"),
-            mock.patch.object(config, "VAULTS_CONFIG", ""),
             mock.patch.object(core, "embed", _fake_embed),
             mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
         ]
@@ -264,7 +263,6 @@ class QueryAnchoredSnippetTest(unittest.TestCase):
             mock.patch.object(config, "NOTES_ROOT", self.vault),
             mock.patch.object(config, "INDEX_PATH", self.index),
             mock.patch.object(config, "COLLECTION", "snippet_quality_test"),
-            mock.patch.object(config, "VAULTS_CONFIG", ""),
             mock.patch.object(core, "embed", _fake_embed),
             mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
         ]

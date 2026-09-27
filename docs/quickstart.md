@@ -12,7 +12,7 @@ This guide is **local engine only** — one machine, one vault root. Default emb
 git clone https://github.com/jenorris/apo.git ~/Code/apo   # or your preferred path
 cd ~/Code/apo
 brew install ollama just ripgrep   # Node optional — only for `just inspect`
-cp config.env.example .env
+cp .env.example .env
 ```
 
 Edit `.env` (use **absolute paths** — `just dotenv-load` does not expand `${HOME}`):

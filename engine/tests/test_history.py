@@ -55,7 +55,6 @@ class TestHistory(unittest.TestCase):
             unittest.mock.patch.object(config, "NOTES_ROOT", self.vault),
             unittest.mock.patch.object(config, "INDEX_PATH", self.index),
             unittest.mock.patch.object(config, "COLLECTION", "history_test"),
-            unittest.mock.patch.object(config, "VAULTS_CONFIG", ""),
             unittest.mock.patch.object(core, "embed", _fake_embed),
             unittest.mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
         ]
@@ -219,9 +218,8 @@ class TestHistory(unittest.TestCase):
         with unittest.mock.patch.object(config, "NOTES_ROOT", vault):
             with unittest.mock.patch.object(config, "INDEX_PATH", self.tmp / "nested-index.db"):
                 with unittest.mock.patch.object(config, "COLLECTION", "nested_hist"):
-                    with unittest.mock.patch.object(config, "VAULTS_CONFIG", ""):
-                        core.index_vault(rebuild=True, verbose=False)
-                        out = ops.history(path="note.md", limit=5)
+                    core.index_vault(rebuild=True, verbose=False)
+                    out = ops.history(path="note.md", limit=5)
         self.assertTrue(out["ok"], msg=out)
         self.assertEqual(out["source"], "git")
         self.assertEqual(out["commits"][0]["subject"], "add meta note")
@@ -238,7 +236,6 @@ class TestHistoryRpc(unittest.TestCase):
             unittest.mock.patch.object(config, "NOTES_ROOT", self.vault),
             unittest.mock.patch.object(config, "INDEX_PATH", self.index),
             unittest.mock.patch.object(config, "COLLECTION", "history_rpc"),
-            unittest.mock.patch.object(config, "VAULTS_CONFIG", ""),
             unittest.mock.patch.object(core, "embed", _fake_embed),
             unittest.mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
         ]

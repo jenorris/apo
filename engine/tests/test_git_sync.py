@@ -152,7 +152,6 @@ class GitSyncRepoTest(unittest.TestCase):
             unittest.mock.patch.object(config, "NOTES_ROOT", self.vault),
             unittest.mock.patch.object(config, "INDEX_PATH", self.tmp / "index.db"),
             unittest.mock.patch.object(config, "COLLECTION", "gsync_test"),
-            unittest.mock.patch.object(config, "VAULTS_CONFIG", ""),
         ]
         for p in self._patches:
             p.start()
@@ -478,7 +477,6 @@ class GitSyncRpcTest(unittest.TestCase):
             unittest.mock.patch.object(config, "NOTES_ROOT", self.vault),
             unittest.mock.patch.object(config, "INDEX_PATH", self.tmp / "index.db"),
             unittest.mock.patch.object(config, "COLLECTION", "gsync_rpc"),
-            unittest.mock.patch.object(config, "VAULTS_CONFIG", ""),
         ]
         for p in self._patches:
             p.start()

@@ -592,7 +592,7 @@ def add_parser(sub) -> None:
     okf_sub = p.add_subparsers(dest="okf_cmd", required=True)
 
     def _common(sp):
-        sp.add_argument("--vault", default="", help="vault name from APO_VAULTS")
+        sp.add_argument("--vault", default="", help="registered vault_id (default vault if omitted)")
         sp.add_argument(
             "--vault-root", default="", help="explicit vault root (overrides --vault)"
         )

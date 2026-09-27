@@ -11,9 +11,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
-[[ -f "$ENV_FILE" ]] || ENV_FILE="${SCRIPT_DIR}/config.env"
 
-# Preserve caller overrides across .env source.
+# Preserve caller overrides across .env source — a caller that already
+# exported one of these (e.g. an agent shell doing `APO_VAULT_PATHS=... bash
+# watch.sh start`) must win over whatever .env also sets.
 _SAVED_APO_VAULTS="${APO_VAULTS-}"
 _SAVED_APO_VAULT_PATHS="${APO_VAULT_PATHS-}"
 _SAVED_APO_COLLECTION_ROOT="${APO_COLLECTION_ROOT-}"
@@ -30,7 +31,7 @@ _HAD_APO_INDEX=0; [[ -n "${APO_INDEX+x}" ]] && _HAD_APO_INDEX=1
 _HAD_APO_COLLECTION=0; [[ -n "${APO_COLLECTION+x}" ]] && _HAD_APO_COLLECTION=1
 
 set -a
-# shellcheck source=config.env.example
+# shellcheck source=.env.example
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
 set +a
 
@@ -151,7 +152,7 @@ cmd_status() {
     [[ -n "${APO_COLLECTION_ROOT:-}" ]] && info "  APO_COLLECTION_ROOT: ${APO_COLLECTION_ROOT}"
     [[ -n "${APO_VAULT_PATHS:-}" ]] && info "  APO_VAULT_PATHS: ${APO_VAULT_PATHS}"
     [[ -n "${APO_DEFAULT_VAULT:-}" ]] && info "  APO_DEFAULT_VAULT: ${APO_DEFAULT_VAULT}"
-    [[ -n "${APO_VAULTS:-}" ]] && info "  APO_VAULTS (compat): ${APO_VAULTS}"
+    [[ -n "${APO_VAULTS:-}" ]] && info "  APO_VAULTS (read-only vaults): ${APO_VAULTS}"
   else
     warn "Watcher STOPPED"
   fi

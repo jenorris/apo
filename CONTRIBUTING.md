@@ -8,7 +8,7 @@ fixes, and focused features.
 ```bash
 git clone https://github.com/jenorris/apo.git ~/Code/apo
 cd ~/Code/apo
-cp config.env.example .env      # edit APO_NOTES_ROOT to point at a test vault
+cp .env.example .env            # edit APO_NOTES_ROOT to point at a test vault
 just setup                      # engine venv + MCP extras (needs Python 3.11+)
 just ollama && ollama pull bge-m3
 ```
