@@ -84,7 +84,15 @@ just okf export   --vault meta /tmp/bundle --okf-version 0.2
 just okf ingest   /tmp/foreign-bundle --name foreign   # mount read-only
 ```
 
-Corpus lint on MCP: `vault(request={action: "lint"})` — see [library-scribe.md](../library-scribe.md).
+Corpus lint on MCP: `vault(request={action: "lint"})` runs the same producer
+profile per note (`okf.missing_field`, plus `okf.missing_frontmatter` /
+`okf.reserved_frontmatter` for the structural clauses, each with a
+`suggested_op`) — the flagged-path set matches `okf validate --profile apo`.
+An unscoped sweep also reports drift in the contract file itself
+(`contract.unknown_key` for keys the loader never reads,
+`contract.invalid_value` for an `enforcement` / policy outside its enum) — see
+[library-scribe.md](../library-scribe.md) and
+[README.md → Contract checks](./README.md#contract-checks).
 
 ## Agent behaviors
 

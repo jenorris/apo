@@ -22,11 +22,31 @@ Do **not** confuse templates here with a setting in MCP config. Opt-in means: pu
 | [yaml-notes.md](./yaml-notes.md) | **Ship** | Standalone `.yaml` / `.yml` catalog notes (filter + field patch) |
 | [git.md](./git.md) | **Ship** | Vault backup / remote + `history(path=)` + optional `sync.enabled` commit/pull — [git-contract.schema.yaml](./git-contract.schema.yaml) |
 | [search-contract.schema.yaml](./search-contract.schema.yaml) | **Ship** | Per-vault default exclude globs for unscoped search + history browse — [search-contract.schema.yaml](./search-contract.schema.yaml) |
+| [table-contract.schema.yaml](./table-contract.schema.yaml) | **Ship** | Per-pattern GFM table rules: `key_column` (index `row_key` + `patch_table` row lookup / upsert key), `replace_table` defaults (`merge`, `allow_new_columns`) and `header_synonyms` |
+| [mermaid-contract.schema.yaml](./mermaid-contract.schema.yaml) | **Ship** | Diagram chunking, catalog join, `validation: hard` write gate — [mermaid-notes.md](./mermaid-notes.md) |
 | [usage-contract.schema.yaml](./usage-contract.schema.yaml) | **Ship** | Host-neutral vault usage IR for harness / `vault(project)` — **not** interpreted by the engine for search/write |
 | [read-contract.schema.yaml](./read-contract.schema.yaml) | **Ship** | Consumer-side read routing — purpose → `okf_type` query + join order, type authority/trust, lifecycle-read semantics; additive over okf-contract, projects a **Read routing** section, cross-checked by `vault(request={action: "lint"})` |
 | [telemetry-contract.schema.yaml](./telemetry-contract.schema.yaml) | **Ship** | Vault-defined tool-use telemetry privacy + agent `session_stats` access — [telemetry.md](./telemetry.md) |
 | [archival-contract.schema.yaml](./archival-contract.schema.yaml) | **Ship (suggest)** | Cold-note eligibility → `flaws[]` + `vault(request={action: "lint"})`; agent `place` — [archival.md](./archival.md) |
 | [local-web-contract.schema.yaml](./local-web-contract.schema.yaml) | **Ship** | `just serve` read-only local HTML browser (bind/port/mode/exclude); desk projection emits a one-line pointer |
+
+## Contract checks
+
+The engine coerces silently at load time (an unknown key is ignored, an unknown `enforcement` becomes `soft`, a rule without `match` is dropped). To keep that drift visible, every engine-interpreted contract (`okf`, `search`, `table`, `git`, `mermaid`, `archival`, `telemetry`, `optima`'s `refresh` block) has a shape check beside its loader:
+
+| Surface | What you see |
+|---------|--------------|
+| `vault(request={action: "contracts"\|"describe"\|"merge"})` | `warnings: [{code, field, message}]` on the contract entry (summary and `full=true` views) |
+| `vault(request={action: "lint"})` (unscoped) | `contract.unknown_key` / `contract.invalid_value` / `contract.invalid_shape` flaws with `path` = the contract file, `remediation: human`; `contract.unreadable` (`severity: error`) when YAML does not parse and the engine is treating the contract as absent |
+
+Advisory only — a finding never blocks a write or turns a contract off. Contracts the engine does not interpret (`usage`, `read`, `local-web`, vault-private schemas) are not checked; their keys belong to other consumers.
+
+**Glob semantics differ by contract** (copy patterns with care):
+
+| Contract keys | Matcher | `*` crosses `/`? |
+|---------------|---------|------------------|
+| `okf` `path_rules[].match`, `archival` `eligibility.exempt_globs` | full-path match (`PurePath.full_match`) | No — use `**` for depth |
+| `search` `default_exclude` / `folder_exclude[].exclude`, `table` `match`, `mermaid` `match` | `fnmatch` | Yes — `archives/*` is recursive |
 
 **Existing vault:** [../onboard-prompt.md](../onboard-prompt.md) — infer first; do not force a contract.
 

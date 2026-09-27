@@ -80,7 +80,7 @@ agent (budget N per turn)
 ```
 
 **Inline:** successful writes attach `flaws` for that path (OKF soft + format; archival when contracted).
-**Sweep:** `vault(request={action: "lint"})` — folder/vault backlog, paginated (archival + note_lint detectors).
+**Sweep:** `vault(request={action: "lint"})` — folder/vault backlog, paginated (archival + note_lint detectors, including the OKF producer profile per note; unscoped sweeps also report `contract.*` drift in the vault's contract files — see [contracts/README.md → Contract checks](contracts/README.md#contract-checks)).
 **Opt-in read:** `read_note(path, lint=true)`.
 **Batch:** existing `vault-tools` OKF lint/fix share detector themes; MCP uses dotted `code`s.
 
@@ -88,8 +88,12 @@ agent (budget N per turn)
 
 | Code | Default remediation |
 |------|---------------------|
-| `okf.missing_field` | `llm` or `auto` if stampable |
+| `okf.missing_field` | `llm` or `auto` if stampable (`severity: error` under `enforcement: hard`) |
 | `okf.type_mismatch` | `llm` / `human` |
+| `okf.missing_frontmatter` | `llm` (lint only — any Apo write stamps the concept fields) |
+| `okf.reserved_frontmatter` | `human` (lint only — `index.md` / `log.md` carrying concept frontmatter) |
+| `contract.unknown_key` / `contract.invalid_value` / `contract.invalid_shape` | `human` (contract file drift; `path` is the contract) |
+| `contract.unreadable` | `human` (`error`; engine treats the contract as absent) |
 | `usage.frontmatter_floor` | `llm` |
 | `usage.dialect_feature` | `llm` |
 | `link.broken` | `llm` |
