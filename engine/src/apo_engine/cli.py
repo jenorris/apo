@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import core, ops as apo_ops, vaults
+from . import __version__, core, ops as apo_ops, vaults
 from .rpc import run_rpc
 from .watch import run_watch
 
@@ -276,6 +276,11 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="apo-engine",
         description="Local semantic search over a markdown vault.",
+    )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"apo-engine {__version__}",
     )
     vaults.add_discovery_arguments(p)
     sub = p.add_subparsers(dest="cmd", required=True)

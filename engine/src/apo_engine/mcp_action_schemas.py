@@ -87,6 +87,12 @@ class VaultCloneRequest(_ActionBase):
     dry_run: bool = False
 
 
+class VaultOkfDryRunRequest(_ActionBase):
+    action: Literal["okf_dry_run"]
+    vault: str = ""
+    contract: Annotated[str, Field(description="Proposed okf-contract.schema.yaml text.")] = ""
+
+
 VaultAction = Annotated[
     Union[
         VaultListRequest,
@@ -97,13 +103,14 @@ VaultAction = Annotated[
         VaultStatsRequest,
         VaultLintRequest,
         VaultCloneRequest,
+        VaultOkfDryRunRequest,
     ],
     Field(discriminator="action"),
 ]
 
 VAULT_ACTION_FIELD_DESC = (
-    "list | contracts | describe | merge | project | stats | lint | clone — each variant "
-    "lists only its own params."
+    "list | contracts | describe | merge | project | stats | lint | clone | okf_dry_run — "
+    "each variant lists only its own params."
 )
 
 

@@ -25,10 +25,17 @@ import difflib
 import json
 import os
 import sys
+import time
 from typing import Any
 
+from pydantic import TypeAdapter, ValidationError
+
+from . import __version__
 from . import ops as apo_ops
+from . import tool_metrics
 from . import vaults
+from .patch_ops import PatchNoteOp, PatchNotesItem, TablePatchOp
+from .validation_hints import format_tool_validation_error
 
 
 # --------------------------------------------------------------------------- #
@@ -67,6 +74,20 @@ def _load_json_arg(value: str | None) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError as e:
         raise SystemExit(f"error: invalid JSON: {e}")
+
+
+def _validate(adapter: TypeAdapter, raw: Any, *, tool_name: str) -> Any:
+    """Validate raw JSON through the same pydantic model MCP validates against.
+
+    Raises SystemExit with the same agent-actionable hint text
+    ``AgentValidationMiddleware`` gives MCP callers on a schema mismatch, so
+    CLI and MCP error quality match instead of the CLI falling through to
+    whatever raw exception ``ops.py`` happens to raise deeper in the stack.
+    """
+    try:
+        return adapter.validate_python(raw)
+    except ValidationError as e:
+        raise SystemExit(f"error: {format_tool_validation_error(tool_name, e)}")
 
 
 def _parse_kv_where(pairs: list[str]) -> dict[str, Any]:
@@ -241,15 +262,53 @@ def _render(cmd: str, result: dict[str, Any], args: argparse.Namespace) -> None:
         _print_json(result)
 
 
+_INVOKED_AT: float | None = None
+
+
+def _record_cli_metrics(cmd: str, args: argparse.Namespace, result: dict[str, Any]) -> None:
+    """Best-effort tool-metrics event for a CLI invocation, tagged surface="cli".
+
+    Mirrors what ``ToolMetricsMiddleware`` records for MCP calls so `apo-local`
+    usage isn't invisible to whatever habit-KPI reads that table. Never raises —
+    a metrics-recording failure must not affect the command's own exit code.
+    """
+    try:
+        duration_ms = (time.perf_counter() - _INVOKED_AT) * 1000.0 if _INVOKED_AT else 0.0
+        default, bindings = vaults.load_bindings()
+        key = (getattr(args, "vault", "") or "").strip() or default
+        binding = bindings.get(key)
+        vault_root = binding.root if binding else None
+        vault_id = binding.name if binding else key
+        collection = binding.collection if binding else ""
+        ok = bool(result.get("ok"))
+        tool_metrics.record_call(
+            collection=collection,
+            tool=cmd.replace("-", "_"),
+            ok=ok,
+            error=None if ok else str(result.get("error") or "unknown"),
+            duration_ms=duration_ms,
+            vault_id=vault_id,
+            vault_root=vault_root,
+            surface="cli",
+        )
+    except Exception:
+        pass
+
+
 def _emit(cmd: str, result: dict[str, Any], args: argparse.Namespace) -> int:
     if getattr(args, "text", False) or getattr(args, "oneline", False):
         _render(cmd, result, args)
     else:
         _print_json(result)
+    _record_cli_metrics(cmd, args, result)
     return _exit_code(result)
 
 
-def _diffed_mutation(path: str, vault: str, dry_run: bool, result: dict[str, Any], before: str) -> None:
+def _diffed_mutation(
+    path: str, vault: str, dry_run: bool, result: dict[str, Any], before: str, no_diff: bool = False
+) -> None:
+    if no_diff:
+        return
     if result.get("ok") and not dry_run:
         after = _raw_text(path, vault)
         _print_diff(path, before, after)
@@ -308,7 +367,7 @@ def _cmd_write(args: argparse.Namespace) -> int:
     frontmatter = _load_json_arg(args.frontmatter) if args.frontmatter is not None else None
     if content is None and sections is None and frontmatter is None:
         raise SystemExit("error: write requires --content (or stdin), --sections, or --frontmatter")
-    before = _raw_text(args.path, args.vault)
+    before = "" if args.no_diff else _raw_text(args.path, args.vault)
     result = apo_ops.write_note(
         args.path,
         content,
@@ -320,7 +379,7 @@ def _cmd_write(args: argparse.Namespace) -> int:
         expected_content_hash=args.expected_content_hash,
         vault=args.vault,
     )
-    _diffed_mutation(args.path, args.vault, False, result, before)
+    _diffed_mutation(args.path, args.vault, False, result, before, no_diff=args.no_diff)
     return _emit("write", result, args)
 
 
@@ -328,7 +387,7 @@ def _cmd_append(args: argparse.Namespace) -> int:
     text = _resolve_text_arg(args.body if args.body is not None else args.text_pos)
     if text is None:
         raise SystemExit("error: append requires text (positional, --text, or stdin)")
-    before = _raw_text(args.path, args.vault)
+    before = "" if args.no_diff else _raw_text(args.path, args.vault)
     result = apo_ops.append_note(
         args.path,
         text,
@@ -342,15 +401,44 @@ def _cmd_append(args: argparse.Namespace) -> int:
         expected_content_hash=args.expected_content_hash,
         vault=args.vault,
     )
-    _diffed_mutation(args.path, args.vault, False, result, before)
+    _diffed_mutation(args.path, args.vault, False, result, before, no_diff=args.no_diff)
     return _emit("append", result, args)
 
 
+_PATCH_ITEMS_ADAPTER = TypeAdapter(list[PatchNotesItem])
+_PATCH_OPS_ADAPTER = TypeAdapter(list[PatchNoteOp])
+_TABLE_OPS_ADAPTER = TypeAdapter(list[TablePatchOp])
+_WHERE_ADAPTER: TypeAdapter = TypeAdapter(dict[str, Any] | None)
+
+
 def _cmd_patch(args: argparse.Namespace) -> int:
-    ops = _load_json_arg(args.ops)
-    if not isinstance(ops, list):
+    if args.items is not None:
+        if args.path or args.ops is not None:
+            raise SystemExit("error: --items is XOR with path+ops")
+        raw_items = _load_json_arg(args.items)
+        if not isinstance(raw_items, list):
+            raise SystemExit("error: --items must be a JSON array of {path, ops, expected_mtime?} objects")
+        validated_items = _validate(_PATCH_ITEMS_ADAPTER, raw_items, tool_name="patch_note")
+        # patch_notes() (unlike patch_note()) expects plain dicts, not model
+        # instances — round-trip through model_dump so validation still runs
+        # first without changing the ops-layer contract.
+        items = [it.model_dump(mode="python", exclude_none=True) for it in validated_items]
+        result = apo_ops.patch_entry(
+            items=items,
+            strict=args.strict,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            vault=args.vault,
+        )
+        return _emit("patch", result, args)
+
+    if not args.path:
+        raise SystemExit("error: patch requires path+ops, or --items @file.json for a batch")
+    raw_ops = _load_json_arg(args.ops)
+    if not isinstance(raw_ops, list):
         raise SystemExit("error: ops-json must be a JSON array of op objects")
-    before = _raw_text(args.path, args.vault)
+    ops = _validate(_PATCH_OPS_ADAPTER, raw_ops, tool_name="patch_note")
+    before = "" if args.no_diff else _raw_text(args.path, args.vault)
     result = apo_ops.patch_entry(
         path=args.path,
         ops=ops,
@@ -363,15 +451,16 @@ def _cmd_patch(args: argparse.Namespace) -> int:
         expected_content_hash=args.expected_content_hash,
         vault=args.vault,
     )
-    _diffed_mutation(args.path, args.vault, args.dry_run, result, before)
+    _diffed_mutation(args.path, args.vault, args.dry_run, result, before, no_diff=args.no_diff)
     return _emit("patch", result, args)
 
 
 def _cmd_patch_table(args: argparse.Namespace) -> int:
-    ops = _load_json_arg(args.ops)
-    if not isinstance(ops, list):
+    raw_ops = _load_json_arg(args.ops)
+    if not isinstance(raw_ops, list):
         raise SystemExit("error: ops-json must be a JSON array of op objects")
-    before = _raw_text(args.path, args.vault)
+    ops = _validate(_TABLE_OPS_ADAPTER, raw_ops, tool_name="patch_table")
+    before = "" if args.no_diff else _raw_text(args.path, args.vault)
     result = apo_ops.patch_note(
         args.path,
         ops,
@@ -382,7 +471,7 @@ def _cmd_patch_table(args: argparse.Namespace) -> int:
         expected_content_hash=args.expected_content_hash,
         vault=args.vault,
     )
-    _diffed_mutation(args.path, args.vault, args.dry_run, result, before)
+    _diffed_mutation(args.path, args.vault, args.dry_run, result, before, no_diff=args.no_diff)
     return _emit("patch-table", result, args)
 
 
@@ -405,6 +494,7 @@ def _cmd_filter(args: argparse.Namespace) -> int:
         where = _parse_kv_where(args.kv)
     else:
         where = None
+    where = _validate(_WHERE_ADAPTER, where, tool_name="filter_notes")
     result = apo_ops.filter_notes(
         where,
         folder=args.folder,
@@ -447,12 +537,19 @@ def _cmd_history(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _INVOKED_AT
+    _INVOKED_AT = time.perf_counter()
     p = argparse.ArgumentParser(
         prog="apo-local",
         description=(
             "Vault-facing CLI over apo_engine.ops — same backend as the Apo MCP "
             "server's note/search tools. Admin/index/watch/serve stay on apo-engine."
         ),
+    )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"apo-local {__version__}",
     )
     vaults.add_discovery_arguments(p)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -513,6 +610,7 @@ def main(argv: list[str] | None = None) -> int:
     pw.add_argument("--expected-frontmatter-hash", default=None)
     pw.add_argument("--expected-body-hash", default=None)
     pw.add_argument("--expected-content-hash", default=None)
+    pw.add_argument("--no-diff", action="store_true", help="skip the before/after read used to print a diff")
     pw.set_defaults(func=_cmd_write)
 
     pa = sub.add_parser("append", parents=[common], help="append text to a note (session log / History)")
@@ -527,11 +625,17 @@ def main(argv: list[str] | None = None) -> int:
     pa.add_argument("--expected-frontmatter-hash", default=None)
     pa.add_argument("--expected-body-hash", default=None)
     pa.add_argument("--expected-content-hash", default=None)
+    pa.add_argument("--no-diff", action="store_true", help="skip the before/after read used to print a diff")
     pa.set_defaults(func=_cmd_append)
 
     pp = sub.add_parser("patch", parents=[common], help="mutate frontmatter/sections (patch_note ops)")
-    pp.add_argument("path")
-    pp.add_argument("ops", help="JSON array of ops ('-' for stdin, '@file' for a file)")
+    pp.add_argument("path", nargs="?", default="", help="omit when using --items")
+    pp.add_argument("ops", nargs="?", default=None, help="JSON array of ops ('-' for stdin, '@file' for a file); omit when using --items")
+    pp.add_argument(
+        "--items",
+        default=None,
+        help="batch mode: JSON array of {path, ops, expected_mtime?} ('-' for stdin, '@file' for a file); XOR path+ops",
+    )
     pp.add_argument("--strict", action="store_true")
     pp.add_argument("--dry-run", action="store_true")
     pp.add_argument("--verbose", action="store_true")
@@ -539,6 +643,7 @@ def main(argv: list[str] | None = None) -> int:
     pp.add_argument("--expected-frontmatter-hash", default=None)
     pp.add_argument("--expected-body-hash", default=None)
     pp.add_argument("--expected-content-hash", default=None)
+    pp.add_argument("--no-diff", action="store_true", help="skip the before/after read used to print a diff")
     pp.set_defaults(func=_cmd_patch)
 
     pt = sub.add_parser("patch-table", parents=[common], help="GFM table row/cell mutators")
@@ -549,6 +654,7 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--verbose", action="store_true")
     pt.add_argument("--expected-mtime", type=float, default=None)
     pt.add_argument("--expected-content-hash", default=None)
+    pt.add_argument("--no-diff", action="store_true", help="skip the before/after read used to print a diff")
     pt.set_defaults(func=_cmd_patch_table)
 
     pg = sub.add_parser("graph-neighbors", parents=[common], help="wiki-link graph traversal")

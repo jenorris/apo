@@ -164,6 +164,19 @@ class DiscoveryRegistryTests(unittest.TestCase):
         self.assertIn(str(a), os.environ.get("APO_VAULT_PATHS", ""))
         self.assertEqual(os.environ.get("APO_DEFAULT_VAULT"), "alpha")
 
+    def test_apply_discovery_argv_vault_path_alias(self):
+        """--vault-path is the preferred spelling (matches add_discovery_arguments'
+        CLI convention); bare --vault is kept only as a back-compat alias."""
+        a = self.root / "a"
+        a.mkdir()
+        _write_usage(a, "alpha")
+        remaining = vaults.apply_discovery_argv(
+            ["server.py", "--vault-path", str(a), "--default", "alpha", "--other"]
+        )
+        self.assertEqual(remaining, ["server.py", "--other"])
+        self.assertIn(str(a), os.environ.get("APO_VAULT_PATHS", ""))
+        self.assertEqual(os.environ.get("APO_DEFAULT_VAULT"), "alpha")
+
 
 if __name__ == "__main__":
     unittest.main()

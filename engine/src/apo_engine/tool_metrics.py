@@ -45,6 +45,9 @@ _EXTRA_COLS = (
     ("apo_version", "VARCHAR"),
     ("flaws_emitted", "INTEGER"),
     ("flaws_auto_fixed", "INTEGER"),
+    # Calling surface — "mcp" (via ToolMetricsMiddleware) or "cli" (apo-local).
+    # NULL for historical rows recorded before this column existed.
+    ("surface", "VARCHAR"),
 )
 
 
@@ -249,8 +252,8 @@ def _insert_events(
                 ts, collection, tool, ok, error, duration_ms, req_bytes, resp_bytes,
                 folder_set, fields_set, expected_mtime_set, used_alias, ops_count, error_shape,
                 vault_id, conversation_id, note_path, path_hash, heading, chunk_hash, apo_version,
-                flaws_emitted, flaws_auto_fixed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                flaws_emitted, flaws_auto_fixed, surface
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 event.get("ts"),
@@ -282,6 +285,7 @@ def _insert_events(
                 int(flags["flaws_auto_fixed"])
                 if flags.get("flaws_auto_fixed") is not None
                 else None,
+                event.get("surface") or None,
             ],
         )
 
@@ -398,8 +402,15 @@ def record_call(
     arguments: dict[str, Any] | None = None,
     conversation_id: str | None = None,
     path: Path | None = None,
+    surface: str = "",
 ) -> None:
-    """Insert one tool-call event. Best-effort — never raises to callers."""
+    """Insert one tool-call event. Best-effort — never raises to callers.
+
+    ``surface`` tags which entry point made the call — ``"mcp"``
+    (``ToolMetricsMiddleware``, the default caller) vs. ``"cli"``
+    (``apo-local``) — so CLI usage isn't invisible to habit-KPI reads over
+    this table. Unset on historical rows recorded before this column existed.
+    """
     if not metrics_enabled(vault_root):
         return
     policy = tc.policy_for_vault(vault_root)
@@ -415,6 +426,7 @@ def record_call(
         "resp_bytes": int(resp_bytes),
         "vault_id": (vault_id or policy.vault_id or "").strip() or None,
         "apo_version": engine_version(),
+        "surface": (surface or "").strip() or None,
     }
     if flags:
         event.update(flags)
@@ -477,7 +489,7 @@ def _embedded_read_events(
                            folder_set, fields_set, expected_mtime_set, used_alias,
                            ops_count, error_shape, vault_id, conversation_id,
                            note_path, path_hash, heading, chunk_hash, apo_version,
-                           flaws_emitted, flaws_auto_fixed
+                           flaws_emitted, flaws_auto_fixed, surface
                     FROM tool_calls
                     WHERE collection = ?
                 """

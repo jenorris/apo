@@ -9,7 +9,7 @@ Separate indexes are intentional: isolation (no cross-vault ranking bleed), inde
 | Mechanism | Role |
 |-----------|------|
 | `APO_COLLECTION_ROOT` / `--collection-root` | **Primary autoconfigure** — parent directory of vaults. Each immediate child with a usage-contract `vault_id` is registered. Non-vault siblings (e.g. `Wiki/`) are skipped. |
-| `--vault PATH` (MCP) / `APO_VAULT_PATHS` | Explicit roots (colon-separated). Workbench escape hatch for non-sibling trees (e.g. `compliance`). |
+| `--vault-path PATH` (MCP; `--vault` is a back-compat alias — do not confuse with `apo-engine`/`apo-local`'s unrelated `--vault NAME`) / `APO_VAULT_PATHS` | Explicit roots (colon-separated). Workbench escape hatch for non-sibling trees (e.g. `compliance`). |
 | `APO_DEFAULT_VAULT` / `--default` | Default `vault=` when empty (required when more than one vault and no unique `memory.default_vault` claim). |
 | `APO_VAULTS` (compat) | JSON file/object — **roots only**; object keys and `collection` are ignored. Names come from usage `vault_id`. Optional `index` still honored during cutover. Emits a deprecation warning. |
 | `APO_NOTES_ROOT` | Legacy single-root when nothing above is set. |
@@ -50,12 +50,16 @@ MCP argv equivalent:
 
 ```bash
 apo-mcp \
-  --vault ~/Notes/Work \
-  --vault ~/Notes/Contracts \
-  --vault ~/Notes/Optima \
-  --vault ~/Workbench/compliance \
+  --vault-path ~/Notes/Work \
+  --vault-path ~/Notes/Contracts \
+  --vault-path ~/Notes/Optima \
+  --vault-path ~/Workbench/compliance \
   --default work
 ```
+
+(`--vault` still works as a back-compat alias for `--vault-path` here, but don't
+confuse it with `apo-engine`/`apo-local` subcommands' own `--vault NAME` — that
+one takes a registered `vault_id`, not a filesystem path.)
 
 **Hard gate:** MCP and `apo-engine watch` / launchd must use the **same** discovery env. Mismatch is a support footgun.
 

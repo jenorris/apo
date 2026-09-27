@@ -3825,8 +3825,9 @@ def patch_entry(
     return _err(
         error="bad_request",
         message=(
-            "provide path+ops for one note, place-only ops=[{op:place,src,dst}], "
-            "or items=[{path?, ops, expected_mtime?}] for a batch"
+            "provide path+ops for one note, or place-only ops=[{op:place,src,dst}] "
+            "(MCP patch_note); items=[{path?, ops, expected_mtime?}] batch mode is "
+            "not exposed via MCP — use apo-local patch --items @file.json instead"
         ),
     )
 

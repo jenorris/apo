@@ -219,6 +219,8 @@ apo search "quarterly planning"     # note-verb search — mirrors search_notes,
 
 Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day edits.
 
+`apo-local`'s exit codes (for scripting): `0` ok, `2` not found, `1` any other error — the JSON payload's `error`/`message` fields have the specifics either way.
+
 ## MCP tools
 
 | Surface | Count | Notes |

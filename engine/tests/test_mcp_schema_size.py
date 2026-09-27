@@ -19,7 +19,11 @@ from test_patch_note_schema import _list_tools_lean, _tool_params
 # point of terseness; the alternative (silently-ignored fields on the wrong
 # action) was worse. See mcp_action_schemas.py's own docstring.
 # Raised 2026-08-31: graph_neighbors tool + search_notes explain= param.
-TOTAL_TOOLS_CHAR_CEILING = 31_600
+# Raised 2026-09-26: vault action okf_dry_run — was implemented in ops.vault_op
+# and tested at the okf module level, but unreachable from any user-facing
+# surface (missing from this union, no CLI path, no RPC route). Closing a
+# real capability gap costs one more discriminated-union variant (+284 chars).
+TOTAL_TOOLS_CHAR_CEILING = 31_900
 PATCH_NOTE_CHAR_CEILING = 6_000
 PATCH_TABLE_CHAR_CEILING = 5_500
 MCP_INSTRUCTIONS_CHAR_CEILING = 900
