@@ -94,6 +94,24 @@ class TableIndexTest(unittest.TestCase):
         top = row_hits[0]
         self.assertEqual(top["row_key"], "2026-06-07")
 
+    def test_breadcrumb_skips_title_repeated_as_h1(self):
+        """A note's H1 commonly repeats its frontmatter/filename title — the
+        embedded breadcrumb shouldn't duplicate it ("Title > Title > ...")."""
+        note = (
+            "---\ntitle: Annie Wade\n---\n\n"
+            "# Annie Wade\n\n"
+            "## Directory\n\n"
+            "| Field | Value |\n| --- | --- |\n| GitHub | — |\n"
+        )
+        (self.vault / "person.md").write_text(note, encoding="utf-8")
+        core.index_vault(verbose=False)
+        db = core.reader_connect()
+        row = db.execute(
+            "SELECT text FROM chunks WHERE path='person.md' AND chunk_kind='table_row'"
+        ).fetchone()
+        self.assertEqual(row[0].count("Annie Wade"), 1)
+        self.assertIn("Annie Wade > Directory", row[0])
+
     def test_search_hit_content_hash_matches_index(self):
         out = ops.search("Oil change", limit=10)
         row_hit = next(r for r in out["results"] if r.get("row_key") == "2026-07-01")

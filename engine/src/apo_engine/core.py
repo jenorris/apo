@@ -242,7 +242,13 @@ def _markdown_chunk_rows(text: str, rel: str) -> list[tuple]:
             if s_start <= abs_start <= s_end:
                 parent_breadcrumb = bc
                 parent_chunk_hash = cid
-        crumbs = [note_title] + [c for c in parent_breadcrumb.split(BREADCRUMB_SEP) if c]
+        parent_crumbs = [c for c in parent_breadcrumb.split(BREADCRUMB_SEP) if c]
+        if parent_crumbs and parent_crumbs[0] == note_title:
+            # Common case: the note's H1 repeats its title (frontmatter or
+            # filename stem) — skip the duplicate rather than embedding
+            # "Title > Title > ..." (36% of work-vault table rows did this).
+            parent_crumbs = parent_crumbs[1:]
+        crumbs = [note_title] + parent_crumbs
         table_id = tm.table_id_for(rel, abs_start, t.table_index)
         schema_hash = tm.table_schema_hash(t.headers)
         level = 0
@@ -301,7 +307,13 @@ def _markdown_chunk_rows(text: str, rel: str) -> list[tuple]:
             if s_start <= abs_start <= s_end:
                 parent_breadcrumb = bc
                 parent_chunk_hash = cid
-        crumbs = [note_title] + [c for c in parent_breadcrumb.split(BREADCRUMB_SEP) if c]
+        parent_crumbs = [c for c in parent_breadcrumb.split(BREADCRUMB_SEP) if c]
+        if parent_crumbs and parent_crumbs[0] == note_title:
+            # Common case: the note's H1 repeats its title (frontmatter or
+            # filename stem) — skip the duplicate rather than embedding
+            # "Title > Title > ..." (36% of work-vault table rows did this).
+            parent_crumbs = parent_crumbs[1:]
+        crumbs = [note_title] + parent_crumbs
         mermaid_rows, ord_counter = mi.chunk_mermaid_rows(
             fence.text,
             rel,
