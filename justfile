@@ -63,6 +63,13 @@ search *ARGS:
 search-eval *ARGS:
     {{eng}} search-eval {{ARGS}}
 
+# Run every discovered search-eval fixture (docs/examples/ + ~/.apo/search-eval-*.yaml):
+# fails loudly on stale `expect` paths (vault reorg silently zeroed a fixture) or a
+# hit@k drop past --regress-threshold points from each fixture's <name>.baseline.json.
+# First run per fixture: `just check-evals --write-baseline` to seed a baseline.
+check-evals *ARGS:
+    {{eng}} check-evals {{ARGS}}
+
 stats:
     {{eng}} stats
 

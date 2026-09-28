@@ -150,8 +150,13 @@ class RerankVaultTest(unittest.TestCase):
         self.assertEqual(report["queries"], 2)
         self.assertEqual(report["hit_at_k"], 0.5)
         self.assertGreater(report["mrr_at_k"], 0.0)
+        # `does-not-exist.md` isn't in the fixture vault at all — the staleness
+        # gate (search_eval.check_stale_expects) correctly flags this as STALE,
+        # not an ordinary ranking MISS (see test_search_eval_staleness.py for the
+        # gate's own tests).
+        self.assertEqual(report["stale_expect_count"], 1)
         text = search_eval.format_report(report)
-        self.assertIn("MISS", text)
+        self.assertIn("STALE", text)
 
 
 if __name__ == "__main__":
