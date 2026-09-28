@@ -3245,6 +3245,17 @@ def search(
 
     hits: list[Hit] = []
     full_texts: list[str] = []  # non-snippet bodies for the reranker
+    # Post-fusion result-diversity cap (config.RESULT_DIVERSITY_CAP): a same-source
+    # group (same table_id for table rows/headers, else same note path — see
+    # ranking.diversity_group_key) fills at most that many of the primary slots;
+    # anything over cap is held in overflow and only used to backfill remaining
+    # slots if the capped pool couldn't fill collect_n on its own. Soft cap — a
+    # sufficiently table-row-heavy fused pool can still under-diversify if there
+    # aren't enough other-source candidates in the fetched window.
+    overflow_hits: list[Hit] = []
+    overflow_texts: list[str] = []
+    group_counts: dict[str, int] = {}
+    diversity_cap = int(getattr(config, "RESULT_DIVERSITY_CAP", 2))
     for rid in ids:
         row = by_id.get(rid)
         if row is None:
@@ -3273,7 +3284,9 @@ def search(
         catalog_mult = ranking._catalog_retrieval_boost(
             path, chunk_kind or "section", folder_prefix, query=query
         )
-        path_mult, path_detail = ranking._path_retrieval_boost(path, chunk_kind or "section", query)
+        path_mult, path_detail = ranking._path_retrieval_boost(
+            path, chunk_kind or "section", query, text=text
+        )
         score = fused_norm * catalog_mult * path_mult
         hit_explain: dict[str, Any] = {}
         if explain:
@@ -3294,30 +3307,39 @@ def search(
             rid=rid,
             fts_rowids=fts_rowid_set,
         )
-        hits.append(
-            Hit(
-                path=path,
-                heading=heading or "",
-                text=out_text,
-                score=score,
-                chunk_hash=chunk_hash or "",
-                heading_level=int(hlevel or 0),
-                start_line=int(start_line or 1),
-                end_line=int(end_line or 1),
-                source=str(vaults.notes_root() / path),
-                mtime=float(mtime or 0.0),
-                file_bytes=int(file_bytes or 0),
-                section_bytes=int(section_bytes or 0),
-                content_hash=content_hash or "",
-                chunk_kind=chunk_kind or "section",
-                row_key=row_key or "",
-                table_id=table_id or "",
-                explain=hit_explain,
-            )
+        hit = Hit(
+            path=path,
+            heading=heading or "",
+            text=out_text,
+            score=score,
+            chunk_hash=chunk_hash or "",
+            heading_level=int(hlevel or 0),
+            start_line=int(start_line or 1),
+            end_line=int(end_line or 1),
+            source=str(vaults.notes_root() / path),
+            mtime=float(mtime or 0.0),
+            file_bytes=int(file_bytes or 0),
+            section_bytes=int(section_bytes or 0),
+            content_hash=content_hash or "",
+            chunk_kind=chunk_kind or "section",
+            row_key=row_key or "",
+            table_id=table_id or "",
+            explain=hit_explain,
         )
-        full_texts.append(text)
+        group_key = ranking.diversity_group_key(path, chunk_kind or "section", table_id or "")
+        if group_counts.get(group_key, 0) < diversity_cap:
+            group_counts[group_key] = group_counts.get(group_key, 0) + 1
+            hits.append(hit)
+            full_texts.append(text)
+        else:
+            overflow_hits.append(hit)
+            overflow_texts.append(text)
         if len(hits) >= collect_n:
             break
+    if len(hits) < collect_n and overflow_hits:
+        need = collect_n - len(hits)
+        hits.extend(overflow_hits[:need])
+        full_texts.extend(overflow_texts[:need])
     hits, full_texts = ranking._inject_phrase_stem_hits(
         hits, query, folder_prefix, explain=explain, full_texts=full_texts
     )
@@ -3332,7 +3354,9 @@ def search(
             hits = lex_fallback[:collect_n]
             full_texts = [h.text for h in hits]
             for h in hits:
-                mult, detail = ranking._path_retrieval_boost(h.path, h.chunk_kind or "section", query)
+                mult, detail = ranking._path_retrieval_boost(
+                    h.path, h.chunk_kind or "section", query, text=h.text
+                )
                 h.score = round(h.score * mult, 4)
                 if explain:
                     h.explain = {**(h.explain or {}), **detail, "lex_fallback": True}

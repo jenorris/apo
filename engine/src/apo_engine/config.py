@@ -156,6 +156,14 @@ EXCLUDE_HIT_SCAN_MAX: int = int(os.environ.get("APO_EXCLUDE_HIT_SCAN_MAX", "96")
 # Vault-wide architecture queries: cap post-fusion promotion pool (mermaid catalog boost).
 ARCH_PROMOTE_POOL: int = int(os.environ.get("APO_ARCH_PROMOTE_POOL", "48"))
 
+# Post-fusion result-diversity cap: max hits per (ranking.diversity_group_key) source —
+# same note path, or same table_id for table rows/headers — before search() backfills
+# remaining result slots from the rest of the candidate pool. Soft cap (candidate pool
+# may still be exhausted before k is reached): keeps one crowded table or note from
+# consuming the whole top-k at the expense of other matching notes. Measured on 30 real
+# queries: mean distinct paths in top-10 was 2.93 without this cap.
+RESULT_DIVERSITY_CAP: int = int(os.environ.get("APO_RESULT_DIVERSITY_CAP", "2"))
+
 # Unscoped hybrid: cap global vec0 KNN neighbors (exact KNN over large indexes dominates p90).
 UNSCOPED_VEC_K: int = int(os.environ.get("APO_UNSCOPED_VEC_K", "48"))
 
