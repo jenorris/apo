@@ -2,6 +2,70 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [0.31.0] — 2026-09-27
+
+A follow-up review of Apo's intermediate search representation — not "is the
+index too big" but "is the chunking/ranking strategy actually good" — found
+five real problems downstream of the 0.30.0 rebuild. Fixed all of them, plus
+the breadcrumb duplication and eval-harness gap the review also flagged.
+
+### Fixed
+
+- **Mermaid parser dropped most hand-authored diagrams** — a dead regex, a
+  subgraph pattern that required quoted labels, no support for dotted/thick/
+  chained edges, and a greedy sequence-diagram arrow regex that turned
+  `API-->>MCP` into a phantom node `API-`. Measured on 10 real Work-vault
+  fences: node coverage 34→64 ids, label-less nodes 6→3 (the remainder are
+  legitimate subgraph-as-node references, not bugs). Two fences that
+  previously failed to parse at all now fully parse. Non-flow diagram types
+  (`xychart-beta`, `gitGraph`, `pie`, and 16 others) now short-circuit to
+  file-level indexing instead of falling through to flowchart regexes and
+  producing garbage nodes from unrelated syntax (e.g. a bar chart's data
+  series numbers).
+- **Mermaid node/edge chunks carried no relational context.** Edge chunks
+  embedded raw node ids (`P0 --> P3`) instead of labels; node chunks carried
+  no information about what they connect to or from, despite a diagram
+  node's meaning being inherently relational. Both now resolve ids to labels
+  and node chunks append 1-hop in/out context (`· from: Core API · to:
+  Stripe — card, Authorize.net — ACH`); `read_note(format="node")` returns
+  the same in/out lists so the read and embed paths agree.
+  `include_edge_chunks` now defaults to `false` (edges are largely redundant
+  once nodes carry relational context) — an explicit `true`/`false` in a
+  contract still wins, so no already-configured vault's behavior changes.
+- **Folder-scoped search injection picked the wrong representative chunk.**
+  `table_row`/`table_header`/`mermaid_*` chunks are all stored with
+  `heading_level=0`, so `ORDER BY heading_level ASC` systematically preferred
+  a generic table/mermaid chunk over a note's actual prose content — measured
+  on a live query, a `Metadata — Columns: Field, Value` table header
+  outscored the note's real diagram content 2.24–2.90 to 1.30. Now prefers
+  section chunks, falling back to table/mermaid only when a note has none.
+- **`table_header` chunks were redundant noise** — 14% of all top-10 hits
+  across 30 real queries were generic `Columns: Field, Value`-style chunks
+  carrying zero note-specific information (the section chunk's
+  `[table: N rows — cols]` marker already covers this). Demoted (not
+  removed — `_build_toc`/note-outline reads still need the rows).
+- **No result-set diversification** — every ranking boost applies per-path
+  identically to every chunk of that path, so a table with many matching
+  rows could crowd out everything else: 11 of 30 real queries had 4+ results
+  from one source. Added a soft per-path cap (`APO_RESULT_DIVERSITY_CAP`,
+  default 2) in the fusion step, backfilling remaining slots from the rest
+  of the pool if the capped selection doesn't fill `k`. A synthetic
+  crowded-table query went from 2 distinct paths in the top-5 to 4.
+- Table/mermaid chunk breadcrumbs duplicated the note title when a note's H1
+  repeats its frontmatter/filename title (36% of work-vault table rows did
+  this) — `"Title > Title > Section"` instead of `"Title > Section"`, pure
+  wasted prefix averaging 21% of chunk text.
+- **The eval harness had no way to detect its own fixtures going stale** — a
+  compliance-vault doc migration silently broke 18 of 19 `expect` paths in a
+  mermaid eval a month ago (86%→0% hit@3), and nothing noticed because
+  nothing runs the evals routinely and a stale `expect` scored identically
+  to a real miss. Added a staleness gate (distinct `STALE` vs `MISS`,
+  non-zero exit), result-composition metrics (`distinct_paths@k`,
+  `max_same_path@k`, `chunk_kind` breakdown — the numbers that `hit@k`/`MRR`
+  hide), and `just check-evals` to run every discovered fixture against a
+  checked-in baseline. Re-labeled the repo-tracked mermaid fixtures against
+  their real post-migration paths.
+
 ## [0.30.0] — 2026-09-27
 
 A performance/simplicity/maintainability review turned up a live search-quality
