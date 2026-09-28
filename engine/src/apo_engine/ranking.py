@@ -220,6 +220,45 @@ def _eval_table_demotion(path: str, chunk_kind: str, query: str) -> float:
     return 1.0
 
 
+# Generic 2-column key/value shapes carry zero note-specific schema information —
+# core._collapse_full_tables already embeds the real column list (with note context)
+# into the section chunk's own "[table: N rows — cols]" marker, so a table_header
+# chunk whose columns are just one of these pairs is a pure "super-matcher" that
+# reads as a plausible hit for nearly any query mentioning "field"/"key"/"value"/etc,
+# with nothing differentiating it from thousands of other tables in the vault.
+_GENERIC_TABLE_HEADER_COL_SETS = frozenset(
+    {
+        frozenset({"field", "value"}),
+        frozenset({"key", "value"}),
+        frozenset({"property", "value"}),
+        frozenset({"name", "value"}),
+    }
+)
+_TABLE_HEADER_COLS_RE = re.compile(r"Columns:\s*(.+)$")
+
+
+def _is_generic_table_header_text(text: str) -> bool:
+    """True when a table_header chunk's column list is a generic key/value pair.
+
+    Matches ``header_flatten_text``'s ``"{breadcrumb} — Columns: {cols}"`` /
+    ``"Columns: {cols}"`` shape (see ``table_markdown.header_flatten_text``) —
+    only the trailing column list matters, so this doesn't care whether a
+    breadcrumb precedes it.
+    """
+    m = _TABLE_HEADER_COLS_RE.search(text or "")
+    if not m:
+        return False
+    cols = frozenset(c.strip().lower() for c in m.group(1).split(",") if c.strip())
+    return bool(cols) and cols in _GENERIC_TABLE_HEADER_COL_SETS
+
+
+def _generic_table_header_demotion(chunk_kind: str, text: str) -> float:
+    """Demote table_header hits whose columns carry no differentiating content."""
+    if chunk_kind != "table_header":
+        return 1.0
+    return 0.55 if _is_generic_table_header_text(text) else 1.0
+
+
 _backlink_count_cache: dict[str, tuple[float, int]] = {}
 _backlink_count_lock = threading.Lock()
 
@@ -370,7 +409,10 @@ def _inject_phrase_stem_hits(
                       COALESCE(c.chunk_kind, 'section'),
                       COALESCE(c.row_key, ''), COALESCE(c.table_id, '')
                FROM chunks c LEFT JOIN files f ON f.path = c.path
-               WHERE c.path = ? ORDER BY c.heading_level ASC, c.start_line ASC LIMIT 1""",
+               WHERE c.path = ?
+               ORDER BY (COALESCE(c.chunk_kind, 'section') != 'section'),
+                        c.heading_level ASC, c.start_line ASC
+               LIMIT 1""",
             (path,),
         ).fetchone()
         if not row:
@@ -391,7 +433,7 @@ def _inject_phrase_stem_hits(
             row_key,
             table_id,
         ) = row
-        path_mult, path_detail = _path_retrieval_boost(path, chunk_kind or "section", query)
+        path_mult, path_detail = _path_retrieval_boost(path, chunk_kind or "section", query, text=text)
         score = round(top_score * 0.92 * path_mult, 4)
         hit_explain: dict[str, Any] = {}
         if explain:
@@ -430,19 +472,28 @@ def _path_retrieval_boost(
     path: str,
     chunk_kind: str,
     query: str,
+    *,
+    text: str = "",
 ) -> tuple[float, dict[str, float]]:
-    """Post-fusion multipliers for slug/ticket recall and backlink rank."""
+    """Post-fusion multipliers for slug/ticket recall and backlink rank.
+
+    ``text`` is optional (defaults to no-op for the generic-header check) — pass
+    the chunk's own text when available so ``table_header`` demotion can inspect
+    its column list.
+    """
     slug = _slug_ticket_boost(path, query)
     phrase = _phrase_stem_boost(path, query)
     title_fm = _title_frontmatter_boost(path, query)
     demote = _eval_table_demotion(path, chunk_kind, query)
+    generic_header = _generic_table_header_demotion(chunk_kind, text)
     bl = _backlink_search_boost(path)
-    combined = slug * phrase * title_fm * demote * bl
+    combined = slug * phrase * title_fm * demote * generic_header * bl
     detail = {
         "slug_boost": slug,
         "phrase_stem_boost": phrase,
         "title_frontmatter_boost": title_fm,
         "table_demotion": demote,
+        "generic_table_header_demotion": generic_header,
         "backlink_boost": bl,
     }
     return combined, detail
@@ -510,7 +561,7 @@ def _apply_path_boosts_to_hits(
     if folder_prefix:
         hits, _ = _inject_phrase_stem_hits(hits, query, folder_prefix, explain=explain)
     for h in hits:
-        mult, detail = _path_retrieval_boost(h.path, h.chunk_kind or "section", query)
+        mult, detail = _path_retrieval_boost(h.path, h.chunk_kind or "section", query, text=h.text)
         h.score = round(h.score * mult, 4)
         if explain:
             h.explain = h.explain or {}
@@ -520,6 +571,22 @@ def _apply_path_boosts_to_hits(
     if neighbor:
         hits = _neighbor_rank_boost(hits, query, explain=explain)
     return hits
+
+
+def diversity_group_key(path: str, chunk_kind: str, table_id: str) -> str:
+    """Grouping key for the post-fusion result-diversity cap (see ``core.search``).
+
+    Groups by note path — every ``table_row``/``table_header`` chunk already
+    belongs to exactly one path (a table never spans notes), so path is a
+    superset-safe grouping: it caps a crowded table *and* caps a note that
+    combines a matching prose section with that same table, whereas grouping
+    by ``table_id`` alone would let those add up separately and still crowd
+    one note's chunks into most of the result list. ``table_id`` is accepted
+    (not currently used to subdivide the key) so a finer per-table cap can be
+    layered in later without changing every call site.
+    """
+    del chunk_kind, table_id  # not currently used to subdivide the key — see above
+    return f"path:{path}"
 
 
 def _catalog_retrieval_boost(
