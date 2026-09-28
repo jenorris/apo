@@ -1,0 +1,20 @@
+{
+  "composition": {
+    "k": 3,
+    "kind_share_at_k": {
+      "mermaid_file": 0.1061,
+      "mermaid_header": 0.0152,
+      "mermaid_node": 0.1061,
+      "table_header": 0.5758,
+      "table_row": 0.1667,
+      "unknown": 0.0303
+    },
+    "mean_distinct_paths_at_k": 2.455,
+    "mean_max_same_path_at_k": 1.545,
+    "queries_scored": 22
+  },
+  "hit_at_k": 0.4091,
+  "k": 3,
+  "mrr_at_k": 0.197,
+  "queries": 22
+}

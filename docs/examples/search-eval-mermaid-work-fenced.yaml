@@ -1,17 +1,28 @@
 # Mermaid search eval — Work vault fenced diagrams
 # Copy to ~/.apo/search-eval-mermaid-work-fenced.yaml
+#
+# Re-labeled 2026-09-27 (harden-search-eval): 3 of the original 8 expect paths
+# had no surviving note at all (`just check-evals`'s stale-expect gate would
+# have caught this the day the underlying notes were deleted/restructured,
+# instead of it sitting at a silent 50% hit@3). Verified against the live
+# ~/Notes/Work vault:
+#   - "vault registers mermaid architecture" (areas/work/vault-registers.md) —
+#     no successor note; no mermaid diagram anywhere under areas/work/ anymore.
+#     Removed.
+#   - "gradguard ai workbench plan diagram" (projects/gradguard-ai-workbench/plan.md) —
+#     project restructured into projects/ai-workbench-baseline/{README,candidates,
+#     segments/*}.md, none of which contain a mermaid diagram. Removed (no valid
+#     diagram target to re-point to).
+#   - "SDLC cycle retrospective diagram" (areas/work/sdlc/cycle-retrospective.md) —
+#     no successor note; areas/work/sdlc/ no longer exists. Removed.
+# "partner IDP SSO sis architecture" is left as-is: sis-complementary-architecture.md
+# still exists on disk — that's a genuine ranking miss (partner-idp-sso.md outranks
+# it), not staleness; leave it for the ranking-side work, not this eval file.
 
 vault: work
 k: 3
 
 queries:
-  - query: vault registers mermaid architecture
-    expect: [areas/work/vault-registers.md]
-    expect_chunk_kind: mermaid_node
-
-  - query: gradguard ai workbench plan diagram
-    expect: [projects/gradguard-ai-workbench/plan.md]
-
   - query: slack status bot flow diagram
     expect: [system/config/slack-status-bot.md]
 
@@ -26,6 +37,3 @@ queries:
 
   - query: partner IDP SSO sis architecture
     expect: [projects/partner-idp-sso/sis-complementary-architecture.md]
-
-  - query: SDLC cycle retrospective diagram
-    expect: [areas/work/sdlc/cycle-retrospective.md]

@@ -1,4 +1,4 @@
-"""Command-line interface: index | search-eval | stats | doctor | watch | desk-project."""
+"""Command-line interface: index | search-eval | check-evals | stats | doctor | watch | desk-project."""
 from __future__ import annotations
 
 import argparse
@@ -101,7 +101,34 @@ def _cmd_search_eval(args) -> int:
         print(json.dumps(report, indent=2))
     else:
         print(search_eval.format_report(report, verbose=args.verbose))
-    return 0
+    # Distinct, non-zero exit when the fixture itself is stale (expect paths gone
+    # missing) — separate signal from an ordinary ranking miss, which stays exit 0
+    # here (the routine `check-evals` gate is what fails a build on those).
+    return 2 if report.get("stale_expect_count") else 0
+
+
+def _cmd_check_evals(args) -> int:
+    from . import search_eval
+
+    files = search_eval.discover_eval_files(args.dir)
+    if not files:
+        print("check-evals: no fixture files found (docs/examples/ + ~/.apo/)", file=sys.stderr)
+        return 1
+    results = [
+        search_eval.check_eval_file(
+            f,
+            regress_threshold=args.regress_threshold,
+            save_new_baseline=args.write_baseline,
+        )
+        for f in files
+    ]
+    if args.json:
+        print(json.dumps(results, indent=2))
+    else:
+        print(search_eval.format_check_evals_report(results))
+    if args.write_baseline:
+        return 0
+    return search_eval.check_evals_exit_code(results)
 
 
 def _cmd_stats(args) -> int:
@@ -330,6 +357,32 @@ def main(argv: list[str] | None = None) -> int:
     pe.add_argument("--json", action="store_true")
     pe.add_argument("--verbose", action="store_true", help="also list per-query passes")
     pe.set_defaults(func=_cmd_search_eval)
+
+    pce = sub.add_parser(
+        "check-evals",
+        help="run every discovered search-eval fixture (docs/examples/ + ~/.apo/); "
+        "fail on stale expect paths or hit@k regression vs a stored baseline",
+    )
+    pce.add_argument(
+        "--dir",
+        action="append",
+        default=None,
+        help="fixture directory to scan (repeatable; default: docs/examples + ~/.apo)",
+    )
+    pce.add_argument(
+        "--regress-threshold",
+        type=float,
+        default=15.0,
+        help="max allowed hit@k point drop vs stored baseline before failing (default 15)",
+    )
+    pce.add_argument(
+        "--write-baseline",
+        action="store_true",
+        help="snapshot current hit@k/MRR/composition as each fixture's new baseline "
+        "(<fixture>.baseline.json) instead of checking against one; always exits 0",
+    )
+    pce.add_argument("--json", action="store_true")
+    pce.set_defaults(func=_cmd_check_evals)
 
     pt = sub.add_parser("stats", help="index stats")
     pt.add_argument("--vault", default=os.environ.get("APO_VAULT", ""), help="usage-contract vault_id ($APO_VAULT)")

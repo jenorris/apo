@@ -6,6 +6,16 @@
 # Run: just search-eval --file ~/.apo/search-eval-mermaid-policy-relay.yaml
 #
 # Gates (plan): catalog-scoped hit@3 ≥ 75%; vault-wide hit@3 ≥ 60%.
+#
+# Re-labeled 2026-09-27 (harden-search-eval) — same 2026-08-26 diagram-catalog
+# migration as search-eval-mermaid-compliance.yaml (see that file's header for
+# the full rename table). `network-diagram-pci` → `cde-network-diagram-pci-edition`
+# (still `diagram.mmd`, unfenced); `standard-data-flow`, `agency-data-flow`,
+# `delegated-tuition` → `delegated-tuition-data-flow`, and
+# `enrollment-renters-portal-starrez` → `starrez-renters-portal-integration-data-flow`
+# each renamed `diagram.mmd` → `<slug>.md` (fenced). `cardholder-data-flow` is
+# unchanged and still a real path (role now `deprecated` in catalog.yaml, but the
+# stub `diagram.mmd` stays on disk for audit trail — not stale).
 
 vault: compliance
 k: 3
@@ -14,12 +24,12 @@ queries:
   # --- Tier C: catalog-scoped (folder=diagrams/mermaid-catalog) ---
   - query: remote access cardholder data environment network
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/network-diagram-pci/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/cde-network-diagram-pci-edition/diagram.mmd]
     expect_chunk_kind: mermaid_file
 
   - query: ECS tasks cardholder data environment
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/network-diagram-pci/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/cde-network-diagram-pci-edition/diagram.mmd]
 
   - query: cardholder data environment incident scope systems
     folder: diagrams/mermaid-catalog
@@ -27,7 +37,7 @@ queries:
 
   - query: PCI compliant third party payment processors
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/standard-data-flow/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/standard-data-flow/standard-data-flow.md]
     expect_entity: Stripe
 
   - query: where does cardholder data flow to Stripe
@@ -52,49 +62,49 @@ queries:
 
   - query: CDE segmentation network isolation PCI
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/network-diagram-pci/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/cde-network-diagram-pci-edition/diagram.mmd]
 
   - query: cortana agency policy admin data flow
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/agency-data-flow/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/agency-data-flow/agency-data-flow.md]
 
   - query: delegated tuition billing only
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/delegated-tuition/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/delegated-tuition-data-flow/delegated-tuition-data-flow.md]
 
   - query: StarRez housing portal enrollment
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/enrollment-renters-portal-starrez/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/starrez-renters-portal-integration-data-flow/starrez-renters-portal-integration-data-flow.md]
 
   # --- Tier D: vault-wide (no folder=) — diagram must still rank ≤3 ---
   - query: how does GradGuard transmit cardholder data to payment processors
     expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
 
   - query: what AWS resources are in the cardholder data environment
-    expect: [diagrams/mermaid-catalog/network-diagram-pci/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/cde-network-diagram-pci-edition/diagram.mmd]
 
   - query: CDE ECS container Stripe payment
     expect:
       - diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd
-      - diagrams/mermaid-catalog/network-diagram-pci/diagram.mmd
+      - diagrams/mermaid-catalog/cde-network-diagram-pci-edition/diagram.mmd
 
   - query: no CHD storage payment processor architecture
-    expect: [diagrams/mermaid-catalog/standard-data-flow/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/standard-data-flow/standard-data-flow.md]
 
   - query: cardholder data flow Stripe Authorize.net skypad faber
     expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
 
   - query: PCI CDE network segmentation diagram architecture
-    expect: [diagrams/mermaid-catalog/network-diagram-pci/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/cde-network-diagram-pci-edition/diagram.mmd]
 
   - query: agency cortana call center agent data flow diagram
-    expect: [diagrams/mermaid-catalog/agency-data-flow/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/agency-data-flow/agency-data-flow.md]
 
   - query: StarRez renters enrollment portal integration architecture
-    expect: [diagrams/mermaid-catalog/enrollment-renters-portal-starrez/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/starrez-renters-portal-integration-data-flow/starrez-renters-portal-integration-data-flow.md]
 
   - query: delegated tuition only billing architecture flow
-    expect: [diagrams/mermaid-catalog/delegated-tuition/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/delegated-tuition-data-flow/delegated-tuition-data-flow.md]
 
   - query: standard data flow renters tuition Stripe payment processor
-    expect: [diagrams/mermaid-catalog/standard-data-flow/diagram.mmd]
+    expect: [diagrams/mermaid-catalog/standard-data-flow/standard-data-flow.md]
