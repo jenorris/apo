@@ -1,0 +1,14 @@
+flowchart LR
+  subgraph roster["Roster products — SIS essential"]
+    SIS2[SIS / ERP cohort]
+    Batch[SFTP / roster API / file import]
+    SIS2 --> Batch --> Covered[Policy membership — who is covered]
+  end
+
+  subgraph interactive["Interactive products — SSO superior"]
+    IdP2[Campus or partner IdP]
+    SSO2[SSO assertion + join key]
+    IdP2 --> SSO2 --> Action[Quote / purchase / opt-out UI]
+  end
+
+  SIS2 -.->|"canonical student_id"| SSO2

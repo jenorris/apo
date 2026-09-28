@@ -1,0 +1,15 @@
+sequenceDiagram
+  participant MCP as gradguard-core-mcp
+  participant API as Core API /v2
+
+  MCP->>API: GET /sanctum/csrf-cookie
+  API-->>MCP: Set-Cookie XSRF-TOKEN, api_v2
+  MCP->>API: POST /login + X-XSRF-TOKEN
+  API-->>MCP: agent id, requires_mfa
+  alt MFA required
+    MCP->>API: GET /mfa/sms or /mfa/email
+    Note over MCP: Human calls core_submit_mfa
+    MCP->>API: POST /mfa { code }
+  end
+  MCP->>API: POST /graphql/agent
+  API-->>MCP: data (permission-checked)
