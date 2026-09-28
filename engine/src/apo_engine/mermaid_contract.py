@@ -180,10 +180,15 @@ def chunk_strategy_for(vault_root: Path, rel: str) -> str:
 
 
 def include_edge_chunks(vault_root: Path, rel: str) -> bool:
+    """Default false: node chunks now carry their own 1-hop in/out relational
+    context (see mermaid_index.node_flatten_text), which makes a separate
+    `mermaid_edge` chunk mostly redundant for recall. Set
+    `include_edge_chunks: true` in a diagram rule to keep indexing edges
+    explicitly (e.g. for edge-label-only search)."""
     val = diagram_rule_for(vault_root, rel).get("include_edge_chunks")
     if isinstance(val, bool):
         return val
-    return True
+    return False
 
 
 def validation_mode(vault_root: Path, rel: str) -> str:

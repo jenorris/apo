@@ -1735,11 +1735,16 @@ def _attach_structured_table(
         if node is None:
             out_sec["format_warning"] = f"node {node_id!r} not found in diagram"
             return
+        from . import mermaid_index as mi
+
+        _label_by_id, in_map, out_map = mi.node_relations(diagram)
         out_sec["format"] = "node"
         out_sec["node"] = {
             "id": node.node_id,
             "label": node.label,
             "subgraph": node.subgraph,
+            "in_labels": in_map.get(node.node_id, []),
+            "out_labels": out_map.get(node.node_id, []),
         }
         out_sec["diagram_id"] = chunk.get("table_id")
         return

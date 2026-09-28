@@ -36,6 +36,7 @@ Ship [mermaid-contract.schema.yaml](mermaid-contract.schema.yaml) under `system/
 
 - `chunk_strategy`: `file_only` | `nodes` | `nodes_and_edges`
 - `flatten_template`
+- `include_edge_chunks`: default **false** — `mermaid_node` chunks carry their own 1-hop in/out relational context (`node_flatten_text`), so a separate `mermaid_edge` chunk is mostly redundant for recall. Set `true` to keep indexing edges explicitly.
 - `validation`: `soft` | `hard` | `off`
 
 Cross-reference: [table-contract.schema.yaml](table-contract.schema.yaml) — shared `chunk_kind`-aware search habits.

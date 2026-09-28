@@ -188,12 +188,99 @@ class CardholderMermaidIndexTest(unittest.TestCase):
         self.assertIn("SKY", text)
         self.assertNotIn("subgraph", text.lower())
 
+    def test_skypad_node_flatten_has_relational_context(self):
+        # SKY's meaning is 1-hop relational: fed by Core API, feeds Stripe/Auth.net.
+        nodes = [r for r in self._rows() if r[0] == "mermaid_node" and r[1] == "SKY"]
+        self.assertTrue(nodes, self._rows())
+        text = nodes[0][2]
+        self.assertIn("from:", text)
+        self.assertIn("to:", text)
+        self.assertIn("Core API", text)
+        self.assertIn("Stripe", text)
+        self.assertIn("Authorize.net", text)
+
+    def test_edge_chunk_uses_resolved_labels_not_raw_ids(self):
+        edges = [r for r in self._rows() if r[0] == "mermaid_edge" and r[1] == "SKY->STR"]
+        self.assertTrue(edges, self._rows())
+        text = edges[0][2]
+        self.assertIn("skypad", text.lower())
+        self.assertIn("stripe", text.lower())
+        self.assertNotIn("SKY --> STR", text)
+
     def test_file_chunk_has_catalog_prefix(self):
         files = [r for r in self._rows() if r[0] == "mermaid_file"]
         self.assertTrue(files)
         text = files[0][2]
         self.assertIn("cardholder-data-flow", text)
         self.assertIn("cardholder", text)
+
+    def test_read_note_format_node_returns_in_out_labels(self):
+        db = core.reader_connect()
+        row = db.execute(
+            "SELECT chunk_hash FROM chunks WHERE path=? AND chunk_kind='mermaid_node' AND row_key='SKY'",
+            ("diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd",),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        out = ops.read_note(chunk_hash=row[0], format="node")
+        self.assertTrue(out.get("ok", True), out)
+        node = out.get("node") or {}
+        self.assertEqual(node.get("id"), "SKY")
+        self.assertIn("Core API", node.get("in_labels") or [])
+        self.assertIn("Stripe — card", node.get("out_labels") or [])
+        self.assertIn("Authorize.net — ACH", node.get("out_labels") or [])
+
+
+class DefaultIncludeEdgeChunksTest(unittest.TestCase):
+    """No explicit ``include_edge_chunks`` in the contract → no mermaid_edge
+    chunks, since nodes now carry their own 1-hop relational context."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.vault = self.tmp / "vault"
+        catalog_dir = self.vault / "diagrams/mermaid-catalog/standard-data-flow"
+        catalog_dir.mkdir(parents=True)
+        (catalog_dir / "diagram.mmd").write_text(FIX.read_text(encoding="utf-8"), encoding="utf-8")
+        (self.vault / "diagrams/mermaid-catalog/catalog.yaml").write_text(
+            yaml.dump(
+                {"diagrams": [{"slug": "standard-data-flow", "title": "DFD", "type": "flowchart"}]}
+            ),
+            encoding="utf-8",
+        )
+        (self.vault / "system/contracts").mkdir(parents=True, exist_ok=True)
+        (self.vault / "system/contracts/mermaid-contract.schema.yaml").write_text(
+            "mermaid_contract_version: '0.1'\n"
+            "diagrams:\n"
+            "  - match: 'diagrams/mermaid-catalog/**/diagram.mmd'\n"
+            "    chunk_strategy: nodes_and_edges\n",
+            encoding="utf-8",
+        )
+        self.index = self.tmp / "index.db"
+        self._patches = [
+            mock.patch.object(config, "NOTES_ROOT", self.vault),
+            mock.patch.object(config, "INDEX_PATH", self.index),
+            mock.patch.object(config, "COLLECTION", "mermaid_default_edges_test"),
+            mock.patch.object(core, "embed", _fake_embed),
+            mock.patch.object(core, "query_embed", lambda q: _fake_embed([q])[0]),
+        ]
+        for p in self._patches:
+            p.start()
+        core.index_vault(rebuild=True, verbose=False)
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+        core.writer_close()
+        core.reader_close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_no_edge_chunks_by_default(self):
+        db = core.reader_connect()
+        rows = db.execute(
+            "SELECT chunk_kind FROM chunks WHERE path='diagrams/mermaid-catalog/standard-data-flow/diagram.mmd'"
+        ).fetchall()
+        kinds = [r[0] for r in rows]
+        self.assertIn("mermaid_node", kinds)
+        self.assertNotIn("mermaid_edge", kinds)
 
 
 if __name__ == "__main__":
