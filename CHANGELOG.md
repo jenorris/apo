@@ -2,6 +2,50 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [0.33.0] — 2026-09-28
+
+A usage-telemetry review of the `scratchpad` MCP tool (JSON/YAML staging
+buffer: create → patch → commit) found zero production calls in the 33 days
+since its current design shipped (0.22.0), a target workload (~2% of writes)
+already served by `patch_note(set_field)` on `.yaml`, and the weakest write
+path in the engine: no CAS guard on commit, no suffix check (JSON could land
+on a `.md` path), and buffers that leaked under `~/.apo/scratchpads/` with no
+TTL sweep. Retired it; folded its one unique capability into the regular
+write path.
+
+### Removed
+
+- **`scratchpad` MCP tool** and everything only it used: `scratchpad.py`,
+  `scratchpad_store.py`, `scratchpad_format.py`, `scratchpad_validate.py`,
+  the `ScratchpadAction` request union, `patch_ops.ScratchpadOp`,
+  `ops.scratchpad_op`, the ACTIVE/STAGED/PROMOTED session states,
+  `docs/scratchpad.md`, and the `jsonschema` direct dependency (commit-time
+  `schema_path` / `schema_type` validation had no other reader; `jsonschema`
+  still arrives transitively via `mcp`). Top-level tool count is now **12**.
+  `okf-contract` `type_profiles` stays a recognised key but nothing in the
+  engine reads it any more. On-disk `~/.apo/scratchpads/` is not touched by
+  the engine; remove it by hand.
+- `write_note(catalog_format=)` — the flag only scratchpad's commit could set.
+
+### Added
+
+- **`.json` catalogs via `write_note` / `patch_note`.** The mutator suffix
+  gate (`MUTATOR_SUFFIXES`) now accepts `.json` alongside `.md` / `.yaml` /
+  `.yml` / `.mmd`. `write_note` on a `.json` path takes the raw-catalog branch
+  scratchpad's commit used to reach — whole-file CAS (`expected_mtime` /
+  region hashes), no OKF stamp or frontmatter wrapper — inferred from the
+  suffix, and refuses content that does not parse as JSON
+  (`validation_failed`). `patch_note(set_field | delete_field)` on a `.json`
+  path routes through the new `json_patch` module (same dotted-path /
+  `[id=…]` selector semantics as `yaml_patch`, sharing its op loop; values
+  stay native JSON, no YAML scalar coercion) behind the same `expected_mtime`
+  guard every other suffix already had — JSON patching finally gets the
+  staleness check scratchpad never offered. Markdown / table ops on `.json`
+  return `unsupported_format`; `append_note` refuses `.json` like it refuses
+  `.yaml`. `.json` stays outside `NOTE_SUFFIXES` on purpose: the indexer,
+  watcher, lint walk and OKF stamp keep ignoring it, and `.json` writes do
+  not enqueue an index update (a full reindex would never produce those rows).
+
 ## [0.32.0] — 2026-09-28
 
 A review of contract-projection effectiveness — does the desk policy an AI

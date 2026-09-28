@@ -24,9 +24,7 @@ from apo_engine.mcp_auth import build_auth_provider_from_env
 from apo_engine.mcp_backend import ApoStore
 from apo_engine.mcp_instructions import MCP_INSTRUCTIONS as _MCP_INSTRUCTIONS
 from apo_engine.mcp_action_schemas import (
-    SCRATCHPAD_ACTION_FIELD_DESC,
     VAULT_ACTION_FIELD_DESC,
-    ScratchpadAction,
     VaultAction,
 )
 from apo_engine.patch_ops import (
@@ -1009,22 +1007,6 @@ async def history(
         exclude=exclude,
         fields=fields,
     )
-
-
-@mcp.tool(
-    annotations={
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": False,
-    },
-)
-async def scratchpad(
-    request: Annotated[ScratchpadAction, Field(description=SCRATCHPAD_ACTION_FIELD_DESC)],
-) -> dict:
-    """Ephemeral JSON/YAML payload workshop: create → patch → commit."""
-    kwargs = request.model_dump(mode="python", exclude={"action"})
-    return await asyncio.to_thread(apo_ops.scratchpad_op, request.action, **kwargs)
 
 
 @mcp.tool(

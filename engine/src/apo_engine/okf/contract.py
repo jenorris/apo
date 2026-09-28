@@ -313,10 +313,12 @@ def load_contract(path: Path) -> OkfContract:
 ENFORCEMENTS = ("exempt", "reserved", "soft", "hard")
 SPEC_TYPE_POLICIES = ("fill", "mirror", "off")
 GENERATED_POLICIES = ("off", "forward")
-# Top-level keys the engine (loader + scratchpad type_profiles) actually reads.
-# ``bundle_root`` is the template's documentation pointer; ``okf_contract_version``
-# is the generic contract version key. Anything else is silently ignored on
-# load — ``check_contract`` makes that visible.
+# Top-level keys the engine loader actually reads. ``bundle_root`` is the
+# template's documentation pointer; ``okf_contract_version`` is the generic
+# contract version key; ``type_profiles`` is shape-checked only (its last
+# engine reader, the scratchpad commit validator, was retired in 0.33.0).
+# Anything else is silently ignored on load — ``check_contract`` makes that
+# visible.
 KNOWN_TOP_KEYS = frozenset(
     {
         "okf_version",

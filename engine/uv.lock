@@ -44,11 +44,10 @@ wheels = [
 
 [[package]]
 name = "apo-engine"
-version = "0.32.0"
+version = "0.33.0"
 source = { editable = "." }
 dependencies = [
     { name = "duckdb" },
-    { name = "jsonschema" },
     { name = "pyyaml" },
     { name = "ruamel-yaml" },
     { name = "sqlite-vec" },
@@ -88,7 +87,6 @@ requires-dist = [
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.0.0" },
     { name = "httpx", marker = "extra == 'mcp'", specifier = ">=0.27" },
     { name = "joserfc", marker = "extra == 'dev'", specifier = ">=1.0" },
-    { name = "jsonschema", specifier = ">=4.18" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.20" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otlp'", specifier = ">=1.30" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20" },

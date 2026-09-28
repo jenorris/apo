@@ -1,14 +1,14 @@
-"""Typed per-action request models for the ``vault`` and ``scratchpad`` MCP
-tools (discriminated union on ``action``), mirroring ``patch_ops.py``'s
-op-union pattern for note mutations.
+"""Typed per-action request models for the ``vault`` MCP tool (discriminated
+union on ``action``), mirroring ``patch_ops.py``'s op-union pattern for note
+mutations.
 
 Before: one flat parameter bag per tool, most fields scoped only by prose
 ("lint only:", "clone only:") — e.g. ``vault``'s 12 params where any single
 action actually reads 2-6 of them. After: each action gets its own request
-model with only the fields it consumes (see ``apo_engine.ops.vault_op`` /
-``apo_engine.scratchpad.scratchpad_op`` for what each action actually reads),
-and FastMCP/pydantic reject unknown fields per variant instead of silently
-accepting (and ignoring) a field that belongs to a different action.
+model with only the fields it consumes (see ``apo_engine.ops.vault_op`` for
+what each action actually reads), and FastMCP/pydantic reject unknown fields
+per variant instead of silently accepting (and ignoring) a field that belongs
+to a different action.
 
 Field descriptions here are deliberately terse: a discriminated union repeats
 each variant's own field schema in full (no shared "lint only:" prose block
@@ -19,11 +19,9 @@ tool-list cost — backfires. See test_mcp_schema_size.py's char ceiling.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
-
-from apo_engine.patch_ops import SCRATCHPAD_OPS_FIELD_DESC, ScratchpadOp
 
 
 class _ActionBase(BaseModel):
@@ -111,55 +109,4 @@ VaultAction = Annotated[
 VAULT_ACTION_FIELD_DESC = (
     "list | contracts | describe | merge | project | stats | lint | clone | okf_dry_run — "
     "each variant lists only its own params."
-)
-
-
-class ScratchpadCreateRequest(_ActionBase):
-    action: Literal["create"]
-    format: Annotated[str | None, Field(description="json | yaml (default json).")] = None
-    content: Annotated[
-        str | dict[str, Any] | list[Any] | None,
-        Field(description="Seed buffer. Omitted format: JSON, then YAML; prose refused."),
-    ] = None
-
-
-class ScratchpadReadRequest(_ActionBase):
-    action: Literal["read"]
-    session_id: str
-
-
-class ScratchpadPatchRequest(_ActionBase):
-    action: Literal["patch"]
-    session_id: str
-    ops: Annotated[list[ScratchpadOp], Field(description=SCRATCHPAD_OPS_FIELD_DESC)]
-
-
-class ScratchpadCommitRequest(_ActionBase):
-    action: Literal["commit"]
-    session_id: str
-    vault: str = ""
-    schema_path: Annotated[str | None, Field(description="Path under system/schemas/.")] = None
-    schema_type: Annotated[str | None, Field(description="okf type_profiles name (e.g. Plan).")] = None
-    destination_path: str | None = None
-
-
-class ScratchpadDiscardRequest(_ActionBase):
-    action: Literal["discard"]
-    session_id: str
-
-
-ScratchpadAction = Annotated[
-    Union[
-        ScratchpadCreateRequest,
-        ScratchpadReadRequest,
-        ScratchpadPatchRequest,
-        ScratchpadCommitRequest,
-        ScratchpadDiscardRequest,
-    ],
-    Field(discriminator="action"),
-]
-
-SCRATCHPAD_ACTION_FIELD_DESC = (
-    "create | read | patch | commit | discard. Each variant lists only its own params; "
-    "session_id is the id create returned."
 )

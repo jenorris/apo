@@ -16,7 +16,7 @@ add new aliases without an agent-success regression and a docs bump.
 | Frontmatter + section mutate in one call | **`patch_note`** (`set_field`, `replace_*`, …) |
 | Append text *while* batching other ops | `patch_note` `append` / `prepend` / `append_eof` |
 | Create / full overwrite | `write_note` — **no** `append` param (use `append_note`) |
-| JSON/YAML payload workshop | **`scratchpad`** — create → patch → commit; `set_field` / `delete_field` only — see [scratchpad.md](./scratchpad.md) |
+| JSON / YAML catalog (`.json`, `.yaml`) | `write_note` (raw, no OKF wrapper for `.json`) / **`patch_note`** `set_field` / `delete_field` only; CAS via `expected_mtime` |
 | Dual-write (domain + daily) | **Parallel** `append_note` / `patch_note` in one turn |
 | Multi-path patch-only (N≥2) | **`patch_note`** with `items: [{path, ops, expected_mtime?}]` (max 20; XOR with path+ops) |
 | Move / host promote / cross-vault copy | **`patch_note(ops=[{op:place, src, dst, …}])`** — place-only, no `path`; move if src in vault; copy host `.md` into the vault; copy across vaults when `allow_cross_vault=true` (always copy, never move — rejected otherwise) |

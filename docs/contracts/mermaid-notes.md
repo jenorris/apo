@@ -43,7 +43,7 @@ Cross-reference: [table-contract.schema.yaml](table-contract.schema.yaml) — sh
 
 ## Diagram authoring
 
-Use `write_note` on a `.mmd` path for diagram source. Scratchpad does not support `format=mmd`.
+Use `write_note` on a `.mmd` path for diagram source.
 
 ## Reindex
 

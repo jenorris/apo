@@ -7,7 +7,7 @@ surface exactly. This is the human/shell-facing sibling of ``apo-engine``
 (index/watch/serve/admin) — it exposes only the 10 vault-facing tools:
 read_note, search_notes, write_note, append_note, patch_note, patch_table,
 graph_neighbors, filter_notes, backlinks, history. It does NOT expose
-apo_admin, scratchpad, vault (registry/desk-project), index, serve, watch,
+apo_admin, vault (registry/desk-project), index, serve, watch,
 okf, search-eval, desk-project, or optima-merge — those stay on apo-engine
 or the MCP apo_admin tool.
 

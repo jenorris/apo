@@ -2,7 +2,8 @@
 
 Markdown remains the prose substrate (headings, append, hybrid search body).
 ``.yaml`` / ``.yml`` notes are whole-file mappings indexed as ``files.frontmatter``
-with optional title/description search chunks.
+with optional title/description search chunks. ``.json`` catalogs are write /
+patch targets only (raw, no OKF wrapper) — not indexed, watched, or linted.
 """
 
 from __future__ import annotations
@@ -17,6 +18,11 @@ YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 JSON_SUFFIXES = frozenset({".json"})
 MARKDOWN_SUFFIXES = frozenset({".md"})
 MMD_SUFFIXES = frozenset({".mmd"})
+# Suffixes the mutators (write/patch/append/delete/move) accept. Wider than
+# NOTE_SUFFIXES on purpose: ``.json`` is a legitimate vault payload to write and
+# set_field-patch, but the indexer / watcher / lint walk (``is_note_path``) must
+# keep ignoring it — a JSON blob is not a searchable note.
+MUTATOR_SUFFIXES = NOTE_SUFFIXES | JSON_SUFFIXES
 
 # Default ignore extras so machine contracts are not catalog noise.
 DEFAULT_YAML_IGNORE = (
@@ -88,18 +94,8 @@ def is_json_catalog(path: str | Path) -> bool:
     return suffix_of(path) in JSON_SUFFIXES
 
 
-def matches_scratchpad_catalog_path(path: str | Path, fmt: str) -> bool:
-    """True when a scratchpad buffer format matches the destination suffix."""
-    sfx = suffix_of(path)
-    if fmt == "json":
-        return sfx in JSON_SUFFIXES
-    if fmt == "yaml":
-        return sfx in YAML_SUFFIXES
-    if fmt == "markdown":
-        return sfx in MARKDOWN_SUFFIXES or sfx == ""
-    if fmt == "mmd":
-        return sfx in MMD_SUFFIXES
-    return False
+def is_mutator_path(path: str | Path) -> bool:
+    return suffix_of(path) in MUTATOR_SUFFIXES
 
 
 def ensure_indexed_path(rel_path: str) -> str:

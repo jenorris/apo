@@ -7,7 +7,7 @@ list indices, and ``[id=…]`` selectors). Heading / section / append ops raise
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from apo_engine.fm_path import FmPathError, delete_at_path, set_at_path
 from apo_engine.markdown_patch import PatchError, PatchResult
@@ -89,18 +89,41 @@ def apply_yaml_patch(
             "YAML note must be a top-level mapping (object); fix with write_note",
         )
 
-    original = content
     # Mutate the parsed document in place: ``data`` is a fresh per-call parse and
     # a shallow ``dict()`` copy would drop the round-trip comment/format state.
-    # Rollback uses ``original`` (the untouched source text), not this object.
-    working = data
+    # Rollback uses the untouched source text, not this object.
+    return apply_mapping_patch(
+        data,
+        ops,
+        original=content,
+        strict=strict,
+        apply_op=apply_yaml_op,
+        dump=dump_yaml_document,
+    )
+
+
+def apply_mapping_patch(
+    working: dict[str, Any],
+    ops: list[dict[str, Any]],
+    *,
+    original: str,
+    strict: bool,
+    apply_op: Callable[[dict[str, Any], dict[str, Any]], str],
+    dump: Callable[[dict[str, Any]], str],
+) -> PatchResult:
+    """Shared op loop for whole-document mapping patches (YAML and JSON catalogs).
+
+    ``apply_op`` mutates ``working`` for one op and returns a detail string, or
+    raises ``PatchError``. ``dump`` serializes the mutated mapping. Rollback on
+    strict / all-failed returns ``original`` untouched.
+    """
     results: list[dict[str, Any]] = []
     applied = 0
     all_suggestions: list[dict[str, Any]] = []
 
     for i, op in enumerate(ops):
         try:
-            detail = apply_yaml_op(working, op)
+            detail = apply_op(working, op)
             results.append({"op": i, "status": "ok", "detail": detail})
             applied += 1
         except PatchError as e:
@@ -135,7 +158,7 @@ def apply_yaml_patch(
             suggestions=all_suggestions,
         )
 
-    new_content = dump_yaml_document(working) if applied > 0 else original
+    new_content = dump(working) if applied > 0 else original
     failed = sum(1 for r in results if r.get("status") == "error")
     return PatchResult(
         ok=failed == 0,

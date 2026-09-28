@@ -6,6 +6,7 @@ Read + write paths for gateways. Index writes stay watcher-owned (deferred enque
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -48,14 +49,15 @@ from apo_engine.markdown_patch import (
     section_from_chunk,
 )
 from apo_engine.note_format import (
-    NOTE_SUFFIXES,
+    MUTATOR_SUFFIXES,
     ensure_indexed_path,
+    is_json_catalog,
     is_mmd_note,
     is_markdown_note,
-    is_note_path,
+    is_mutator_path,
     is_yaml_note,
-    matches_scratchpad_catalog_path,
 )
+from apo_engine.json_patch import apply_json_patch
 from apo_engine.yaml_patch import apply_yaml_patch
 from apo_engine.chunk_anchor import materialize_ops_chunk_hashes, resolve_chunk_anchor
 from apo_engine.mcp_backend import shape_search_hits
@@ -241,10 +243,14 @@ def _safe_resolve(root: Path, relative_path: str) -> Path:
 
 
 def _require_note_path(path: str) -> None:
-    """Reject mutator I/O on non-note suffixes (scripts, dotfiles, etc.)."""
-    if is_note_path(path):
+    """Reject mutator I/O on non-note suffixes (scripts, dotfiles, etc.).
+
+    ``.json`` catalogs pass here (raw write / set_field patch targets) even
+    though the indexer never treats them as notes — see ``MUTATOR_SUFFIXES``.
+    """
+    if is_mutator_path(path):
         return
-    allowed = ", ".join(sorted(NOTE_SUFFIXES))
+    allowed = ", ".join(sorted(MUTATOR_SUFFIXES))
     suffix = Path(path.replace("\\", "/")).suffix or "(none)"
     raise OpsError(
         "unsupported_format",
@@ -2731,7 +2737,6 @@ def write_note(
     expected_content_hash: str | None = None,
     vault: str = "",
     ref: str = "",
-    catalog_format: str | None = None,
 ) -> dict[str, Any]:
     bad = _reject_if_ref(ref, tool="write_note")
     if bad:
@@ -2782,16 +2787,10 @@ def write_note(
     except ValueError as e:
         return _err(path=path, error="bad_path", message=str(e))
 
-    raw_fmt_early = catalog_format
-    scratchpad_catalog = (
-        raw_fmt_early in ("json", "yaml", "mmd")
-        and matches_scratchpad_catalog_path(path, raw_fmt_early)
-    )
-    if not scratchpad_catalog:
-        try:
-            _require_note_path(path)
-        except OpsError as e:
-            return _err(path=path, error=e.code, message=e.message)
+    try:
+        _require_note_path(path)
+    except OpsError as e:
+        return _err(path=path, error=e.code, message=e.message)
 
     if is_mmd_note(path) or (is_markdown_note(path) and "```mermaid" in content):
         from apo_engine.mermaid_validate import should_block_write
@@ -2805,8 +2804,18 @@ def write_note(
                 flaws=mflaws,
             )
 
-    raw_fmt = catalog_format
-    if raw_fmt in ("json", "yaml", "mmd") and matches_scratchpad_catalog_path(path, raw_fmt):
+    # ``.json`` is a raw catalog: whole-file CAS, no OKF stamp / frontmatter
+    # wrapper, and no index enqueue (the indexer's walk never yields .json, so
+    # enqueuing would leave rows a full reindex would not reproduce).
+    if is_json_catalog(path):
+        try:
+            json.loads(content)
+        except json.JSONDecodeError as e:
+            return _err(
+                path=path,
+                error="validation_failed",
+                message=f"invalid JSON at line {e.lineno} col {e.colno}: {e.msg}",
+            )
         prior_text = full.read_text(encoding="utf-8") if full.exists() else None
         if (
             guard := _guard_write(
@@ -2825,7 +2834,6 @@ def write_note(
         existed = full.exists()
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(content, encoding="utf-8")
-        _enqueue_index(b, full)
         out = {
             "ok": True,
             "path": path,
@@ -2833,7 +2841,7 @@ def write_note(
             "bytes": full.stat().st_size,
             "mtime": _mtime(full),
             "vault": b.name,
-            "catalog_format": raw_fmt,
+            "catalog_format": "json",
             "tip": "raw catalog write (no OKF frontmatter wrapper)",
         }
         attach_region_hashes(out, content)
@@ -3011,6 +3019,15 @@ def append_note(
             path=path,
             error="unsupported_format",
             message="append_note is Markdown-only; .mmd diagrams use write_note / patch_note(replace_text)",
+        )
+    if is_json_catalog(path):
+        return _err(
+            path=path,
+            error="unsupported_format",
+            message=(
+                "append_note is Markdown-only; JSON catalogs use "
+                "write_note / patch_note(set_field|delete_field)"
+            ),
         )
 
     regions = classify_append_regions(
@@ -3586,7 +3603,7 @@ def patch_note(
 
     # Row-keyed table ops take a dedicated, strict path (no markdown section apply).
     if _table_ops_present(dict_ops):
-        if is_yaml_note(path):
+        if is_yaml_note(path) or is_json_catalog(path):
             return _err(path=path, error="unsupported_format", message="table ops are markdown-only")
         return _apply_table_ops(
             b, root, full, path, content, dict_ops,
@@ -3601,7 +3618,10 @@ def patch_note(
     dict_ops = materialized["ops"]
     hash_tips: list[str] = list(materialized.get("tips") or [])
 
-    regions = classify_patch_regions(dict_ops, yaml_note=is_yaml_note(path))
+    # Whole-document catalogs (.yaml / .json) CAS on the whole file: no
+    # frontmatter/body/section split to scope the precondition to.
+    catalog = is_yaml_note(path) or is_json_catalog(path)
+    regions = classify_patch_regions(dict_ops, yaml_note=catalog)
     if (
         guard := _guard_write(
             full,
@@ -3620,6 +3640,8 @@ def patch_note(
     try:
         if is_yaml_note(path):
             result = apply_yaml_patch(content, dict_ops, strict=strict)
+        elif is_json_catalog(path):
+            result = apply_json_patch(content, dict_ops, strict=strict)
         else:
             result = apply_patch(content, dict_ops, strict=strict)
     except (TypeError, PatchError) as e:
@@ -3667,30 +3689,37 @@ def patch_note(
         )
 
     to_write = result.content
-    okf = apo_okf.process_concept(
-        vault_root=root,
-        rel_path=path,
-        content=result.content,
-        bump_timestamp=True,
-    )
-    okf_meta = okf.as_response_fields()
-    if not okf.ok:
-        return _err(
-            path=path,
-            error=okf.error or "okf_validation",
-            message=okf.message or "OKF validation failed",
-            applied=result.applied,
-            results=result.results,
-            **{k: val for k, val in okf_meta.items() if k != "enforcement"},
-            enforcement=okf.enforcement,
+    okf_meta: dict[str, Any] = {}
+    write_flaws: list[dict[str, Any]] = []
+    if is_json_catalog(path):
+        # Raw catalog: no OKF stamp, no lint auto-fix, no index enqueue (same
+        # treatment as the write_note .json branch).
+        full.write_text(to_write, encoding="utf-8")
+    else:
+        okf = apo_okf.process_concept(
+            vault_root=root,
+            rel_path=path,
+            content=result.content,
+            bump_timestamp=True,
         )
-    to_write = okf.content
-    to_write, write_flaws = _prepare_write_content(
-        to_write, path=path, vault=b.name, okf_result=okf
-    )
+        okf_meta = okf.as_response_fields()
+        if not okf.ok:
+            return _err(
+                path=path,
+                error=okf.error or "okf_validation",
+                message=okf.message or "OKF validation failed",
+                applied=result.applied,
+                results=result.results,
+                **{k: val for k, val in okf_meta.items() if k != "enforcement"},
+                enforcement=okf.enforcement,
+            )
+        to_write = okf.content
+        to_write, write_flaws = _prepare_write_content(
+            to_write, path=path, vault=b.name, okf_result=okf
+        )
 
-    full.write_text(to_write, encoding="utf-8")
-    _enqueue_index(b, full)
+        full.write_text(to_write, encoding="utf-8")
+        _enqueue_index(b, full)
 
     failed = sum(1 for r in result.results if r.get("status") == "error")
     out: dict[str, Any] = {
@@ -4910,8 +4939,3 @@ def vault_op(
     }
 
 
-def scratchpad_op(action: str, **kwargs: Any) -> dict[str, Any]:
-    """Ephemeral scratchpad workshop / validate / commit (see docs/scratchpad.md)."""
-    from apo_engine.scratchpad import scratchpad_op as _sp
-
-    return _sp(action, **kwargs)

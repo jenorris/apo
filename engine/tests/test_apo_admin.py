@@ -36,7 +36,6 @@ _TOP_LEVEL = frozenset({
     "patch_note",
     "patch_table",
     "read_note",
-    "scratchpad",
     "search_notes",
     "vault",
     "write_note",
@@ -152,10 +151,10 @@ class ApoAdminMcpSurfaceTest(unittest.TestCase):
     def test_tool_count_and_names(self):
         names = _list_tool_names()
         self.assertEqual(names, _TOP_LEVEL)
-        self.assertEqual(len(names), 13)
+        self.assertEqual(len(names), 12)
         self.assertIn("apo_admin", names)
         self.assertIn("vault", names)
-        self.assertIn("scratchpad", names)
+        self.assertNotIn("scratchpad", names)  # retired 0.33.0
         self.assertEqual(names & _ADMIN_CAPABILITIES, set())
 
     def test_apo_admin_registered(self):

@@ -313,16 +313,6 @@ PatchOp = Annotated[
     Field(discriminator="op"),
 ]
 
-ScratchpadOp = Annotated[
-    Union[SetFieldOp, DeleteFieldOp],
-    Field(discriminator="op"),
-]
-
-SCRATCHPAD_OPS_FIELD_DESC = (
-    "JSON/YAML buffer patch: set_field(field,value) | delete_field(field). "
-    "Native JSON values; do not regenerate the whole buffer."
-)
-
 TABLE_OPS = frozenset(
     {"update_cell", "update_row", "append_row", "delete_row", "replace_table", "alter_table_schema"}
 )

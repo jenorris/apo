@@ -10,7 +10,7 @@ from apo_engine.mcp_instructions import MCP_INSTRUCTIONS
 from test_patch_note_schema import _list_tools_lean, _tool_params
 
 # Baseline after 0.23.0 patch_note slim + patch_table split (2026-08-26).
-# Raised 2026-08-28: vault/scratchpad became discriminated unions on `action`
+# Raised 2026-08-28: vault (and the since-retired scratchpad) became discriminated unions on `action`
 # (mcp_action_schemas.py) instead of one flat param bag with "lint only:"/
 # "clone only:" prose — each action now gets only the params it uses, which
 # JSON Schema's `oneOf` renders as N fully-inlined variant objects (no $ref

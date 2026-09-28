@@ -11,8 +11,7 @@ Habits that cut MCP round-trips more than further embed latency work. Desk agent
 5. **Append/edit from a hit** → `append_note(chunk_hash=…)` (path optional) or `patch_note` op with `chunk_hash` — do **not** `read_note` only to obtain an anchor
 6. **Dual-write** → parallel tools in one turn, same `vault=`
 7. **Multi-path patch** → separate `patch_note` calls per path, same `vault=` (no MCP batch `items=`; scripted batches use `apo-local patch --items @file.json`)
-8. **Structure-only atom** → prefer `write_note` / `patch_note(set_field)` on a `.yaml` path (no `append_note` / headings)
-9. **JSON/YAML payload workshop** → `scratchpad` (create → patch → commit; optional schema at commit) — see [scratchpad.md](./scratchpad.md)
+8. **Structure-only atom** → prefer `write_note` / `patch_note(set_field)` on a `.yaml` or `.json` path (no `append_note` / headings; `.json` is written raw — no OKF wrapper)
 
 ## Hard defaults
 
@@ -129,4 +128,4 @@ Before the final reply on an Apo turn:
 2. `fields=` on status sweeps?
 3. Parallel dual-write same `vault=`?
 4. `mtime` → `expected_mtime` on follow-up writes?
-5. Regenerating a whole JSON/YAML blob? Prefer `scratchpad` + `set_field` ([scratchpad.md](./scratchpad.md)).
+5. Regenerating a whole JSON/YAML blob? Prefer `patch_note(set_field)` on the `.json` / `.yaml` path with `expected_mtime`.

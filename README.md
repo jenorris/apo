@@ -220,7 +220,7 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 
 | Surface | Count | Notes |
 |---------|------:|-------|
-| Top-level | **11** | Core search/write + `vault` + `apo_admin` + `scratchpad` |
+| Top-level | **12** | Core search/write + `vault` + `apo_admin` |
 | Via `apo_admin` | **6** | `memory_status`, `reindex`, `reload_config`, `delete_note`, `git_sync`, `list_refs` |
 
 Counts are contract-tested (`engine/tests/test_apo_admin.py`) — if this table drifts from the code, CI fails.
@@ -299,7 +299,6 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/quickstart.md](docs/quickstart.md) | Install, MCP registration, verify, troubleshoot |
 | [docs/onboard-prompt.md](docs/onboard-prompt.md) | Infer vault rules → propose persistent agent instructions |
 | [docs/agent-throughput.md](docs/agent-throughput.md) | Agent habits that make Apo fast (`folder=`, `fields=`, anchors, `expected_mtime`) |
-| [docs/scratchpad.md](docs/scratchpad.md) | Ephemeral workshop buffers (`scratchpad` tool, schemas, merge-on-commit) |
 | [docs/tables.md](docs/tables.md) | Table row indexing, JSON transit, row-key `patch_note` ops, column-op gate |
 | [docs/toc-navigation.md](docs/toc-navigation.md) | `read_note(mode=toc)`, sibling hops, hash staleness, pagination |
 | [docs/patch-note-ops.md](docs/patch-note-ops.md) | `patch_note` wire contract (typed ops, aliases, error codes) |
