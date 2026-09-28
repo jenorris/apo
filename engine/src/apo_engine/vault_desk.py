@@ -26,6 +26,8 @@ _DEFAULT_DESK: dict[str, Any] = {
         "new_durable_facts": True,
         "prefer_append_patch": True,
         "filter_okf_type": True,
+        # Opt-in: forbid host FS writes under vault roots (route via Apo mutators).
+        "no_direct_fs_mutate": False,
     },
     "pointers": {},
     "role_notes": {},

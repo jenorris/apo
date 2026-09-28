@@ -80,12 +80,14 @@ desk-project *ARGS:
 
 # Return-only as of #21 — place the body into the Claude Code skill file
 # (the host now owns placement; nothing does this automatically).
-desk-project-claude:
-    ./scripts/write-claude-skill.sh
+# Registry: `--registry <vaults.json>` or APO_DESK_REGISTRY — renders against the
+# MCP host's registry, not this repo's dotenv discovery profile.
+desk-project-claude *ARGS:
+    ./scripts/write-claude-skill.sh {{ARGS}}
 
-# Compact index → Cursor always-on apo-desk.mdc (~1.8KB).
-desk-project-cursor:
-    ./scripts/write-cursor-rule.sh
+# Compact index → Cursor always-on apo-desk.mdc (~1.8KB). Same registry rule.
+desk-project-cursor *ARGS:
+    ./scripts/write-cursor-rule.sh {{ARGS}}
 
 # Lint markdown for bad filter_notes({...}) wire examples (missing where=).
 check-filter-notes-wire:

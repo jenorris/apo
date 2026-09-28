@@ -2,6 +2,64 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [0.32.0] — 2026-09-28
+
+A review of contract-projection effectiveness — does the desk policy an AI
+host actually reads reflect what the contracts say — found seven gaps between
+`system/contracts/` and the placed `apo-desk` rule/skill. Fixed all of them.
+
+### Fixed
+
+- **`no_direct_fs_mutate` had no rendered surface anywhere.** Three live
+  vaults declare it in `write_habits` and `~/.apo/desk.yaml` sets
+  `habits.no_direct_fs_mutate: true`, but `_WRITE_HABIT_LINES` had no entry
+  and `render_desk_body` never read the desk key — so a host reading only the
+  projected policy could not learn that vault files must be mutated through
+  Apo, not the host filesystem. Both paths now render one shared line (the
+  desk switch dedupes the contract id, like `prefer_append_patch`). Also
+  backfilled `fidelity_before_conclude` (Work) and `known_path_current_first`
+  (Optima), which rendered as the generic "see usage-contract" stub.
+- **Unscoped projection dropped every non-default vault's `write_habits`.**
+  `vault(project)` with no `vaults=` rendered § Apo throughput from the
+  default vault only. It now unions habits across every projected vault
+  (default first); an id only some vaults declare carries a ``— vaults:``
+  tag so a host still knows which vault a vault-specific habit belongs to.
+- **First watcher poll after startup never said "render me".** With no
+  `desk.yaml` on disk, `maybe_reproject` seeded its contracts signature
+  silently and stayed quiet until a contract actually changed. The first
+  scan now always reports a change and seeds.
+- **`usage-contract` had no shape checker.** A bare relative pointer, a
+  string `token_budget`, a `write_habits` entry with no id, or a missing
+  `vault_id` were the only contract drift the engine did not surface. New
+  `usage_contract.check_contract` covers the fields discovery and projection
+  read (version scalar, `vault_id`, `pointers` / `contribution.pointers` /
+  `integrations.pointers` shape, `token_budget`, `write_habits`); unknown
+  keys stay harness-owned and are not flagged. Clean on all live vaults.
+- **Placement scripts rendered against the repo's dotenv dev profile.**
+  `just desk-project-cursor` / `desk-project-claude` inherited
+  `APO_COLLECTION_ROOT` / `APO_DEFAULT_VAULT` from `.env` (7 vaults, default
+  `atlas`) instead of the registry the MCP host serves (4 vaults, default
+  `work`), so the placed rule listed vaults that return `bad_vault`. New
+  `scripts/desk-project-json.sh` takes `--registry <vaults.json>` /
+  `APO_DESK_REGISTRY`, scrubs inherited discovery vars, and runs the engine
+  with `APO_VAULTS=` pointed at that file; an inherited registry is still
+  honoured but named on stderr, and no registry at all is an error.
+- Dropped four `write_habits` ids from the usage-contract template
+  (`filter_diagram_catalog`, `search_chunk_kind_aware`,
+  `diagram_validate_before_commit`, `promote_plan_on_execute`) — no live
+  contract, config note, doc, or engine line ever referenced them.
+
+### Added
+
+- **Provenance line in both render modes.** `# Apo desk …` is now followed
+  by `Generated <iso-8601> · sources <12-hex>`, where `sources` hashes the
+  same inputs `maybe_reproject` watches (desk.yaml mtime + contracts
+  signature). `vault(project)` / `apo-engine desk-project` echo
+  `generated_at` and `sources` in the JSON, and the placement scripts print
+  the hash, so a placed `apo-desk.mdc` / `SKILL.md` can be diffed against a
+  fresh render by inspection. Hand-built merge IR without `provenance` renders
+  no line (pure renderers stay byte-deterministic).
+
 ## [0.31.0] — 2026-09-27
 
 A follow-up review of Apo's intermediate search representation — not "is the

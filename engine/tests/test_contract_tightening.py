@@ -361,6 +361,38 @@ class ContractCheckTest(unittest.TestCase):
         self.assertIn(("contract.invalid_value", "eligibility.idle.field"), a)
         self.assertIn(("contract.invalid_shape", "eligibility.status_in"), a)
 
+    def test_usage_contract_findings(self):
+        # usage-contract used to have no checker at all — a bare relative pointer,
+        # a string token_budget, or a missing vault_id were silently unvalidated.
+        _write_yaml(
+            self.cdir / "usage-contract.schema.yaml",
+            {
+                "usage_contract_version": True,
+                "purpose": "x",
+                "pointers": ["work:system/config/ok", "system/config/no-vault-prefix", "/abs/ok.md", 7],
+                "integrations": {"pointers": ["https://ok.example", "bad"]},
+                "contribution": {"pointers": "not-a-list"},
+                "token_budget": "800",
+                "write_habits": ["folder_on_search", {"text": "no id"}],
+                "harness_only_key": {"x": 1},
+            },
+        )
+        found = vault_contracts.discover_contracts(self.vault)
+        codes = {(w["code"], w["field"]) for w in found["usage-contract"]["warnings"]}
+        self.assertIn(("contract.invalid_shape", "usage_contract_version"), codes)
+        self.assertIn(("contract.invalid_shape", "vault_id"), codes)
+        self.assertIn(("contract.invalid_value", "pointers[1]"), codes)
+        self.assertIn(("contract.invalid_shape", "pointers[3]"), codes)
+        self.assertIn(("contract.invalid_value", "integrations.pointers[1]"), codes)
+        self.assertIn(("contract.invalid_shape", "contribution.pointers"), codes)
+        self.assertIn(("contract.invalid_value", "token_budget"), codes)
+        self.assertIn(("contract.invalid_shape", "write_habits[1]"), codes)
+        # Accepted forms and harness-owned keys are not drift.
+        self.assertNotIn(("contract.invalid_value", "pointers[0]"), codes)
+        self.assertNotIn(("contract.invalid_value", "pointers[2]"), codes)
+        self.assertNotIn(("contract.invalid_value", "integrations.pointers[0]"), codes)
+        self.assertNotIn(("contract.unknown_key", "harness_only_key"), codes)
+
     def test_telemetry_backend_aliases_are_not_drift(self):
         # ``duckdb`` / ``local`` are historical spellings the backend resolver maps.
         self.assertEqual(

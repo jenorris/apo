@@ -4870,6 +4870,12 @@ def vault_op(
         proj_mode = (mode or "full").strip().lower()
         if proj_mode not in ("full", "index"):
             return _err(error="bad_request", message="mode must be full|index")
+        # Provenance rides on the same inputs maybe_reproject watches, so a placed
+        # file's `sources` hash can be diffed against a fresh render.
+        merge["provenance"] = vault_project.provenance(
+            desk_mtime=vault_project._desk_mtime(),
+            contracts_sig=vault_project._contracts_signature(),
+        )
         projected = vault_project.project(merge, mode=proj_mode)
         if not projected.get("ok"):
             return projected

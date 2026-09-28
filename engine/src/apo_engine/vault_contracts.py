@@ -165,6 +165,8 @@ def _checker_for(cid: str) -> Callable[[dict[str, Any]], list[dict[str, str]]] |
         from apo_engine.telemetry_contract import check_contract as fn
     elif cid == "optima-contract":
         from apo_engine.optima_contract import check_contract as fn
+    elif cid == "usage-contract":
+        from apo_engine.usage_contract import check_contract as fn
     else:
         return None
     return fn
@@ -173,8 +175,10 @@ def _checker_for(cid: str) -> Callable[[dict[str, Any]], list[dict[str, str]]] |
 def check_contract(cid: str, data: dict[str, Any] | None) -> list[dict[str, str]]:
     """Advisory shape findings for one parsed contract; ``[]`` for ids without a checker.
 
-    Contracts the engine does not interpret (usage, read, local-web, vault-private
-    schemas) have no checker — their keys belong to other consumers.
+    Contracts the engine does not interpret (read, local-web, vault-private
+    schemas) have no checker — their keys belong to other consumers. The
+    usage-contract checker covers only the fields discovery and desk projection
+    read; its other keys stay harness-owned.
     """
     if not isinstance(data, dict):
         return []

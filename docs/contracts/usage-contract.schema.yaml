@@ -57,11 +57,10 @@ write_habits:
   - dedupe_search
   - vault_api_routing
   - address_flaws_on_write
-  - filter_diagram_catalog
-  - search_chunk_kind_aware
-  - diagram_validate_before_commit
-  - promote_plan_on_execute
+  - no_direct_fs_mutate          # host FS writes under vault roots go through Apo mutators
   # - lint_before_conclude
+  # - fidelity_before_conclude   # plan-fidelity gate before concluding large tasks
+  # - known_path_current_first   # vaults with contract-declared known paths (e.g. optima)
 
 # Authoring dialect + optional render profile (harness / desk projection).
 # Dialect = what agents may put in .md bodies. Render = export/publish only

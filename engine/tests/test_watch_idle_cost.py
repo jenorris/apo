@@ -67,10 +67,13 @@ class MaybeReprojectPollGateTest(unittest.TestCase):
             with unittest.mock.patch.object(
                 vault_project, "_desk_mtime", return_value=None
             ):
-                # Seeds "a" (first-call init returns None).
-                self.assertIsNone(vault_project.maybe_reproject(reason="seed"))
+                # Seeds "a" — the first scan reports a change (nothing projected yet)
+                # and stamps the reproject clock, so pin the clock for both calls.
+                with unittest.mock.patch.object(
+                    vault_project.time, "monotonic", return_value=5_000.0
+                ):
+                    self.assertIsNotNone(vault_project.maybe_reproject(reason="seed"))
                 # Pretend the gap has passed; signature now differs -> reported.
-                vault_project._last_poll_mono = 1.0
                 with unittest.mock.patch.object(
                     vault_project.time, "monotonic", return_value=10_000.0
                 ):

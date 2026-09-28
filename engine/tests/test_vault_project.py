@@ -199,5 +199,175 @@ class ContractsSignatureTest(unittest.TestCase):
         self.assertEqual(before, after)
 
 
+def _reset_reproject_state() -> None:
+    vault_project._last_reproject_mono = 0.0
+    vault_project._last_poll_mono = 0.0
+    vault_project._last_desk_mtime = None
+    vault_project._last_contracts_sig = None
+
+
+class MaybeReprojectFirstPollTest(unittest.TestCase):
+    """The first scan after startup must say "render me" — nothing has been
+    projected in this process yet, whatever the desk mtime looks like."""
+
+    def setUp(self) -> None:
+        _reset_reproject_state()
+        self.addCleanup(_reset_reproject_state)
+
+    def test_first_poll_without_desk_yaml_reports_change_and_seeds(self):
+        with unittest.mock.patch.object(vault_project, "_contracts_signature", return_value="a"), \
+             unittest.mock.patch.object(vault_project, "_desk_mtime", return_value=None):
+            out = vault_project.maybe_reproject(reason="desk-poll")
+        self.assertIsNotNone(out)
+        self.assertTrue(out["changed"])
+        self.assertEqual(vault_project._last_contracts_sig, "a")
+        self.assertIsNone(vault_project._last_desk_mtime)
+
+    def test_first_poll_with_empty_signature_still_reports_change(self):
+        # A desk with no contracts dirs at all: signature "" is a valid seed, not "no change".
+        with unittest.mock.patch.object(vault_project, "_contracts_signature", return_value=""), \
+             unittest.mock.patch.object(vault_project, "_desk_mtime", return_value=None):
+            out = vault_project.maybe_reproject(reason="desk-poll")
+        self.assertIsNotNone(out)
+        self.assertEqual(vault_project._last_contracts_sig, "")
+
+    def test_seeded_state_is_quiet_until_something_drifts(self):
+        clock = unittest.mock.patch.object(vault_project.time, "monotonic")
+        with unittest.mock.patch.object(
+            vault_project, "_contracts_signature", side_effect=["a", "a", "b"]
+        ), unittest.mock.patch.object(vault_project, "_desk_mtime", return_value=None), clock as mono:
+            mono.return_value = 5_000.0
+            self.assertIsNotNone(vault_project.maybe_reproject(reason="seed"))
+            # Past the poll + reproject gaps, same signature -> quiet.
+            mono.return_value = 10_000.0
+            self.assertIsNone(vault_project.maybe_reproject(reason="desk-poll"))
+            # Same again, signature drifted -> reported.
+            mono.return_value = 15_000.0
+            out = vault_project.maybe_reproject(reason="desk-poll")
+        self.assertIsNotNone(out)
+        self.assertTrue(out["changed"])
+        self.assertEqual(vault_project._last_contracts_sig, "b")
+
+
+class ProvenanceTest(unittest.TestCase):
+    def test_sources_hash_tracks_desk_and_contract_inputs(self):
+        base = vault_project.sources_hash(1.0, "work:usage.yaml:1:2")
+        self.assertEqual(len(base), 12)
+        self.assertEqual(base, vault_project.sources_hash(1.0, "work:usage.yaml:1:2"))
+        self.assertNotEqual(base, vault_project.sources_hash(2.0, "work:usage.yaml:1:2"))
+        self.assertNotEqual(base, vault_project.sources_hash(1.0, "work:usage.yaml:9:2"))
+        self.assertNotEqual(base, vault_project.sources_hash(None, "work:usage.yaml:1:2"))
+
+    def test_provenance_shape(self):
+        prov = vault_project.provenance(desk_mtime=None, contracts_sig="")
+        self.assertEqual(set(prov), {"generated_at", "sources"})
+        self.assertTrue(prov["generated_at"].endswith("Z"))
+        self.assertEqual(prov["sources"], vault_project.sources_hash(None, ""))
+
+    def test_both_render_modes_carry_generated_line_when_present(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": {}}},
+            "desk": {"habits": {}},
+            "provenance": {"generated_at": "2026-09-28T12:00:00Z", "sources": "abc123def456"},
+        }
+        expected = "Generated 2026-09-28T12:00:00Z · sources abc123def456"
+        for body in (vault_project.render_desk_body(merge), vault_project.render_desk_index(merge)):
+            lines = body.splitlines()
+            self.assertTrue(lines[0].startswith("# Apo desk"))
+            self.assertEqual(lines[2], expected)
+        out = vault_project.project(merge, mode="index")
+        self.assertEqual(out["sources"], "abc123def456")
+        self.assertEqual(out["generated_at"], "2026-09-28T12:00:00Z")
+
+    def test_hand_built_merge_without_provenance_has_no_generated_line(self):
+        merge = {
+            "default_vault": "atlas",
+            "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": {}}},
+            "desk": {"habits": {}},
+        }
+        self.assertNotIn("Generated 2", vault_project.render_desk_body(merge))
+        self.assertNotIn("Generated 2", vault_project.render_desk_index(merge))
+        self.assertNotIn("sources", vault_project.project(merge))
+
+
+def _usage_row(habits: list, *, default: bool = False) -> dict:
+    return {
+        "root": "/vault/x",
+        "default": default,
+        "contracts": {"usage-contract": {"ok": True, "data": {"write_habits": habits}}},
+    }
+
+
+class WriteHabitsAcrossVaultsTest(unittest.TestCase):
+    def test_new_habit_ids_have_rendered_lines(self):
+        for hid in ("no_direct_fs_mutate", "fidelity_before_conclude", "known_path_current_first"):
+            self.assertIn(hid, vault_project._WRITE_HABIT_LINES, hid)
+        lines = vault_project._render_write_habit_lines([("no_direct_fs_mutate", None)])
+        self.assertIn("Never mutate vault files directly", lines[0])
+
+    def test_unscoped_projection_renders_every_vaults_habits(self):
+        merge = {
+            "default_vault": "work",
+            "vaults": {
+                "optima": _usage_row(["folder_on_search", "known_path_current_first"]),
+                "work": _usage_row(["folder_on_search", "fidelity_before_conclude"], default=True),
+            },
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertIn("## Apo throughput", body)
+        # Universal id → plain line; subset ids → tagged with the declaring vault.
+        universal = [ln for ln in body.splitlines() if "Hard gate" in ln]
+        self.assertEqual(len(universal), 1)
+        self.assertNotIn("— vaults:", universal[0])
+        self.assertIn("read_note(path=…)` that path **first**", body)
+        self.assertRegex(body, r"known paths.*— vaults: `optima`")
+        self.assertRegex(body, r"Fidelity gate.*— vaults: `work`")
+        # Default vault's habits come first.
+        self.assertLess(body.index("Fidelity gate"), body.index("known paths"))
+
+    def test_scoped_projection_has_no_vault_tags(self):
+        merge = {
+            "default_vault": "optima",
+            "vaults": {"optima": _usage_row(["known_path_current_first"], default=True)},
+            "desk": {"habits": {}},
+        }
+        body = vault_project.render_desk_body(merge)
+        self.assertIn("read_note(path=…)` that path **first**", body)
+        self.assertNotIn("— vaults:", body)
+
+
+class NoDirectFsMutateDeskHabitTest(unittest.TestCase):
+    def _merge(self, habits: dict, write_habits: list | None = None) -> dict:
+        row = _usage_row(write_habits or [], default=True)
+        return {"default_vault": "work", "vaults": {"work": row}, "desk": {"habits": habits}}
+
+    def test_desk_habit_on_renders_under_habits(self):
+        body = vault_project.render_desk_body(self._merge({"no_direct_fs_mutate": True}))
+        self.assertIn("## Habits", body)
+        self.assertEqual(body.count("Never mutate vault files directly"), 1)
+
+    def test_desk_habit_off_or_absent_renders_nothing(self):
+        self.assertNotIn(
+            "Never mutate vault files directly",
+            vault_project.render_desk_body(self._merge({"no_direct_fs_mutate": False})),
+        )
+        self.assertNotIn(
+            "Never mutate vault files directly",
+            vault_project.render_desk_body(self._merge({"end_of_turn_gate": True})),
+        )
+
+    def test_desk_habit_dedupes_matching_write_habit_id(self):
+        body = vault_project.render_desk_body(
+            self._merge({"no_direct_fs_mutate": True}, ["no_direct_fs_mutate"])
+        )
+        self.assertEqual(body.count("Never mutate vault files directly"), 1)
+        # Contract-only declaration still renders (under Apo throughput).
+        body = vault_project.render_desk_body(self._merge({}, ["no_direct_fs_mutate"]))
+        self.assertEqual(body.count("Never mutate vault files directly"), 1)
+        self.assertIn("## Apo throughput", body)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -936,6 +936,23 @@ class VaultOpTest(unittest.TestCase):
         self.assertIn("`.env`", out["body"])
         self.assertIn("notify-send blocked", out["body"])
 
+    def test_project_carries_provenance_and_every_vaults_write_habits(self):
+        (self.b / "system" / "contracts" / "usage-contract.schema.yaml").write_text(
+            "usage_contract_version: '0.1'\nvault_id: beta\npurpose: beta\n"
+            "write_habits:\n  - known_path_current_first\n",
+            encoding="utf-8",
+        )
+        vault_contracts.clear_yaml_cache()
+        for mode in ("full", "index"):
+            out = ops.vault_op("project", mode=mode)
+            self.assertTrue(out["ok"], out)
+            self.assertEqual(len(out["sources"]), 12)
+            self.assertIn(f"Generated {out['generated_at']} · sources {out['sources']}", out["body"])
+        body = ops.vault_op("project")["body"]
+        # beta is not the default vault; its habit still projects, tagged.
+        self.assertRegex(body, r"known paths.*— vaults: `beta`")
+        self.assertNotIn("known paths", ops.vault_op("project", vaults=["alpha"])["body"])
+
     def test_project_scopes_role_notes_and_pointers_to_active_vaults(self):
         desk = self.tmp / "desk-scope.yaml"
         desk.write_text(

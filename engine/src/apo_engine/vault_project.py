@@ -5,11 +5,13 @@ Deterministic — no LLM. Returns shared ``body`` + optional ``guidance`` for pl
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,14 @@ from apo_engine.note_format import NOTE_SUFFIXES
 # Child of "apo" — see git_sync.py's logger comment; `maybe_reproject` is
 # called from the watch loop with `verbose=True` in production.
 logger = logging.getLogger("apo.vault_project")
+
+# Rendered both for the desk.yaml ``habits.no_direct_fs_mutate`` switch and the
+# usage-contract ``write_habits`` id of the same name (one source, no drift).
+_NO_DIRECT_FS_MUTATE_LINE = (
+    "- **Never mutate vault files directly** (host FS write/edit/shell under any Apo vault "
+    "root) — go through `write_note` / `append_note` / `patch_note` / `patch_table`. Direct "
+    "writes bypass the write guard, contract checks, `expected_mtime`, and telemetry."
+)
 
 # Deterministic lines for usage-contract ``write_habits`` ids (projected into apo-desk).
 _WRITE_HABIT_LINES: dict[str, str] = {
@@ -88,6 +98,16 @@ _WRITE_HABIT_LINES: dict[str, str] = {
         "- Mutators (`write_note` / `patch_note` / `append_note` / `delete_note` / place copy) "
         "accept only note suffixes listed in Contribution `note_types` (engine floor "
         "`.md` / `.yaml` / `.yml` / `.mmd`). Scripts and config files → host filesystem, not Apo."
+    ),
+    "no_direct_fs_mutate": _NO_DIRECT_FS_MUTATE_LINE,
+    "fidelity_before_conclude": (
+        "- **Fidelity gate:** before concluding a large multi-step task, compare the draft "
+        "against the approved plan / richest in-session artifacts (subagent review, surgical "
+        "patches only) — skill `fidelity-review`; skip for trivia and drafts awaiting approval."
+    ),
+    "known_path_current_first": (
+        "- When the vault declares known paths (e.g. `current.yaml`), `read_note(path=…)` that "
+        "path **first** — do not `search_notes` for state the contract already locates."
     ),
 }
 
@@ -648,11 +668,21 @@ def _usage_write_habits(row: dict[str, Any]) -> list[tuple[str, str | None]]:
     return out
 
 
-def _render_write_habit_lines(habits: list[tuple[str, str | None]]) -> list[str]:
+def _render_write_habit_lines(
+    habits: list[tuple[str, str | None]],
+    *,
+    declared_by: dict[str, list[str]] | None = None,
+    vault_count: int = 0,
+) -> list[str]:
     """Map usage-contract write_habit (id, inline_text) pairs to markdown bullets.
 
     Precedence: inline ``text`` from the contract, then a ``_WRITE_HABIT_LINES``
-    dict entry, then a generic pointer-only fallback.
+    dict entry, then a generic pointer-only fallback. First occurrence of an id
+    wins (callers order the default vault first).
+
+    ``declared_by`` (id → vault names) with ``vault_count`` > 1 tags any id that
+    only a subset of the projected vaults declares, so an unscoped projection
+    still says which vault a vault-specific habit belongs to.
     """
     lines: list[str] = []
     seen: set[str] = set()
@@ -661,14 +691,72 @@ def _render_write_habit_lines(habits: list[tuple[str, str | None]]) -> list[str]
             continue
         seen.add(hid)
         if inline_text:
-            lines.append(f"- **`{hid}`:** {inline_text}")
-            continue
-        line = _WRITE_HABIT_LINES.get(hid)
-        if line:
-            lines.append(line)
+            line = f"- **`{hid}`:** {inline_text}"
         else:
-            lines.append(f"- `{hid}` — see usage-contract / apo-write-api.")
+            line = _WRITE_HABIT_LINES.get(hid) or f"- `{hid}` — see usage-contract / apo-write-api."
+        if declared_by is not None and vault_count > 1:
+            owners = declared_by.get(hid) or []
+            if 0 < len(owners) < vault_count:
+                line += " — vaults: " + ", ".join(f"`{v}`" for v in owners)
+        lines.append(line)
     return lines
+
+
+def _collect_write_habits(
+    vaults: dict[str, Any], default: str
+) -> tuple[list[tuple[str, str | None]], dict[str, list[str]], int]:
+    """Gather ``write_habits`` across every projected vault, default vault first.
+
+    Returns ``(ordered pairs, id → declaring vaults, projected vault count)``.
+    Scoped projections (``vaults=[id]``) naturally see one vault; unscoped ones
+    used to read only the default vault and drop every other vault's habits.
+    """
+    rows = {n: r for n, r in vaults.items() if isinstance(r, dict)}
+    ordered = sorted(rows)
+    if default in rows:
+        ordered = [default] + [n for n in ordered if n != default]
+    pairs: list[tuple[str, str | None]] = []
+    declared_by: dict[str, list[str]] = {}
+    for name in ordered:
+        for hid, text in _usage_write_habits(rows[name]):
+            declared_by.setdefault(hid, []).append(name)
+            pairs.append((hid, text))
+    return pairs, declared_by, len(rows)
+
+
+def sources_hash(desk_mtime: float | None, contracts_sig: str) -> str:
+    """Short fingerprint of the inputs a rendered desk depends on.
+
+    Same inputs ``maybe_reproject`` watches (desk.yaml mtime + the contracts
+    signature), hashed so a placed file can carry it and a fresh
+    ``desk-project`` run can be compared against it.
+    """
+    raw = f"{desk_mtime if desk_mtime is not None else 'none'}|{contracts_sig}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def provenance(*, desk_mtime: float | None, contracts_sig: str) -> dict[str, str]:
+    """``{generated_at, sources}`` for the merge IR — rendered as the header line."""
+    return {
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "sources": sources_hash(desk_mtime, contracts_sig),
+    }
+
+
+def _provenance_line(merge: dict[str, Any]) -> str | None:
+    """``Generated <iso> · sources <hash>`` when the merge IR carries provenance.
+
+    The live path (``ops.vault_op("project")``) always attaches it; hand-built
+    merge dicts (tests, offline renders) may omit it and get no line.
+    """
+    prov = merge.get("provenance")
+    if not isinstance(prov, dict):
+        return None
+    generated = str(prov.get("generated_at") or "").strip()
+    sources = str(prov.get("sources") or "").strip()
+    if not generated and not sources:
+        return None
+    return f"Generated {generated or '—'} · sources {sources or '—'}"
 
 
 _MEMORY_VERB_MAP: list[tuple[str, str]] = [
@@ -709,6 +797,10 @@ def render_desk_index(merge: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# Apo desk (generated, compact index)")
     lines.append("")
+    prov_line = _provenance_line(merge)
+    if prov_line:
+        lines.append(prov_line)
+        lines.append("")
     lines.append(
         "Before writing to a vault for the first time this session, call "
         '`vault(request={"action": "project", "vaults": ["<id>"]})` to load its current '
@@ -771,6 +863,10 @@ def render_desk_body(merge: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# Apo desk (generated)")
     lines.append("")
+    prov_line = _provenance_line(merge)
+    if prov_line:
+        lines.append(prov_line)
+        lines.append("")
     lines.append(
         'Generated by `vault(request={"action": "project"})`. Source: `~/.apo/desk.yaml` + the '
         "vault discovery registry + per-vault `system/contracts/`. **Return-only** — agent places "
@@ -1094,24 +1190,33 @@ def render_desk_body(merge: dict[str, Any]) -> str:
             lines.append(
                 "- When a vault has an OKF contract: stamp `okf_type` / `description` / `timestamp` on concept writes; prefer `filter_notes(where={\"okf_type\": \"…\"}, folder=…)`."
             )
+        # Opt-in (desk.yaml `habits.no_direct_fs_mutate: true`) — the key was read
+        # from desk.yaml but never rendered, so hosts never saw the rule.
+        if habits.get("no_direct_fs_mutate", False):
+            lines.append(_NO_DIRECT_FS_MUTATE_LINE)
         lines.append("")
 
-    # Apo throughput — from default vault usage-contract write_habits (deterministic projection).
+    # Apo throughput — usage-contract write_habits across every projected vault
+    # (default vault first; a scoped projection sees only its own vault).
     default_vault = default or next(iter(vaults.keys()), "")
-    default_row = vaults.get(default_vault) if isinstance(vaults.get(default_vault), dict) else {}
-    throughput_ids = _usage_write_habits(default_row if isinstance(default_row, dict) else {})
+    throughput_ids, declared_by, vault_count = _collect_write_habits(vaults, default_vault)
     # Skip ids already rendered by desk.yaml boolean habits (avoid duplicate bullets).
     if habits.get("prefer_append_patch", True):
         throughput_ids = [h for h in throughput_ids if h[0] != "prefer_append_patch"]
     if habits.get("filter_okf_type", True):
         throughput_ids = [h for h in throughput_ids if h[0] != "filter_okf_type"]
-    throughput_lines = _render_write_habit_lines(throughput_ids)
+    if habits.get("no_direct_fs_mutate", False):
+        throughput_ids = [h for h in throughput_ids if h[0] != "no_direct_fs_mutate"]
+    throughput_lines = _render_write_habit_lines(
+        throughput_ids, declared_by=declared_by, vault_count=vault_count
+    )
     if throughput_lines:
         lines.append("## Apo throughput")
         lines.append("")
         lines.append(
-            "From default vault usage-contract `write_habits` — engine API detail in skill **`mcp-apo`** "
-            "and Meta `system/config/apo-write-api.md`."
+            "From usage-contract `write_habits` across the projected vaults (default vault "
+            "first; an id only some vaults declare carries a `vaults:` tag) — engine API "
+            "detail in skill **`mcp-apo`** and Meta `system/config/apo-write-api.md`."
         )
         lines.append("")
         lines.extend(throughput_lines)
@@ -1176,7 +1281,7 @@ def project(merge: dict[str, Any], *, mode: str = "full") -> dict[str, Any]:
     meant for static always-loaded files — see that function's docstring.
     """
     body = render_desk_index(merge) if mode == "index" else render_desk_body(merge)
-    return {
+    out: dict[str, Any] = {
         "ok": True,
         "action": "project",
         "mode": mode,
@@ -1184,6 +1289,13 @@ def project(merge: dict[str, Any], *, mode: str = "full") -> dict[str, Any]:
         "bytes": len(body.encode("utf-8")),
         "guidance": project_guidance(),
     }
+    prov = merge.get("provenance")
+    if isinstance(prov, dict):
+        # Mirrored from the body's `Generated … · sources …` line so a script can
+        # compare a placed file's declared hash against a fresh render's.
+        out["generated_at"] = prov.get("generated_at")
+        out["sources"] = prov.get("sources")
+    return out
 
 
 def _desk_mtime() -> float | None:
@@ -1271,13 +1383,15 @@ def maybe_reproject(
         sig = _contracts_signature()
         changed = force
         if not changed:
-            if desk_mt is not None and desk_mt != _last_desk_mtime:
+            if _last_contracts_sig is None:
+                # First scan since startup: nothing has been projected in this
+                # process, so report it (and seed below) regardless of desk mtime
+                # — a desk without desk.yaml used to seed silently and never say
+                # "render me" until a contract actually changed.
+                changed = True
+            elif desk_mt is not None and desk_mt != _last_desk_mtime:
                 changed = True
             elif sig != _last_contracts_sig:
-                if _last_contracts_sig is None and _last_desk_mtime is None:
-                    _last_desk_mtime = desk_mt
-                    _last_contracts_sig = sig
-                    return None
                 changed = True
         if not changed:
             return None
