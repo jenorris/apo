@@ -1,0 +1,20 @@
+flowchart LR
+  subgraph p1 [Phase 1 — now]
+    F1[Floci]
+    H1[Env harness QA/UAT/prod]
+    E1[environments/* modules]
+    F1 --> H1 --> E1
+  end
+  subgraph p2 [Phase 2]
+    F2[Floci]
+    R2[Root platform subset on Floci]
+    R2 --> E2[Native module refs]
+  end
+  subgraph p3 [Phase 3]
+    F3[Floci]
+    R3[Root emulation plan]
+    R3 --> QA[module.quality_assurance]
+    R3 --> UAT[module.user_acceptance_testing]
+    R3 --> PROD[module.production]
+  end
+  p1 --> p2 --> p3

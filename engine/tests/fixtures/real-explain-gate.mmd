@@ -1,0 +1,10 @@
+flowchart TD
+    A["Test with @group critical-path"] --> B["setUp: startQueryCapture()"]
+    B --> C["Optional: seedMinimumRows()"]
+    C --> D["Exercise code under test"]
+    D --> E["assertIndexedQueries() in tearDown or explicit"]
+    E --> F{"For each captured SELECT"}
+    F --> G["EXPLAIN FORMAT=JSON"]
+    G --> H{"access_type ALL on table >= row threshold?"}
+    H -->|yes| I["FAIL with SQL + plan + table row count"]
+    H -->|no| J["PASS"]

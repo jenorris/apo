@@ -31,6 +31,75 @@ class NodeFlattenTest(unittest.TestCase):
         self.assertNotIn(" >  > ", flat)
         self.assertEqual(flat, "Title > N1 — Label")
 
+    def test_no_relational_context_leaves_base_text_unchanged(self):
+        flat = mi.node_flatten_text("Title", "PAY", "STR", "Stripe — card")
+        self.assertNotIn(" · ", flat)
+
+    def test_appends_in_and_out_relational_labels(self):
+        flat = mi.node_flatten_text(
+            "DFD — Cardholder",
+            "API",
+            "SKY",
+            "skypad — renters",
+            in_labels=["Core API"],
+            out_labels=["Stripe — card", "Authorize.net — ACH"],
+        )
+        self.assertTrue(flat.startswith("DFD — Cardholder > API > SKY — skypad — renters"))
+        self.assertIn("· from: Core API", flat)
+        self.assertIn("· to: Stripe — card, Authorize.net — ACH", flat)
+
+    def test_in_only_omits_to_segment(self):
+        flat = mi.node_flatten_text(
+            "Title", "", "N1", "Label", in_labels=["Upstream"], out_labels=[]
+        )
+        self.assertIn("from: Upstream", flat)
+        self.assertNotIn("to:", flat)
+
+    def test_relational_context_applies_with_custom_template_too(self):
+        flat = mi.node_flatten_text(
+            "Title",
+            "PAY",
+            "STR",
+            "Stripe — card",
+            template="{title} > {subgraph} > {node} — {label}",
+            in_labels=["skypad — renters"],
+            out_labels=[],
+        )
+        self.assertEqual(flat, "Title > PAY > STR — Stripe — card · from: skypad — renters")
+
+
+class NodeRelationsTest(unittest.TestCase):
+    def test_derives_labels_and_1hop_in_out(self):
+        diagram = mp.MermaidDiagram(
+            diagram_type="flowchart",
+            nodes=[
+                mp.MermaidNode("API1", "Core API", "API"),
+                mp.MermaidNode("SKY", "skypad — renters", "API"),
+                mp.MermaidNode("STR", "Stripe — card", "PAY"),
+                mp.MermaidNode("AUTH", "Authorize.net — ACH", "PAY"),
+            ],
+            edges=[
+                mp.MermaidEdge("API1", "SKY", ""),
+                mp.MermaidEdge("SKY", "STR", ""),
+                mp.MermaidEdge("SKY", "AUTH", ""),
+            ],
+        )
+        label_by_id, in_map, out_map = mi.node_relations(diagram)
+        self.assertEqual(label_by_id["SKY"], "skypad — renters")
+        self.assertEqual(in_map["SKY"], ["Core API"])
+        self.assertEqual(out_map["SKY"], ["Stripe — card", "Authorize.net — ACH"])
+        self.assertNotIn("API1", in_map)  # nothing feeds API1 in this fixture
+
+    def test_dangling_edge_falls_back_to_raw_id(self):
+        diagram = mp.MermaidDiagram(
+            diagram_type="flowchart",
+            nodes=[mp.MermaidNode("A", "Alpha")],
+            edges=[mp.MermaidEdge("A", "GHOST", "")],
+        )
+        label_by_id, _in_map, out_map = mi.node_relations(diagram)
+        self.assertEqual(out_map["A"], ["GHOST"])
+        self.assertNotIn("GHOST", label_by_id)
+
 
 class EntityTokensTest(unittest.TestCase):
     def test_acronym_and_label_words(self):
@@ -102,9 +171,14 @@ class FileHeaderEdgeFlattenTest(unittest.TestCase):
         self.assertIn("PAY", flat)
         self.assertNotIn("flowchart LR", flat)
 
-    def test_edge_flatten_shape(self):
+    def test_edge_flatten_falls_back_to_raw_ids_without_label_map(self):
         flat = mi.edge_flatten_text("DFD — Cardholder", self.diagram.edges[0])
         self.assertEqual(flat, "DFD — Cardholder > SKY --> STR")
+
+    def test_edge_flatten_resolves_node_labels(self):
+        label_by_id, _in_map, _out_map = mi.node_relations(self.diagram)
+        flat = mi.edge_flatten_text("DFD — Cardholder", self.diagram.edges[0], label_by_id)
+        self.assertEqual(flat, "DFD — Cardholder > skypad — renters --> Stripe — card")
 
 
 class SearchEvalRegressionTest(unittest.TestCase):

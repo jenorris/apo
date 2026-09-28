@@ -61,25 +61,58 @@ def node_flatten_text(
     label: str,
     *,
     template: str = "",
+    in_labels: list[str] | tuple[str, ...] = (),
+    out_labels: list[str] | tuple[str, ...] = (),
 ) -> str:
+    """Flatten one node to embed text: identity, then 1-hop relational context.
+
+    ``in_labels``/``out_labels`` are the labels of nodes that feed into (resp.
+    out of) this one — derived by the caller from the diagram's edge list. A
+    node's meaning is heavily relational (what feeds it, what it feeds), so
+    that context is appended regardless of ``template`` — it's not something
+    a custom ``flatten_template`` opts out of, only the identity portion is
+    templatable.
+    """
     tpl = template or "{title} > {subgraph} > {node} — {label}"
     parts = [p for p in (title, subgraph) if p]
     prefix = " > ".join(parts)
     node_part = f"{node_id} — {label}" if label and label != node_id else node_id
     if "{title}" in tpl:
-        return tpl.format(
+        base = tpl.format(
             title=title,
             subgraph=subgraph or "",
             node=node_id,
             label=label or node_id,
         ).replace(" >  > ", " > ").strip(" >")
-    if prefix:
-        return f"{prefix} > {node_part}"
-    return node_part
+    elif prefix:
+        base = f"{prefix} > {node_part}"
+    else:
+        base = node_part
+
+    rel_parts: list[str] = []
+    if in_labels:
+        rel_parts.append(f"from: {', '.join(in_labels)}")
+    if out_labels:
+        rel_parts.append(f"to: {', '.join(out_labels)}")
+    if rel_parts:
+        return f"{base} · {' · '.join(rel_parts)}"
+    return base
 
 
-def edge_flatten_text(title: str, edge: mp.MermaidEdge) -> str:
-    base = f"{title} > {edge.from_id} --> {edge.to_id}" if title else f"{edge.from_id} --> {edge.to_id}"
+def edge_flatten_text(
+    title: str, edge: mp.MermaidEdge, node_labels: dict[str, str] | None = None
+) -> str:
+    """Flatten one edge to embed text, using node *labels* — not raw ids.
+
+    ``node_labels`` maps node_id -> label (falls back to the id itself when a
+    node isn't found, e.g. a dangling reference). Raw ids stay available via
+    the row's ``row_key`` metadata for exact lookups; the embedded text reads
+    as labels so it's actually meaningful for search.
+    """
+    labels = node_labels or {}
+    from_label = labels.get(edge.from_id, edge.from_id)
+    to_label = labels.get(edge.to_id, edge.to_id)
+    base = f"{title} > {from_label} --> {to_label}" if title else f"{from_label} --> {to_label}"
     if edge.label:
         return f"{base} — {edge.label}"
     return base
@@ -165,6 +198,30 @@ def _with_search_prefix(prefix: str, text: str) -> str:
     if prefix and text:
         return f"{prefix} · {text}"
     return prefix or text
+
+
+def node_relations(
+    diagram: mp.MermaidDiagram,
+) -> tuple[dict[str, str], dict[str, list[str]], dict[str, list[str]]]:
+    """Derive id->label, 1-hop in-labels, and 1-hop out-labels from a diagram.
+
+    Pure function over the diagram's existing (already-parsed) node/edge
+    lists — no new parsing. Shared by the embed path (``chunk_mermaid_rows``)
+    and the read path (``ops.py``'s ``format=node``) so both agree.
+    """
+    label_by_id = {n.node_id: (n.label or n.node_id) for n in diagram.nodes}
+    in_map: dict[str, list[str]] = {}
+    out_map: dict[str, list[str]] = {}
+    for edge in diagram.edges:
+        from_label = label_by_id.get(edge.from_id, edge.from_id)
+        to_label = label_by_id.get(edge.to_id, edge.to_id)
+        out_labels = out_map.setdefault(edge.from_id, [])
+        if to_label not in out_labels:
+            out_labels.append(to_label)
+        in_labels = in_map.setdefault(edge.to_id, [])
+        if from_label not in in_labels:
+            in_labels.append(from_label)
+    return label_by_id, in_map, out_map
 
 
 def chunk_mermaid_rows(
@@ -266,6 +323,8 @@ def chunk_mermaid_rows(
         "mermaid_file",
     )
 
+    label_by_id, in_map, out_map = node_relations(diagram)
+
     if strategy != "file_only":
         _append(
             _with_search_prefix(catalog_prefix, header_flatten_text(title, diagram)),
@@ -279,6 +338,8 @@ def chunk_mermaid_rows(
                 node.node_id,
                 node.label or node.node_id,
                 template=template,
+                in_labels=in_map.get(node.node_id, []),
+                out_labels=out_map.get(node.node_id, []),
             )
             entity = _entity_search_tokens(node.node_id, node.label or node.node_id)
             if entity:
@@ -294,7 +355,7 @@ def chunk_mermaid_rows(
     if strategy == "nodes_and_edges" and include_edges:
         for edge in diagram.edges:
             _append(
-                edge_flatten_text(title, edge),
+                edge_flatten_text(title, edge, label_by_id),
                 abs_start_line,
                 "mermaid_edge",
                 row_key=f"{edge.from_id}->{edge.to_id}",

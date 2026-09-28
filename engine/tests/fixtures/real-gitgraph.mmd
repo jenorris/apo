@@ -1,0 +1,12 @@
+%%{init: { 'gitGraph': {'mainBranchName': 'main'} } }%%
+gitGraph
+    commit id: "prod-baseline"
+    branch quality-assurance
+    checkout main
+    branch user-acceptance-testing
+    checkout main
+    branch PLAT-1234-fix
+    commit id: "plat-1234-work"
+    commit id: "pr-review-main"
+    checkout quality-assurance
+    merge PLAT-1234-fix id: "qa-merge-1"

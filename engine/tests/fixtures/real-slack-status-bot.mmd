@@ -1,0 +1,32 @@
+flowchart TD
+  subgraph inputs [Inputs]
+    GWS["gws calendar events list"]
+    YAML["slack-status-rules.yaml"]
+    OVR["slack-status-overrides.json"]
+    OPT["Optima current.yaml"]
+    FB["Time-of-day fallback slots"]
+  end
+
+  subgraph engine [slack-status-bot.py]
+    PROJ["schedule + optima projector sync"]
+    MAP["build_optima_decision"]
+    RESOLVE["resolve_decision priority"]
+    FP["Fingerprint dedup"]
+  end
+
+  subgraph outputs [Outputs]
+    SLACK["Slack users.profile.set"]
+    PRES["Slack users.setPresence auto"]
+  end
+
+  GWS --> PROJ
+  PROJ --> OPT
+  OPT --> MAP
+  YAML --> MAP
+  YAML --> FB
+  OVR --> RESOLVE
+  MAP --> RESOLVE
+  FB --> RESOLVE
+  RESOLVE --> FP
+  FP --> SLACK
+  FP --> PRES

@@ -1,0 +1,11 @@
+flowchart TD
+  A[Branch: edit modules/apps/X] --> B[Set QA pin to branch]
+  B --> C[tofu init -upgrade + plan QA]
+  C --> D{OK?}
+  D -->|no| A
+  D -->|yes| E[Merge to main]
+  E --> F[Tag X-infra-vY.Z.Z]
+  F --> G[PR: bump UAT pin]
+  G --> H[Plan/apply UAT when ready]
+  H --> I[PR: bump prod pin]
+  I --> J[Plan/apply prod per change window]
