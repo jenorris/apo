@@ -1,0 +1,17 @@
+{
+  "composition": {
+    "k": 3,
+    "kind_share_at_k": {
+      "table_header": 0.2667,
+      "table_row": 0.5333,
+      "unknown": 0.2
+    },
+    "mean_distinct_paths_at_k": 1.0,
+    "mean_max_same_path_at_k": 3.0,
+    "queries_scored": 5
+  },
+  "hit_at_k": 0.8,
+  "k": 3,
+  "mrr_at_k": 0.8,
+  "queries": 5
+}
