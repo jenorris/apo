@@ -2,6 +2,21 @@
 
 All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags start with **v0.1.0**.
 
+## [Unreleased]
+
+## [0.33.1] — 2026-09-29
+
+### Fixed
+
+- `apo_admin` now infers `action="invoke"` when a caller omits `action` but
+  supplies a capability `name` plus `parameters` and/or `confirm=true`.
+  Previously these calls silently returned the capability list. Explicit
+  actions and no-argument listing retain their behavior; destructive
+  capabilities still require confirmation. Added resolver and MCP dispatch
+  regression coverage.
+
+**Upgrade:** Restart MCP hosts so they reload the nullable `action` default.
+
 ## [0.33.0] — 2026-09-28
 
 A usage-telemetry review of the `scratchpad` MCP tool (JSON/YAML staging

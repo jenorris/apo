@@ -143,6 +143,30 @@ def _needs_confirm(name: str, parameters: dict[str, Any]) -> bool:
     return False
 
 
+def resolve_action(
+    action: str | None,
+    name: str | None,
+    parameters: dict[str, Any] | None,
+    confirm: bool,
+) -> str:
+    """Infer list|describe|invoke when the MCP caller omits ``action``.
+
+    A nullable MCP default distinguishes omission from an explicit action.
+    A caller that supplies ``name`` plus ``parameters`` and/or ``confirm``
+    (e.g. ``name="delete_note", parameters={...}, confirm=true``) clearly
+    intends to invoke that capability, not list the catalog — so that
+    combination infers ``invoke``. An explicit ``action`` always wins, and
+    every other omitted-action shape (including no arguments at all) keeps
+    the documented default of ``list``.
+    """
+    explicit = (action or "").strip().lower()
+    if explicit:
+        return explicit
+    if (name or "").strip() and (parameters is not None or confirm):
+        return "invoke"
+    return "list"
+
+
 def admin_list() -> dict[str, Any]:
     return {
         "ok": True,

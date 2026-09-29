@@ -1028,9 +1028,13 @@ async def vault(
 @mcp.tool(annotations=_MUTATE)
 async def apo_admin(
     action: Annotated[
-        str,
-        Field(description="list | describe | invoke"),
-    ] = "list",
+        str | None,
+        Field(
+            description=(
+                "list | describe | invoke"
+            ),
+        ),
+    ] = None,
     name: Annotated[
         str | None,
         Field(description="Admin capability id (required for describe / invoke)."),
@@ -1059,7 +1063,7 @@ async def apo_admin(
     ] = "",
 ) -> dict:
     """Engine admin ops: list/describe capabilities; invoke with confirm=true when destructive."""
-    act = (action or "list").strip().lower()
+    act = apo_admin_ops.resolve_action(action, name, parameters, confirm)
     if act == "list":
         return await asyncio.to_thread(apo_admin_ops.admin_list)
     if act == "describe":
