@@ -4,6 +4,8 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.34.0] — 2026-09-30
+
 ### Added
 
 - Optima merge reads **domain projections** (`optima.domain-projection/v1`): an
