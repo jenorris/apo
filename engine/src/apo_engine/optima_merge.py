@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from . import optima_contract, vaults
+from . import domain_projection, optima_contract, vaults
 from .optima_contract import MergeSettings, SourceSpec
 
 TZ = ZoneInfo("America/New_York")
@@ -145,6 +145,7 @@ def build_merged(
     *,
     override: dict[str, Any] | None = None,
     now: datetime | None = None,
+    domain_projections: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(TZ)
     kind = pick_merged_kind(life, work, now)
@@ -178,9 +179,9 @@ def build_merged(
     for s in (life.get("sources") or []) + (work.get("sources") or []):
         if s not in sources:
             sources.append(s)
-    if "meta-schedule" not in sources and life:
+    if "meta-schedule" not in sources and life and not life.get(_FROM_PROJECTION):
         sources.append("meta-schedule")
-    if "work-schedule" not in sources and work:
+    if "work-schedule" not in sources and work and not work.get(_FROM_PROJECTION):
         sources.append("work-schedule")
     sources.append("reachability-rules")
 
@@ -221,7 +222,7 @@ def build_merged(
         if "override" not in sources:
             sources.append("override")
 
-    return {
+    merged = {
         "okf_type": "Note",
         "type": "optima",
         "status": "active",
@@ -267,6 +268,9 @@ def build_merged(
         "timestamp": now.isoformat(),
         "writer": "apo_engine",
     }
+    if domain_projections:
+        merged["domain_projections"] = domain_projections
+    return merged
 
 
 def degraded_free(*, now: datetime | None = None) -> dict[str, Any]:
@@ -323,6 +327,83 @@ def _load_schedule_file(path: Path) -> dict[str, Any]:
     return parse_md_frontmatter(path)
 
 
+_FROM_PROJECTION = "_from_projection"
+# Projection kinds outside the current.yaml kind enum (contract current_schema.kind).
+_PROJECTION_TO_CURRENT_KIND = {"family_duty": "personal"}
+
+
+def _read_projection_yaml(path: Path) -> Any:
+    """Raw YAML load that surfaces read/parse errors (``load_yaml_file`` hides them)."""
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise domain_projection.ProjectionError(f"unreadable: {exc}") from exc
+
+
+def _collect_projection(
+    spec: SourceSpec,
+    path: Path | None,
+    now: datetime,
+    summaries: dict[str, dict[str, Any]],
+    parsed: dict[str, domain_projection.Projection],
+    errors: list[str],
+) -> None:
+    """Record one domain projection's health. Missing/invalid is never treated as free."""
+    domain = spec.domain
+    if not domain:
+        return
+    if path is None:
+        summaries[domain] = {"state": "missing"}
+        if spec.if_missing == "error":
+            errors.append(f"missing source {spec.id}: {spec.vault}:{spec.path}")
+        return
+    try:
+        projection = domain_projection.parse(
+            _read_projection_yaml(path), expect_domain=domain, now=now
+        )
+    except domain_projection.ProjectionError as exc:
+        summaries[domain] = {"state": "error", "error": str(exc)}
+        if spec.if_missing == "error":
+            errors.append(f"invalid source {spec.id}: {exc}")
+        return
+    parsed[domain] = projection
+    summaries[domain] = domain_projection.summarize(
+        projection, now, stale_after_minutes=spec.stale_after_minutes
+    )
+
+
+def _fallback_from_projection(
+    projection: domain_projection.Projection | None,
+    now: datetime,
+    *,
+    life: bool,
+) -> dict[str, Any]:
+    """Minimal schedule dict from the block active now; {} when nothing is projected.
+
+    Supplements only: used when the theme-bearing source is absent. A gap inside
+    coverage yields {} (no projected block), not a synthetic "free".
+    """
+    if projection is None:
+        return {}
+    active = domain_projection.resolve(projection, now).active
+    if active is None:
+        return {}
+    kind = _PROJECTION_TO_CURRENT_KIND.get(active.kind, active.kind)
+    out: dict[str, Any] = {
+        "kind": kind,
+        "theme": None,
+        "start": active.start.isoformat(),
+        "end": active.end.isoformat(),
+        "sources": [f"{projection.domain}-projection"],
+        _FROM_PROJECTION: True,
+    }
+    if life:
+        out["family_on_duty"] = active.kind == "family_duty"
+    else:
+        out["calendar"] = "work"
+    return out
+
+
 _VOLATILE_KEYS = frozenset({"synced_at", "timestamp"})
 
 
@@ -369,9 +450,15 @@ def run_merge(
     work: dict[str, Any] = {}
     loaded_any = False
     errors: list[str] = []
+    now = datetime.now(TZ)
+    projection_summaries: dict[str, dict[str, Any]] = {}
+    projections: dict[str, domain_projection.Projection] = {}
 
     for spec in settings.sources:
         path = _resolve_source_path(vault_root, spec, bindings)
+        if spec.role == optima_contract.PROJECTION_ROLE:
+            _collect_projection(spec, path, now, projection_summaries, projections, errors)
+            continue
         if path is None:
             if spec.if_missing == "error":
                 errors.append(f"missing source {spec.id}: {spec.vault}:{spec.path}")
@@ -397,6 +484,14 @@ def run_merge(
     if errors:
         return {"ok": False, "error": "source_error", "message": "; ".join(errors)}
 
+    # Supplement: projections fill a domain only when its theme-bearing source is absent.
+    if not life:
+        life = _fallback_from_projection(projections.get("atlas"), now, life=True)
+        loaded_any = loaded_any or bool(life)
+    if not work:
+        work = _fallback_from_projection(projections.get("work"), now, life=False)
+        loaded_any = loaded_any or bool(work)
+
     override_path = vault_root / settings.override_rel.lstrip("/")
     override = load_active_override(override_path)
     if override is None and settings.override_if_missing == "error":
@@ -417,9 +512,18 @@ def run_merge(
                 "message": "no domain schedules or override",
             }
         merged = degraded_free()
+        if projection_summaries:
+            merged["domain_projections"] = projection_summaries
         degraded = True
     else:
-        merged = build_merged(life, work, rules, override=override)
+        merged = build_merged(
+            life,
+            work,
+            rules,
+            override=override,
+            now=now,
+            domain_projections=projection_summaries,
+        )
 
     out_path = vault_root / settings.output_current.lstrip("/")
     wrote = False
@@ -442,6 +546,8 @@ def run_merge(
     }
     if bindings_error:
         result["bindings_warning"] = bindings_error
+    if projection_summaries:
+        result["projections"] = {d: s["state"] for d, s in projection_summaries.items()}
     return result
 
 

@@ -4,6 +4,27 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- Optima merge reads **domain projections** (`optima.domain-projection/v1`): an
+  optima-contract source with `role: domain_projection` and `domain: atlas|work`
+  (optional `stale_after_minutes`, default 120). New `domain_projection` module
+  validates strictly (exact keys, sorted blocks inside coverage, offset-bearing
+  timestamps, `verified_at` not in the future) and resolves the block active now
+  by the exchange spec's kind precedence.
+- `current.yaml` gains `domain_projections` (per domain: `state` ok|missing|error,
+  `verified_at`, `coverage_end`, `stale`, `position`, `active`, `next`) only when
+  the contract declares projection sources. The summary holds no ages, so idle
+  ticks still skip the rewrite.
+- Projections **supplement** theme-bearing sources: a projection fills `life`/`work`
+  only when that source is absent (`family_duty` maps to `personal`). A gap inside
+  coverage never becomes `free`; a missing, unreadable, or invalid projection is
+  reported as missing/error and never used. `if_missing: error` fails the merge.
+
+**Upgrade:** Deploy and restart the watcher **before** adding `domain_projection`
+sources to a vault's optima-contract. Older engines treat an unknown role as a
+work/life schedule and would merge the projection file as one.
+
 ## [0.33.1] — 2026-09-29
 
 ### Fixed
