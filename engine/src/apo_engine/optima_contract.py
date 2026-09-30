@@ -21,6 +21,16 @@ OPTIMA_CONTRACT_CANDIDATES = (
 OPTIMA_CONTRACT_REL = OPTIMA_CONTRACT_CANDIDATES[0]
 
 IF_MISSING = ("skip", "error")
+PROJECTION_ROLE = "domain_projection"
+PROJECTION_DOMAINS = ("atlas", "work")
+
+
+def _positive_int(raw: Any, default: int) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 @dataclass(frozen=True)
@@ -30,6 +40,8 @@ class SourceSpec:
     path: str
     vault: str | None = None
     if_missing: str = "skip"  # skip | error
+    domain: str | None = None  # domain_projection role only: atlas | work
+    stale_after_minutes: int = 120  # domain_projection role only
 
 
 @dataclass(frozen=True)
@@ -121,6 +133,18 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
         f = vc.enum_finding(row.get("if_missing"), IF_MISSING, f"{where}.if_missing")
         if f:
             findings.append(f)
+        if row.get("role") == PROJECTION_ROLE:
+            f = vc.enum_finding(row.get("domain"), PROJECTION_DOMAINS, f"{where}.domain")
+            if f:
+                findings.append(f)
+            elif not row.get("domain"):
+                findings.append(
+                    vc.finding(
+                        "contract.invalid_shape",
+                        f"{where}.domain",
+                        f"role {PROJECTION_ROLE} requires domain ({' | '.join(PROJECTION_DOMAINS)})",
+                    )
+                )
     return findings
 
 
@@ -167,6 +191,8 @@ def merge_settings(vault_root: Path) -> MergeSettings:
                     path=path,
                     vault=(str(row["vault"]).strip() if row.get("vault") else None),
                     if_missing=str(row.get("if_missing") or "skip").strip() or "skip",
+                    domain=(str(row["domain"]).strip() if row.get("domain") else None),
+                    stale_after_minutes=_positive_int(row.get("stale_after_minutes"), 120),
                 )
             )
 
