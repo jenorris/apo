@@ -4,6 +4,30 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.35.0] — 2026-10-07
+
+### Added
+
+- **`llamacpp` embed backend** (`APO_EMBED_BACKEND=llamacpp`): talks to a
+  `llama-server --embeddings` process over `/v1/embeddings` (`APO_LLAMACPP_URL`,
+  default `http://127.0.0.1:8099`). For GGUF embedders Ollama cannot load yet. It
+  shares the Ollama path's batching, NaN/failed-input bisection and per-file drop
+  handling.
+- **`APO_DOC_PREFIX`**: passage-side prefix, the counterpart of `APO_QUERY_PREFIX`.
+  Prepended to indexed text only, never to queries (EmbeddingGemma 2 wants
+  `title: none | text: `).
+- **`APO_EMBED_DIM`**: Matryoshka truncation to the first N dimensions, re-normalized,
+  applied to passages and queries alike. `0` (default) keeps the model's native size.
+- `embed()` takes `as_query=` so the two prefixes cannot be mixed up.
+
+Measured with EmbeddingGemma 2 (F16 GGUF) at 512 dimensions on a 24.9k-chunk vault:
+search-eval hit@5/MRR matched `bge-m3`, the index was ~27% smaller (184 vs 252 MB) and
+built in about half the time.
+
+**Upgrade:** Nothing changes unless you set `APO_EMBED_BACKEND=llamacpp`. Switching
+models, dimension or prefixes changes the vectors; run `index --rebuild` for every
+vault index afterwards (the index dimension is fixed when it is first written).
+
 ## [0.34.1] — 2026-10-07
 
 ### Fixed

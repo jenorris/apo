@@ -42,18 +42,34 @@ NOTES_ROOT: Path = _path("APO_NOTES_ROOT", "~/Notes")
 # Single-file sqlite-vec index (rebuildable, git-ignored).
 INDEX_PATH: Path = _path("APO_INDEX", str(_ENGINE_ROOT / "index.db"))
 
-# Embedding backend: "ollama" (Metal/GPU, default) or "fastembed" (ONNX).
+# Embedding backend: "ollama" (Metal/GPU, default), "llamacpp" (a llama-server
+# --embeddings process; use for GGUF models Ollama cannot load yet), or "fastembed" (ONNX).
 EMBED_BACKEND: str = os.environ.get("APO_EMBED_BACKEND", "ollama").lower()
 
 # Model. Defaults differ per backend — vectors are NOT interchangeable across models.
 _DEFAULT_MODEL = {
     "ollama": "bge-m3",
+    "llamacpp": "embeddinggemma-2",  # label only: llama-server serves whatever GGUF it loaded
     "fastembed": "BAAI/bge-large-en-v1.5",
 }
 MODEL_NAME: str = os.environ.get("APO_MODEL", _DEFAULT_MODEL.get(EMBED_BACKEND, "bge-m3"))
 
 # Ollama endpoint (required when EMBED_BACKEND=ollama).
 OLLAMA_URL: str = os.environ.get("APO_OLLAMA_URL", "http://localhost:11434").rstrip("/")
+
+# llama.cpp server endpoint (required when EMBED_BACKEND=llamacpp): OpenAI-style
+# POST /v1/embeddings on `llama-server --embeddings`.
+LLAMACPP_URL: str = os.environ.get("APO_LLAMACPP_URL", "http://127.0.0.1:8099").rstrip("/")
+
+# Optional passage-side prefix, the counterpart of QUERY_PREFIX below. Prepended to every
+# indexed text (never to queries). Some models are trained with one (EmbeddingGemma 2:
+# "title: none | text: "); omitting it costs precision. Toggling it needs a reindex.
+DOC_PREFIX: str = os.environ.get("APO_DOC_PREFIX", "")
+
+# Matryoshka truncation: keep the first N dimensions and re-normalize (0 = model's native
+# size). Only valid for models trained for it (EmbeddingGemma 2: 128/256/512/768). The
+# index dimension is fixed at first write, so changing it needs `index --rebuild`.
+EMBED_DIM: int = int(os.environ.get("APO_EMBED_DIM", "0"))
 
 # Optional query-side instruction prefix (BGE-family models are often asymmetric:
 # a query instruction prefix, no passage prefix). Applied in query_embed() ONLY —

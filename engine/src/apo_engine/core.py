@@ -426,6 +426,42 @@ def _ollama_embed_request(
     return embs
 
 
+def _llamacpp_embed_request(texts: list[str]) -> list[list[float]]:
+    """POST /v1/embeddings to a ``llama-server --embeddings`` process."""
+    body = json.dumps({"model": config.MODEL_NAME, "input": texts}).encode()
+    req = urllib.request.Request(
+        f"{config.LLAMACPP_URL}/v1/embeddings",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.load(resp)
+    rows = sorted(data.get("data") or [], key=lambda r: r.get("index", 0))
+    if len(rows) != len(texts):
+        raise RuntimeError(f"llama-server returned {len(rows)} embeddings for {len(texts)} inputs")
+    return [r["embedding"] for r in rows]
+
+
+def _server_embed_request(
+    texts: list[str],
+    *,
+    keep_alive: str | int | None = None,
+) -> list[list[float]]:
+    if config.EMBED_BACKEND == "llamacpp":
+        return _llamacpp_embed_request(texts)
+    return _ollama_embed_request(texts, keep_alive=keep_alive)
+
+
+def _truncate_dim(vec: list[float] | None) -> list[float] | None:
+    """Matryoshka truncation: first ``EMBED_DIM`` components, re-normalized."""
+    dim = config.EMBED_DIM
+    if vec is None or dim <= 0 or len(vec) <= dim:
+        return vec
+    head = vec[:dim]
+    norm = sum(x * x for x in head) ** 0.5 or 1.0
+    return [x / norm for x in head]
+
+
 def _embed_batch_resilient(
     texts: list[str],
     poisoned: list[int],
@@ -443,7 +479,7 @@ def _embed_batch_resilient(
     content must never land in logs (this engine indexes compliance/employer-sensitive notes).
     """
     try:
-        embs = _ollama_embed_request(texts, keep_alive=keep_alive)
+        embs = _server_embed_request(texts, keep_alive=keep_alive)
         if not any(_has_nan(v) for v in embs):
             return embs
     except (urllib.error.HTTPError, urllib.error.URLError, RuntimeError, TimeoutError):
@@ -485,12 +521,19 @@ def embed(
     verbose: bool = False,
     *,
     keep_alive: str | int | None = None,
+    as_query: bool = False,
 ) -> list[list[float] | None]:
+    """Embed texts. Passages get ``DOC_PREFIX``; ``as_query`` texts are used as given
+    (the caller already applied ``QUERY_PREFIX``). Output is cut to ``EMBED_DIM``."""
     if not texts:
         return []
-    if config.EMBED_BACKEND == "ollama":
-        return _embed_ollama(texts, verbose=verbose, keep_alive=keep_alive)
-    return _embed_fastembed(texts)
+    if config.DOC_PREFIX and not as_query:
+        texts = [config.DOC_PREFIX + t for t in texts]
+    if config.EMBED_BACKEND in ("ollama", "llamacpp"):
+        out = _embed_ollama(texts, verbose=verbose, keep_alive=keep_alive)
+    else:
+        out = _embed_fastembed(texts)
+    return [_truncate_dim(v) for v in out]
 
 
 _search_degraded: ContextVar[str | None] = ContextVar("apo_search_degraded", default=None)
@@ -670,6 +713,7 @@ def query_embed(query: str) -> list[float]:
     vec = embed(
         [prefix + query if prefix else query],
         keep_alive=keep_alive if config.EMBED_BACKEND == "ollama" else None,
+        as_query=True,
     )[0]
     if ttl > 0 and key and vec is not None:
         with _query_embed_lock:

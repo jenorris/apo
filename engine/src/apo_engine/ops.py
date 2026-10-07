@@ -1043,6 +1043,11 @@ def _search_degraded_warning(degraded: str) -> str:
             f"check the Ollama daemon (`just ollama`, APO_OLLAMA_URL={config.OLLAMA_URL}) "
             f"and that the model is pulled (`ollama pull {config.MODEL_NAME}`)"
         )
+    elif config.EMBED_BACKEND == "llamacpp":
+        fix = (
+            "results are keyword-only (BM25) until the embed backend is back — "
+            f"check that llama-server is running with --embeddings (APO_LLAMACPP_URL={config.LLAMACPP_URL})"
+        )
     else:
         fix = (
             "results are keyword-only (BM25) until the embed backend is back — "
