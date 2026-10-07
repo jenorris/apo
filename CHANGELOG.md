@@ -4,6 +4,34 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.34.1] — 2026-10-07
+
+### Fixed
+
+- **Oversize sections no longer lose content or take their note out of the index.**
+  Embedding input past a model's context was either truncated silently (Ollama +
+  bge-m3 embedded only the head of a long section) or rejected outright (llama.cpp),
+  and one rejected chunk dropped its whole file. Sections over `APO_EMBED_MAX_CHARS`
+  (default 6000 chars of cleaned text; `0` disables) are now bounded on the vector
+  side only:
+  - **Rollups** (sections whose child sections are indexed separately) embed their
+    heading, the intro before the first child, and an outline of the child headings.
+  - **Leaves** are split into line-aware windows (paragraph and table boundaries, never
+    inside a fence; `APO_EMBED_WINDOW_OVERLAP`, default 400). Window 0 is the
+    section's own vector; the rest are new `section_part` rows linked by
+    `parent_chunk_hash`. Search maps a window hit back to its section, so callers
+    never see a `section_part`.
+  - `chunks.text` and the FTS row keep the full section, so keyword search covers all
+    of it. `section_part` rows have an empty FTS entry (no double-counted hits), and
+    the `ensure_fts` backfill skips them too.
+- A chunk the backend rejects now gets one retry on its leading half before the file
+  is dropped; the warning names the path and chunk ord, never content. A dead backend
+  still leaves the file unstamped for the next pass.
+
+**Upgrade:** Existing indexes pick this up per file on its next re-index. Run
+`index --rebuild` once to apply it vault-wide. Logging: oversize sections log at
+`apo.index` INFO; degraded embeds log at WARNING.
+
 ## [0.34.0] — 2026-09-30
 
 ### Added

@@ -9,6 +9,7 @@ import fnmatch
 import os
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 import struct
@@ -35,6 +36,7 @@ except ImportError:  # numpy is transitive (fastembed/rerank extra) — not a ba
     _np = None
 
 from . import config
+from . import oversize
 from . import ranking
 from . import rerank
 from . import table_markdown
@@ -211,15 +213,52 @@ def _markdown_chunk_rows(text: str, rel: str) -> list[tuple]:
 
     # Map absolute line → owning section (breadcrumb + chunk_id) for table parenting.
     section_spans: list[tuple[int, int, str, str]] = []  # (start, end, breadcrumb, chunk_id)
-    for breadcrumb, level, ctext, start_line, end_line in sections:
+    for si, (breadcrumb, level, ctext, start_line, end_line) in enumerate(sections):
         chash = _content_hash(ctext)
         chunk_id = compute_chunk_id(id_prefix, start_line, end_line, chash, model)
         sec_bytes = len(ctext.encode("utf-8"))
+        plan = (
+            oversize.plan_section(
+                sections,
+                si,
+                config.EMBED_MAX_CHARS,
+                config.EMBED_WINDOW_OVERLAP,
+                lambda t: _index_text_for_embedding(t, "section"),
+            )
+            if config.EMBED_MAX_CHARS > 0
+            else None
+        )
+        meta = {"embed_text": plan.embed_text} if plan else None
         rows.append(
-            (rel, ord_counter, breadcrumb, ctext, start_line, end_line, level, chunk_id, chash, sec_bytes, None)
+            (rel, ord_counter, breadcrumb, ctext, start_line, end_line, level, chunk_id, chash, sec_bytes, meta)
         )
         ord_counter += 1
         section_spans.append((start_line, end_line, breadcrumb, chunk_id))
+        if plan is not None:
+            logging.getLogger("apo.index").info(
+                "oversize section %s:%s (%d bytes) embedded as %s%s",
+                rel,
+                breadcrumb or "(preamble)",
+                sec_bytes,
+                plan.kind,
+                f" + {len(plan.parts)} part(s)" if plan.parts else "",
+            )
+            for win in plan.parts:
+                phash = _content_hash(win.text)
+                pid = compute_chunk_id(id_prefix, win.start_line, win.end_line, phash, model)
+                part_embed = f"{breadcrumb}\n\n{_index_text_for_embedding(win.text, 'section')}"
+                rows.append(
+                    (
+                        rel, ord_counter, breadcrumb, win.text, win.start_line, win.end_line, level,
+                        pid, phash, len(win.text.encode("utf-8")),
+                        {
+                            "chunk_kind": "section_part",
+                            "parent_chunk_hash": chunk_id,
+                            "embed_text": part_embed,
+                        },
+                    )
+                )
+                ord_counter += 1
 
     body, body_line = _body_start_line(text)
     if not body.strip():
@@ -1269,7 +1308,8 @@ def ensure_fts(db: sqlite3.Connection) -> None:
     db.execute("DELETE FROM chunks_fts")
     db.execute(
         "INSERT INTO chunks_fts(rowid, text) "
-        "SELECT id, _apo_index_text(text, COALESCE(chunk_kind, 'section')) FROM chunks"
+        "SELECT id, CASE WHEN chunk_kind = 'section_part' THEN '' "
+        "ELSE _apo_index_text(text, COALESCE(chunk_kind, 'section')) END FROM chunks"
     )
     db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_ready','1')")
 
@@ -1331,7 +1371,10 @@ def _insert_pending_chunks(
             )
         )
         vec_rows.append((rid, blob))
-        fts_rows.append((rid, _index_text_for_embedding(ctext, (meta or {}).get("chunk_kind") or "section")))
+        kind = (meta or {}).get("chunk_kind") or "section"
+        # Window rows are vector-only: the parent section's FTS row already holds the
+        # full text, so indexing it again would double-count keyword hits.
+        fts_rows.append((rid, "" if kind == "section_part" else _index_text_for_embedding(ctext, kind)))
     db.executemany(
         """INSERT INTO chunks(id, path, ord, heading, text, start_line, end_line, heading_level,
                                chunk_hash, content_hash, embedding, section_bytes,
@@ -1462,6 +1505,37 @@ def _record_embed_drops(
     return quarantined
 
 
+def _retry_failed_embeds_degraded(
+    part: list,
+    texts: list[str],
+    vectors: list[list[float] | None],
+) -> list[list[float] | None]:
+    """Give each failed chunk one more try on its leading half before the file is dropped.
+
+    A chunk that cannot embed (input too long for the backend, a NaN-prone input) used
+    to take its whole note out of the index. A vector from the head of the chunk keeps
+    the note searchable; the warning names the path and ord only, never the content
+    (this engine indexes compliance-sensitive notes). If the retry also fails the vector
+    stays ``None`` and the caller drops the file as before, so a dead backend still
+    leaves the file unstamped for the next pass.
+    """
+    limit = max(config.EMBED_MAX_CHARS // 2, 1000) if config.EMBED_MAX_CHARS > 0 else 3000
+    out = list(vectors)
+    for i, vec in enumerate(vectors):
+        if vec is not None or len(texts[i]) <= limit:
+            continue
+        retry = embed([texts[i][:limit]], verbose=False)
+        if retry and retry[0] is not None:
+            out[i] = retry[0]
+            logging.getLogger("apo.index").warning(
+                "embed degraded for %s ord=%s: full input failed, indexed its first %d chars",
+                part[i][0],
+                part[i][1],
+                limit,
+            )
+    return out
+
+
 def _embed_and_store_pending(
     db: sqlite3.Connection,
     pending: list[PendingChunk] | list[tuple],
@@ -1486,7 +1560,9 @@ def _embed_and_store_pending(
     stored = 0
     for i in range(0, total, batch):
         part = pending[i : i + batch]
-        part_vectors = embed([_pending_index_text(t) for t in part], verbose=False)
+        part_texts = [_pending_index_text(t) for t in part]
+        part_vectors = embed(part_texts, verbose=False)
+        part_vectors = _retry_failed_embeds_degraded(part, part_texts, part_vectors)
         if verbose:
             print(f"  … embedded {min(i + batch, total)}/{total}", flush=True)
         for row, vec in zip(part, part_vectors):
@@ -2078,6 +2154,53 @@ def _folder_vector_via_global_knn(
     return out
 
 
+def _collapse_part_hits(db: sqlite3.Connection, vrows: list[tuple]) -> list[tuple]:
+    """Replace ``section_part`` hits with their parent section, best rank wins.
+
+    Window rows exist only so a long section can be found by text deep inside it; the
+    result a caller wants is the section. Parts never appear in FTS, so only vector
+    results need this. A part whose parent row is gone (mid-reindex) is dropped.
+    """
+    if not vrows:
+        return vrows
+    ids = [r[0] for r in vrows]
+    ph = ",".join("?" * len(ids))
+    parts = {
+        rid: parent
+        for rid, parent in db.execute(
+            f"SELECT id, parent_chunk_hash FROM chunks WHERE id IN ({ph}) AND chunk_kind='section_part'",
+            ids,
+        )
+    }
+    if not parts:
+        return vrows
+    parent_hashes = sorted({p for p in parts.values() if p})
+    parent_ids: dict[str, int] = {}
+    if parent_hashes:
+        ph = ",".join("?" * len(parent_hashes))
+        parent_ids = {
+            h: pid
+            for h, pid in db.execute(
+                f"SELECT chunk_hash, id FROM chunks WHERE chunk_hash IN ({ph}) AND chunk_kind='section'",
+                parent_hashes,
+            )
+        }
+    out: list[tuple] = []
+    seen: set[int] = set()
+    for row in vrows:
+        rid = row[0]
+        if rid in parts:
+            rid = parent_ids.get(parts[rid])
+            if rid is None:
+                continue
+            row = (rid, *row[1:])
+        if rid in seen:
+            continue
+        seen.add(rid)
+        out.append(row)
+    return out
+
+
 def _scoped_vector_hits(
     db: sqlite3.Connection,
     qvec: list[float],
@@ -2598,7 +2721,7 @@ def _index_text_for_embedding(ctext: str, chunk_kind: str) -> str:
     vector and pads FTS snippet() windows with punctuation. table_row/header
     text is already flattened and dense — nothing to clean there.
     """
-    if chunk_kind not in ("section", "", None):
+    if chunk_kind not in ("section", "section_part", "", None):
         return ctext
     cleaned = _collapse_full_tables(ctext)
     cleaned = _SEP_ROW_RE.sub("", cleaned)
@@ -2614,6 +2737,14 @@ def _pending_chunk_kind(row: "PendingChunk | tuple") -> str:
 
 
 def _pending_index_text(row: "PendingChunk | tuple") -> str:
+    """Embedder input. ``meta["embed_text"]`` (oversize sections) overrides the cleaned text.
+
+    The override feeds the vector only — ``chunks.text`` and the FTS row keep the full
+    section, so keyword search still covers all of it.
+    """
+    meta = row[10] if len(row) > 10 else None
+    if isinstance(meta, dict) and meta.get("embed_text"):
+        return meta["embed_text"]
     return _index_text_for_embedding(row[3], _pending_chunk_kind(row))
 
 
@@ -2820,6 +2951,7 @@ def search_vector_only(
             "SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance",
             (sqlite_vec.serialize_float32(qvec), fetch_n),
         ).fetchall()
+    vrows = _collapse_part_hits(db, vrows)
     ids = [r[0] for r in vrows]
     hits = _hits_for_ids(
         db, ids, folder_prefix, match=None, fts_rowid_set=set(), snippet_chars=snippet_chars
@@ -3201,6 +3333,7 @@ def search(
             "SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance",
             (sqlite_vec.serialize_float32(qvec), vec_n),
         ).fetchall()
+    vrows = _collapse_part_hits(db, vrows)
 
     for rank, (rid, _) in enumerate(vrows):
         fused[rid] = fused.get(rid, 0.0) + 1.0 / (RRF_K + rank)

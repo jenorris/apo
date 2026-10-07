@@ -81,6 +81,15 @@ SECTION_PREVIEW_CHARS: int = int(os.environ.get("APO_SECTION_PREVIEW_CHARS", "20
 SECTION_WARN_BYTES: int = int(os.environ.get("APO_SECTION_WARN_BYTES", "32768"))
 PREAMBLE_WARN_BYTES: int = int(os.environ.get("APO_PREAMBLE_WARN_BYTES", "4096"))
 
+# Embed-side bound (chars of cleaned section text). Sections over it are not embedded
+# whole: rollups get an outline, leaves are split into windows (see oversize.py).
+# 0 disables segmentation. The default sits well under the point where Ollama/bge-m3
+# starts to truncate dense notes and where llama.cpp rejects the input outright.
+# Changing it only takes effect for a file the next time that file is re-indexed.
+EMBED_MAX_CHARS: int = int(os.environ.get("APO_EMBED_MAX_CHARS", "6000"))
+# Trailing context repeated at the head of the next leaf window.
+EMBED_WINDOW_OVERLAP: int = int(os.environ.get("APO_EMBED_WINDOW_OVERLAP", "400"))
+
 # Ignore-file (globs relative to NOTES_ROOT).
 IGNORE_FILE: Path = _path("APO_IGNORE", str(_ENGINE_ROOT / ".indexignore"))
 
