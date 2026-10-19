@@ -18,6 +18,7 @@ Docs-only commits may land on `main` **without** a version bump (this file’s f
 1. [`engine/pyproject.toml`](engine/pyproject.toml) — `[project].version`
 2. [`engine/src/apo_engine/__init__.py`](engine/src/apo_engine/__init__.py) — `__version__`
 3. [`CHANGELOG.md`](CHANGELOG.md) — move `## [Unreleased]` bullets under `## [X.Y.Z] — YYYY-MM-DD`
+4. [`engine/uv.lock`](engine/uv.lock) — run `uv lock` in `engine/` after the bump (only the `apo-engine` version line should change)
 
 Do not leave orphan Unreleased prose without a version heading (restore a prior section if a patch shipped untagged).
 
@@ -32,7 +33,7 @@ jj new -r main          # or continue an existing feature bookmark on main tip
 ```
 
 1. **Changelog** — Promote Unreleased → `## [X.Y.Z] — YYYY-MM-DD` with Added/Changed/Fixed. Keep an empty `## [Unreleased]` at the top. Note upgrade cues when MCP schemas change (`Quit Cursor/Claude fully (Cmd+Q)`).
-2. **Bump** — Set the same semver in `engine/pyproject.toml` and `apo_engine.__version__`.
+2. **Bump** — Set the same semver in `engine/pyproject.toml` and `apo_engine.__version__`, then `cd engine && uv lock`.
 3. **Describe** — One commit message like `Release Apo X.Y.Z: <one-line why>`.
 4. **Merge to main**
 
