@@ -21,6 +21,13 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
   (`http.lowSpeedLimit=1000`, `http.lowSpeedTime=20`), and report a timeout as a
   failure instead of raising.
 - `git_sync action=status` reports `offline`, `next_retry_at` and `retry_count`.
+- **A finished rebase no longer blocks git sync.** `unsafe_git_state` now detects
+  a rebase in progress from git's own `rebase-merge/` / `rebase-apply/` state
+  dirs instead of `REBASE_HEAD`, which git leaves behind after a conflicted
+  rebase completes (`rebase --continue`). A stopped rebase still blocks, and now
+  reports `in progress: rebase (…)` rather than `detached HEAD`. MERGE_HEAD,
+  CHERRY_PICK_HEAD and REVERT_HEAD checks are unchanged. Vaults already blocked
+  by a stale REBASE_HEAD still need one `clear_block`.
 
 ## [0.35.0] — 2026-10-07
 

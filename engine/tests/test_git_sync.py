@@ -371,6 +371,56 @@ class GitSyncRepoTest(_VaultRepoCase):
         self.assertFalse(again["ok"])
         self.assertEqual(again["error"], "blocked")
 
+    def _conflict_with_remote(self) -> None:
+        """Remote and local both edit note.md's only line; local is ahead and behind."""
+        clone = self.tmp / "other"
+        _git(self.tmp, "clone", str(self.bare), str(clone))
+        _git(clone, "config", "user.email", "test@example.com")
+        _git(clone, "config", "user.name", "Test")
+        (clone / "note.md").write_text("# remote change\n", encoding="utf-8")
+        _git(clone, "add", "note.md")
+        _git(clone, "commit", "-m", "remote edits note")
+        _git(clone, "push", "origin", "HEAD:main")
+        (self.vault / "note.md").write_text("# local change\n", encoding="utf-8")
+        _git(self.vault, "add", "note.md")
+        _git(self.vault, "commit", "-m", "local edits note")
+        _git(self.vault, "fetch", "origin")
+
+    def test_stopped_rebase_is_unsafe(self):
+        self._conflict_with_remote()
+        stopped = _git(self.vault, "rebase", "origin/main", check=False)
+        self.assertNotEqual(stopped.returncode, 0)
+        git_dir = self.vault / ".git"
+        self.assertTrue((git_dir / "rebase-merge").is_dir())
+        reason = git_sync.unsafe_git_state(self.vault)
+        self.assertIsNotNone(reason)
+        self.assertIn("rebase", reason)
+
+    def test_finished_conflicted_rebase_leaving_rebase_head_is_safe(self):
+        # git leaves REBASE_HEAD behind after `rebase --continue`; that alone must
+        # not freeze sync (seen live 2026-10-19 on two vaults).
+        self._conflict_with_remote()
+        _git(self.vault, "rebase", "origin/main", check=False)
+        (self.vault / "note.md").write_text("# merged\n", encoding="utf-8")
+        _git(self.vault, "add", "note.md")
+        _git(self.vault, "-c", "core.editor=true", "rebase", "--continue")
+        git_dir = self.vault / ".git"
+        if not (git_dir / "REBASE_HEAD").exists():
+            # Some git versions clean it up; recreate the leftover we saw live.
+            head = _git(self.vault, "rev-parse", "HEAD").stdout
+            (git_dir / "REBASE_HEAD").write_text(head, encoding="utf-8")
+        self.assertFalse((git_dir / "rebase-merge").exists())
+        self.assertFalse((git_dir / "rebase-apply").exists())
+        self.assertIsNone(git_sync.unsafe_git_state(self.vault))
+
+        out = git_sync.commit_and_push(self.vault, push=True)
+        self.assertTrue(out["ok"], msg=out)
+        self.assertNotEqual(git_sync.read_status(self.vault)["state"], "blocked")
+        self.assertEqual(
+            _git(self.vault, "rev-parse", "HEAD").stdout.strip(),
+            _git(self.bare, "rev-parse", "main").stdout.strip(),
+        )
+
     def test_sync_disabled_status(self):
         _write_contract(self.vault, enabled=False)
         st = ops.git_sync_op("status")
