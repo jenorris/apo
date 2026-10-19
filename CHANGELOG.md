@@ -4,6 +4,8 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.35.1] — 2026-10-19
+
 ### Fixed
 
 - **Git sync no longer locks up when the remote is unreachable.** A transient
