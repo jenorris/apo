@@ -422,21 +422,27 @@ def unsafe_git_state(vault_root: Path) -> str | None:
     """Return a reason string if sync must not run, else None."""
     if not git_contract.is_git_work_tree(vault_root):
         return "not a git work tree"
-    proc = _run_git(vault_root, "rev-parse", "--abbrev-ref", "HEAD")
-    if proc.returncode != 0:
-        return (proc.stderr or proc.stdout or "rev-parse failed").strip()[:200]
-    branch = (proc.stdout or "").strip()
-    if branch == "HEAD":
-        return "detached HEAD"
     git_dir = _run_git(vault_root, "rev-parse", "--git-dir")
     if git_dir.returncode != 0:
         return "cannot resolve .git"
     gd = Path((git_dir.stdout or "").strip())
     if not gd.is_absolute():
         gd = vault_root / gd
-    for name in ("MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"):
+    # A rebase is in progress only while git's own state dir exists. REBASE_HEAD
+    # alone is not a signal: git leaves it behind after a conflicted rebase
+    # finishes (`rebase --continue`), which would block sync forever.
+    for name in ("rebase-merge", "rebase-apply"):
+        if (gd / name).is_dir():
+            return f"in progress: rebase ({name})"
+    for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"):
         if (gd / name).exists():
             return f"in progress: {name}"
+    proc = _run_git(vault_root, "rev-parse", "--abbrev-ref", "HEAD")
+    if proc.returncode != 0:
+        return (proc.stderr or proc.stdout or "rev-parse failed").strip()[:200]
+    branch = (proc.stdout or "").strip()
+    if branch == "HEAD":
+        return "detached HEAD"
     return None
 
 
