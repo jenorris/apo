@@ -128,7 +128,9 @@ class GitSyncHelpersTest(unittest.TestCase):
         self.assertEqual(len([ln for ln in body.splitlines() if ln.startswith("- ")]), 40)
 
 
-class GitSyncRepoTest(unittest.TestCase):
+class _VaultRepoCase(unittest.TestCase):
+    """Vault work tree pushed to a local bare ``origin``, sync contract on."""
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="apo-gsync-"))
         self.vault = self.tmp / "vault"
@@ -158,6 +160,8 @@ class GitSyncRepoTest(unittest.TestCase):
             p.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+
+class GitSyncRepoTest(_VaultRepoCase):
     def test_status_reports_sync_enabled(self):
         # Ported from the deleted RPC-transport test — enabled-contract case
         # (test_sync_disabled_status below covers the disabled case).
@@ -383,6 +387,243 @@ class GitSyncRepoTest(unittest.TestCase):
         ctl.tick(index_busy=False)
         log = _git(self.vault, "log", "-1", "--pretty=%s")
         self.assertTrue(log.stdout.strip().startswith("apo: sync "))
+
+
+# Port 9 (discard) on loopback: nothing listens, so git gets an immediate
+# "Connection refused" — a real transient network failure, no mocking.
+_DEAD_REMOTE = "http://127.0.0.1:9/x.git"
+
+
+class GitSyncOfflineTest(_VaultRepoCase):
+    """Transient network failures → ``offline`` + backoff retry, never ``blocked``."""
+
+    def _go_offline(self) -> None:
+        _git(self.vault, "remote", "set-url", "origin", _DEAD_REMOTE)
+
+    def _go_online(self) -> None:
+        _git(self.vault, "remote", "set-url", "origin", str(self.bare))
+
+    def _make_due(self) -> None:
+        st = git_sync.read_status(self.vault)
+        st["next_retry_at"] = "2000-01-01T00:00:00+00:00"
+        git_sync.write_status(self.vault, st)
+
+    def _remote_head(self) -> str:
+        return _git(self.bare, "rev-parse", "main").stdout.strip()
+
+    def _local_head(self) -> str:
+        return _git(self.vault, "rev-parse", "HEAD").stdout.strip()
+
+    def test_classifier(self):
+        transient = [
+            "fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com",
+            "fatal: unable to access '…': Failed to connect to github.com port 443 after 75000 ms",
+            "ssh: connect to host github.com port 22: Network is unreachable",
+            "fatal: the remote end hung up unexpectedly",
+            "git push: Operation timed out after 30s",
+        ]
+        for err in transient:
+            self.assertTrue(git_sync._is_transient_network_error(err), err)
+        blocking = [
+            "fatal: Authentication failed for 'https://github.com/x/y.git/'",
+            "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+            " ! [rejected]        main -> main (non-fast-forward)",
+            "error: The following untracked working tree files would be overwritten by merge",
+            "fatal: Not possible to fast-forward, aborting.",
+            "unsafe_git_state: detached HEAD",
+            "",
+            None,
+        ]
+        for err in blocking:
+            self.assertFalse(git_sync._is_transient_network_error(err), err)
+
+    def test_push_to_dead_remote_goes_offline_not_blocked(self):
+        sentinel = self.tmp / "notified.log"
+        _write_contract(
+            self.vault,
+            enabled=True,
+            extra=f"  on_block_command: 'echo x >> {sentinel}'\n",
+        )
+        self._go_offline()
+        (self.vault / "note.md").write_text("# N\n\noffline 1\n", encoding="utf-8")
+        out = git_sync.commit_and_push(self.vault)
+        self.assertFalse(out["ok"], msg=out)
+        self.assertEqual(out["error"], "offline")
+
+        st = git_sync.read_status(self.vault)
+        self.assertEqual(st["state"], "offline")
+        self.assertFalse(git_sync.is_blocked(self.vault))
+        self.assertIn("connect", st["error"].lower())
+        self.assertEqual(st["retry_count"], 1)
+        self.assertTrue(st["offline_since"])
+        self.assertTrue(st["next_retry_at"])
+        self.assertIsNone(st["blocked_at"])
+        # Offline is not a block → no on_block_command alert.
+        self.assertFalse(sentinel.exists())
+
+        status = git_sync.run_action(self.vault, "status")
+        self.assertTrue(status["offline"])
+        self.assertEqual(status["retry_count"], 1)
+        self.assertEqual(status["next_retry_at"], st["next_retry_at"])
+
+    def test_commits_land_offline_and_backlog_pushes_on_recovery(self):
+        self._go_offline()
+        (self.vault / "note.md").write_text("# N\n\noffline 1\n", encoding="utf-8")
+        git_sync.commit_and_push(self.vault)
+        first_since = git_sync.read_status(self.vault)["offline_since"]
+
+        # Second commit while backing off: lands locally, push deferred.
+        (self.vault / "b.md").write_text("# b\n", encoding="utf-8")
+        out = git_sync.commit_and_push(self.vault)
+        self.assertTrue(out["ok"], msg=out)
+        self.assertTrue(out["committed"])
+        self.assertFalse(out["pushed"])
+        self.assertEqual(out["push_deferred"], "offline")
+        self.assertEqual(git_sync.read_status(self.vault)["state"], "offline")
+        self.assertEqual(git_sync.commits_ahead_of_upstream(self.vault), 2)
+
+        # A due retry against a still-dead remote stays offline and backs off.
+        ctl = git_sync.VaultSyncController(self.vault, verbose=False)
+        self._make_due()
+        ctl.tick(index_busy=False)
+        st = git_sync.read_status(self.vault)
+        self.assertEqual(st["state"], "offline")
+        self.assertEqual(st["retry_count"], 2)
+        self.assertEqual(st["offline_since"], first_since)
+
+        # Network back: the next due retry pulls, then pushes the backlog.
+        self._go_online()
+        self._make_due()
+        ctl.tick(index_busy=False)
+        st = git_sync.read_status(self.vault)
+        self.assertEqual(st["state"], "ok", msg=st)
+        self.assertIsNone(st["error"])
+        self.assertIsNone(st["offline_since"])
+        self.assertEqual(st["retry_count"], 0)
+        self.assertIsNone(st["next_retry_at"])
+        self.assertEqual(self._remote_head(), self._local_head())
+
+    def test_retry_not_due_does_nothing(self):
+        self._go_offline()
+        (self.vault / "note.md").write_text("# N\n\noffline 1\n", encoding="utf-8")
+        git_sync.commit_and_push(self.vault)
+        self._go_online()
+        ctl = git_sync.VaultSyncController(self.vault, verbose=False)
+        ctl.tick(index_busy=False)  # next_retry_at is ~60s out
+        self.assertEqual(git_sync.read_status(self.vault)["state"], "offline")
+        self.assertNotEqual(self._remote_head(), self._local_head())
+
+    def test_idle_pull_pushes_lost_backlog(self):
+        # A commit that never got pushed (e.g. push lost before this fix) is
+        # retried by the next successful idle pull.
+        (self.vault / "note.md").write_text("# N\n\nunpushed\n", encoding="utf-8")
+        git_sync.commit_and_push(self.vault, push=False)
+        self.assertEqual(git_sync.commits_ahead_of_upstream(self.vault), 1)
+        ctl = git_sync.VaultSyncController(self.vault, verbose=False)
+        ctl._last_pull_at = -1e9  # noqa: SLF001 — test hook: interval elapsed
+        ctl.tick(index_busy=False)
+        self.assertEqual(self._remote_head(), self._local_head())
+        self.assertEqual(git_sync.read_status(self.vault)["state"], "ok")
+
+    def test_legacy_network_block_self_heals(self):
+        (self.vault / "note.md").write_text("# N\n\nstuck\n", encoding="utf-8")
+        git_sync.commit_and_push(self.vault, push=False)
+        git_sync._block(
+            self.vault,
+            "fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com",
+        )
+
+        ctl = git_sync.VaultSyncController(self.vault, verbose=False)
+        ctl.tick(index_busy=False)
+        st = git_sync.read_status(self.vault)
+        self.assertEqual(st["state"], "ok", msg=st)
+        self.assertEqual(self._remote_head(), self._local_head())
+
+        # Same heal against a remote that is still down keeps the outage start.
+        git_sync._block(self.vault, "fatal: Failed to connect to github.com port 443")
+        blocked_at = git_sync.read_status(self.vault)["blocked_at"]
+        self._go_offline()
+        ctl.tick(index_busy=False)
+        st = git_sync.read_status(self.vault)
+        self.assertEqual(st["state"], "offline")
+        self.assertEqual(st["offline_since"], blocked_at)
+        self.assertEqual(st["retry_count"], 1)
+
+    def test_real_conflict_block_stays_blocked(self):
+        err = (
+            "error: The following untracked working tree files would be overwritten by merge:\n"
+            "\tnote2.md\nPlease move or remove them before you merge.\nAborting"
+        )
+        git_sync._block(self.vault, err)
+        ctl = git_sync.VaultSyncController(self.vault, verbose=False)
+        ctl.tick(index_busy=False)
+        st = git_sync.read_status(self.vault)
+        self.assertEqual(st["state"], "blocked")
+        self.assertEqual(st["error"], err)
+
+    def test_non_ff_divergence_still_blocks(self):
+        clone = self.tmp / "other"
+        _git(self.tmp, "clone", str(self.bare), str(clone))
+        _git(clone, "config", "user.email", "test@example.com")
+        _git(clone, "config", "user.name", "Test")
+        (clone / "note.md").write_text("# remote\n", encoding="utf-8")
+        _git(clone, "commit", "-am", "remote change")
+        _git(clone, "push", "origin", "HEAD:main")
+
+        (self.vault / "note.md").write_text("# local\n", encoding="utf-8")
+        out = git_sync.commit_and_push(self.vault)
+        self.assertFalse(out["ok"], msg=out)
+        self.assertEqual(out["error"], "push_failed")
+        self.assertEqual(git_sync.read_status(self.vault)["state"], "blocked")
+
+    def test_network_timeout_goes_offline(self):
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            if "push" in cmd:
+                raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+            return real_run(cmd, *args, **kwargs)
+
+        (self.vault / "note.md").write_text("# N\n\nslow\n", encoding="utf-8")
+        with unittest.mock.patch.object(git_sync.subprocess, "run", side_effect=fake_run):
+            out = git_sync.commit_and_push(self.vault)
+        self.assertEqual(out["error"], "offline", msg=out)
+        st = git_sync.read_status(self.vault)
+        self.assertEqual(st["state"], "offline")
+        self.assertIn("timed out", st["error"])
+
+    def test_network_ops_disable_prompts_and_set_low_speed_abort(self):
+        seen: dict[str, object] = {}
+        real_run = subprocess.run
+
+        def spy(cmd, *args, **kwargs):
+            if "push" in cmd:
+                seen["cmd"] = cmd
+                seen["env"] = kwargs.get("env")
+            return real_run(cmd, *args, **kwargs)
+
+        with unittest.mock.patch.object(git_sync.subprocess, "run", side_effect=spy):
+            git_sync._run_git_network(self.vault, "push")
+        self.assertIn("http.lowSpeedLimit=1000", seen["cmd"])
+        self.assertIn("http.lowSpeedTime=20", seen["cmd"])
+        self.assertEqual(seen["env"]["GIT_TERMINAL_PROMPT"], "0")
+
+    def test_backoff_doubles_and_caps(self):
+        self.assertEqual(git_sync.offline_backoff_seconds(0, 900), 60)
+        self.assertEqual(git_sync.offline_backoff_seconds(1, 900), 120)
+        self.assertEqual(git_sync.offline_backoff_seconds(3, 900), 480)
+        self.assertEqual(git_sync.offline_backoff_seconds(4, 900), 900)
+        self.assertEqual(git_sync.offline_backoff_seconds(10_000, 900), 900)
+
+        # Contract pull interval (60s in this fixture) caps the stored schedule.
+        self._go_offline()
+        for _ in range(4):
+            git_sync.pull_ff_only(self.vault)
+        st = git_sync.read_status(self.vault)
+        self.assertEqual(st["retry_count"], 4)
+        due = datetime.fromisoformat(st["next_retry_at"])
+        updated = datetime.fromisoformat(st["updated_at"])
+        self.assertLessEqual((due - updated).total_seconds(), 61)
 
 
 class GitSyncReadOnlyVaultTest(unittest.TestCase):

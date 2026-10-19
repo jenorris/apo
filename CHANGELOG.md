@@ -4,6 +4,24 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Fixed
+
+- **Git sync no longer locks up when the remote is unreachable.** A transient
+  network failure on push/pull/fetch (DNS, connect refused/timeout, dropped link,
+  network timeout) now sets a new `offline` state instead of `blocked`. Local
+  commits keep landing; the watcher retries pull ff-only then pushes the backlog
+  at 60s × 2^n, capped at `pull_interval_seconds`, and returns to `ok` on success.
+  `offline` does not fire `on_block_command`. Conflicts, non-fast-forward and
+  auth failures still block.
+- A vault left `blocked` by a network error from an earlier engine self-heals to
+  `offline` on the next watcher tick. Real-conflict blocks are unchanged.
+- Every successful idle pull pushes local commits that are ahead of `@{u}`, so a
+  lost push is retried.
+- Network git ops never prompt (`GIT_TERMINAL_PROMPT=0`), abort stalled transfers
+  (`http.lowSpeedLimit=1000`, `http.lowSpeedTime=20`), and report a timeout as a
+  failure instead of raising.
+- `git_sync action=status` reports `offline`, `next_retry_at` and `retry_count`.
+
 ## [0.35.0] — 2026-10-07
 
 ### Added

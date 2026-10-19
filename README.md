@@ -72,6 +72,18 @@ No separate issue tracker required for “show me open X in folder Y.” Prefer 
 
 **Multi-vault:** set `APO_COLLECTION_ROOT` (parent directory of vaults, autoconfigure) and/or `APO_VAULT_PATHS` (explicit roots) plus `APO_DEFAULT_VAULT`. Tools take `vault=`; watch runs one thread per vault. Foreign OKF bundles can register as **read-only** vaults. `APO_VAULTS` (JSON registry) still loads as a legacy roots-only compat shim. See [docs/multi-vault.md](docs/multi-vault.md).
 
+### Git sync
+
+With a git contract and `sync.enabled: true`, the watcher debounces commit+push after Apo writes and runs an idle `git pull --ff-only` every `pull_interval_seconds`. State lives in `<vault>/.apo/git-sync-status.json`; `git_sync action=status` reports it.
+
+| State | Cause | What sync does |
+|---|---|---|
+| `ok` / `idle` | Last op succeeded | Normal debounce + idle pull |
+| `offline` | Remote unreachable (DNS, connect refused/timeout, dropped link) | Keeps committing locally. Retries pull then push of the backlog at 60s × 2^n, capped at `pull_interval_seconds`. Clears itself when the remote answers. No `on_block_command`. |
+| `blocked` | Conflict, non-fast-forward, auth/permission, unsafe tree | Stops until `git_sync action=clear_block` (or `rebase`). Fires `on_block_command` once. |
+
+A vault blocked by a network error from an older engine self-heals to `offline` on the next watcher tick. Network ops never prompt (`GIT_TERMINAL_PROMPT=0`) and abort stalled transfers (`http.lowSpeedLimit`/`lowSpeedTime`). Every successful idle pull also pushes any local commits that are ahead of upstream.
+
 ### OKF conformance
 
 Apo speaks [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) as a first-class vault contract — it is still local markdown memory, not an OKF product.
