@@ -11,6 +11,13 @@ that case: it replays local commits on top of the remote tip so a plain
 ``git push`` afterward stays a fast-forward. It still never auto-resolves
 content — a rebase conflict aborts back to the pre-rebase state and blocks,
 the same as any other sync failure.
+
+Transient network failures (DNS, connect refused/timeout, dropped link) are
+*not* blocks: they put the vault in ``offline`` instead. Local commits keep
+landing, and ``VaultSyncController.tick`` retries with exponential backoff
+(60s × 2^n, capped at ``pull_interval_seconds``) — pull ff-only, then push any
+backlog. A ``blocked`` status whose stored error is a transient network error
+(written before this distinction existed) self-heals to ``offline``.
 """
 
 from __future__ import annotations
@@ -24,7 +31,7 @@ import threading
 import time
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -45,6 +52,40 @@ _GIT_TIMEOUT_S = 120.0
 # review) is too long for what's really just an "is the network up" check.
 _GIT_NETWORK_TIMEOUT_S = 30.0
 _NOTIFY_TIMEOUT_S = 20.0
+# Offline retry backoff: 60s × 2^n, capped at the vault's pull interval.
+_OFFLINE_BASE_DELAY_S = 60.0
+# Abort a transfer that stalls below 1 KB/s for 20s instead of waiting out the
+# whole network timeout.
+_NETWORK_GIT_CONFIG = ("-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=20")
+# Substrings of git/curl/ssh stderr that mean "the remote is unreachable right
+# now", not "the remote said no". Matched case-insensitively.
+_TRANSIENT_NETWORK_MARKERS = (
+    "could not resolve host",
+    "failed to connect",
+    "couldn't connect to server",
+    "connection timed out",
+    "operation timed out",
+    "connection refused",
+    "network is unreachable",
+    "the remote end hung up unexpectedly",
+    "early eof",
+    "ssl_error_syscall",
+    "ssh: connect to host",
+)
+# A real refusal can share stderr with a transient marker (e.g. "hung up"
+# after an auth failure) — these always win and keep the block.
+_BLOCKING_MARKERS = (
+    "authentication failed",
+    "permission denied",
+    "could not read username",
+    "could not read password",
+    "repository not found",
+    "non-fast-forward",
+    "[rejected]",
+    "not possible to fast-forward",
+    "diverging branches",
+    "would be overwritten",
+)
 _STATUS_REL = Path(".apo") / "git-sync-status.json"
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -81,6 +122,7 @@ def _run_git(
     check: bool = False,
     timeout: float = _GIT_TIMEOUT_S,
     stdin_data: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(root), *args],
@@ -89,7 +131,38 @@ def _run_git(
         timeout=timeout,
         check=check,
         input=stdin_data,
+        env=env,
     )
+
+
+def _run_git_network(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run a remote-touching git op (push/pull/fetch) that never hangs or prompts.
+
+    A timeout comes back as a failed ``CompletedProcess`` whose stderr the
+    transient classifier recognises, so callers handle it like any other
+    network failure instead of letting ``TimeoutExpired`` escape the watch loop.
+    """
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        return _run_git(
+            root, *_NETWORK_GIT_CONFIG, *args, timeout=_GIT_NETWORK_TIMEOUT_S, env=env
+        )
+    except subprocess.TimeoutExpired:
+        op = args[0] if args else "git"
+        return subprocess.CompletedProcess(
+            ["git", "-C", str(root), *args],
+            returncode=124,
+            stdout="",
+            stderr=f"git {op}: Operation timed out after {_GIT_NETWORK_TIMEOUT_S:.0f}s",
+        )
+
+
+def _is_transient_network_error(err: str | None) -> bool:
+    """True if ``err`` means the remote was unreachable (retry), not refused (block)."""
+    text = (err or "").lower()
+    if not text or any(m in text for m in _BLOCKING_MARKERS):
+        return False
+    return any(m in text for m in _TRANSIENT_NETWORK_MARKERS)
 
 
 def sync_settings(vault_root: Path) -> SyncSettings:
@@ -202,12 +275,106 @@ def is_blocked(vault_root: Path) -> bool:
     return read_status(vault_root).get("state") == "blocked"
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _clear_offline(status: dict[str, Any]) -> None:
+    status["offline_since"] = None
+    status["retry_count"] = 0
+    status["next_retry_at"] = None
+
+
 def clear_block(vault_root: Path) -> dict[str, Any]:
     st = read_status(vault_root)
     st["state"] = "ok" if st.get("last_commit") or st.get("last_pull") else "idle"
     st["error"] = None
     st["blocked_at"] = None
+    _clear_offline(st)
     return write_status(vault_root, st)
+
+
+def offline_backoff_seconds(retry_count: int, cap_seconds: float) -> float:
+    """Delay before offline retry ``retry_count`` (0-based): 60s × 2^n, capped."""
+    n = max(0, int(retry_count))
+    # Clamp the exponent so a weeks-long outage can't overflow the float.
+    return min(_OFFLINE_BASE_DELAY_S * (2 ** min(n, 32)), cap_seconds)
+
+
+def offline_retry_due(status: dict[str, Any], *, now: datetime | None = None) -> bool:
+    """True if ``status`` is offline and its ``next_retry_at`` has passed."""
+    if status.get("state") != "offline":
+        return False
+    raw = status.get("next_retry_at")
+    if not raw:
+        return True
+    try:
+        due = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return True
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    return (now or _utcnow()) >= due
+
+
+def _defer_offline(
+    vault_root: Path, error: str, *, st: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Record a transient network failure as ``offline`` and schedule a retry.
+
+    Unlike ``_block`` this never fires ``on_block_command``: an outage is
+    expected to heal on its own, and sync keeps committing locally meanwhile.
+    """
+    status = dict(st or read_status(vault_root))
+    was_offline = status.get("state") == "offline"
+    n = int(status.get("retry_count") or 0) if was_offline else 0
+    now = _utcnow()
+    delay = offline_backoff_seconds(n, sync_settings(vault_root).pull_interval_seconds)
+    status["state"] = "offline"
+    status["error"] = error[:800]
+    status["blocked_at"] = None
+    if not (was_offline and status.get("offline_since")):
+        status["offline_since"] = now.isoformat(timespec="seconds")
+    status["retry_count"] = n + 1
+    status["next_retry_at"] = (now + timedelta(seconds=delay)).isoformat(timespec="seconds")
+    return write_status(vault_root, status)
+
+
+def _heal_transient_block(vault_root: Path, st: dict[str, Any]) -> dict[str, Any] | None:
+    """Convert a legacy ``blocked`` status caused by a network blip to ``offline``.
+
+    Returns the rewritten status, or ``None`` if the block is a real one
+    (conflict, auth, non-ff, …) and must stay put until ``clear_block``.
+    """
+    if st.get("state") != "blocked" or not _is_transient_network_error(st.get("error")):
+        return None
+    status = dict(st)
+    status["state"] = "offline"
+    status["offline_since"] = status.get("blocked_at") or _utcnow().isoformat(timespec="seconds")
+    status["blocked_at"] = None
+    status["retry_count"] = 0
+    status["next_retry_at"] = _utcnow().isoformat(timespec="seconds")
+    return write_status(vault_root, status)
+
+
+def _network_failure(
+    vault_root: Path, err: str, error_code: str, *, st: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Route a failed push/pull/fetch: transient → offline, anything else → block."""
+    if _is_transient_network_error(err):
+        _defer_offline(vault_root, err, st=st)
+        return {"ok": False, "error": "offline", "message": err[:500], "status": read_status(vault_root)}
+    _block(vault_root, err, st=st)
+    return {"ok": False, "error": error_code, "message": err[:500], "status": read_status(vault_root)}
+
+
+def _settle_local_ok(status: dict[str, Any]) -> None:
+    """Mark a local-only success ``ok`` — unless offline, which only the remote clears."""
+    if status.get("state") == "offline":
+        return
+    status["state"] = "ok"
+    status["error"] = None
+    status["blocked_at"] = None
 
 
 def _notify_blocked(vault_root: Path, error: str) -> None:
@@ -447,7 +614,11 @@ def commit_and_push(
     message: str | None = None,
     push: bool | None = None,
 ) -> dict[str, Any]:
-    """Stage eligible paths, commit, optional push. Blocks on failure."""
+    """Stage eligible paths, commit, optional push. Blocks on failure.
+
+    Offline (transient network failure) does not stop local commits; the push
+    is deferred until the scheduled retry.
+    """
     settings = sync_settings(vault_root)
     st = read_status(vault_root)
     reason = unsafe_git_state(vault_root)
@@ -470,8 +641,7 @@ def commit_and_push(
         return {"ok": False, "error": "status_failed", "message": str(e), "status": read_status(vault_root)}
 
     if not paths:
-        st["state"] = "ok"
-        st["error"] = None
+        _settle_local_ok(st)
         write_status(vault_root, st)
         return {"ok": True, "committed": False, "pushed": False, "paths": [], "status": read_status(vault_root)}
 
@@ -512,7 +682,7 @@ def commit_and_push(
             "status": read_status(vault_root),
         }
     if not staged:
-        st["state"] = "ok"
+        _settle_local_ok(st)
         write_status(vault_root, st)
         return {"ok": True, "committed": False, "pushed": False, "paths": [], "status": read_status(vault_root)}
 
@@ -525,7 +695,7 @@ def commit_and_push(
     if commit.returncode != 0:
         err = (commit.stderr or commit.stdout or "git commit failed").strip()
         if "nothing to commit" in err.lower():
-            st["state"] = "ok"
+            _settle_local_ok(st)
             write_status(vault_root, st)
             return {"ok": True, "committed": False, "pushed": False, "paths": [], "status": read_status(vault_root)}
         _block(vault_root, err, st=st)
@@ -539,13 +709,24 @@ def commit_and_push(
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "paths": staged,
     }
-    st["state"] = "ok"
-    st["error"] = None
-    st["blocked_at"] = None
+    _settle_local_ok(st)
     write_status(vault_root, st)
 
     do_push = settings.auto_push if push is None else bool(push)
     pushed = False
+    if do_push and st.get("state") == "offline" and not offline_retry_due(st):
+        # Offline and backing off: keep the commit local; tick() pushes the
+        # backlog once a retry reaches the remote.
+        return {
+            "ok": True,
+            "committed": True,
+            "pushed": False,
+            "push_deferred": "offline",
+            "hash": commit_hash,
+            "message": subject,
+            "paths": staged,
+            "status": read_status(vault_root),
+        }
     if do_push:
         push_result = _push(vault_root, settings)
         if not push_result["ok"]:
@@ -566,7 +747,7 @@ def commit_and_push(
 def _push(vault_root: Path, settings: SyncSettings) -> dict[str, Any]:
     st = read_status(vault_root)
     # Intentionally never pass --force / --force-with-lease.
-    proc = _run_git(vault_root, "push", timeout=_GIT_NETWORK_TIMEOUT_S)
+    proc = _run_git_network(vault_root, "push")
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "git push failed").strip()
         # Try setting upstream once if missing
@@ -575,16 +756,12 @@ def _push(vault_root: Path, settings: SyncSettings) -> dict[str, Any]:
             cur = _run_git(vault_root, "rev-parse", "--abbrev-ref", "HEAD")
             if cur.returncode == 0 and (cur.stdout or "").strip():
                 branch = (cur.stdout or "").strip()
-            proc = _run_git(
-                vault_root, "push", "-u", "origin", branch, timeout=_GIT_NETWORK_TIMEOUT_S
-            )
+            proc = _run_git_network(vault_root, "push", "-u", "origin", branch)
             err = (proc.stderr or proc.stdout or "git push failed").strip()
             if proc.returncode != 0:
-                _block(vault_root, err, st=st)
-                return {"ok": False, "error": "push_failed", "message": err[:500], "status": read_status(vault_root)}
+                return _network_failure(vault_root, err, "push_failed", st=st)
         else:
-            _block(vault_root, err, st=st)
-            return {"ok": False, "error": "push_failed", "message": err[:500], "status": read_status(vault_root)}
+            return _network_failure(vault_root, err, "push_failed", st=st)
 
     st = read_status(vault_root)
     st["last_push"] = {
@@ -593,12 +770,37 @@ def _push(vault_root: Path, settings: SyncSettings) -> dict[str, Any]:
     }
     st["state"] = "ok"
     st["error"] = None
+    st["blocked_at"] = None
+    _clear_offline(st)
     write_status(vault_root, st)
     return {"ok": True, "pushed": True, "status": read_status(vault_root)}
 
 
+def commits_ahead_of_upstream(vault_root: Path) -> int:
+    """Local commits not on ``@{u}`` (0 if there is no upstream)."""
+    proc = _run_git(vault_root, "rev-list", "--count", "@{u}..HEAD")
+    if proc.returncode != 0:
+        return 0
+    try:
+        return int((proc.stdout or "0").strip() or 0)
+    except ValueError:
+        return 0
+
+
+def push_if_ahead(vault_root: Path) -> dict[str, Any] | None:
+    """Push when HEAD is ahead of upstream (e.g. a push lost to an outage).
+
+    Returns the push result, or ``None`` when there was nothing to push or
+    ``auto_push`` is off.
+    """
+    settings = sync_settings(vault_root)
+    if not settings.auto_push or commits_ahead_of_upstream(vault_root) <= 0:
+        return None
+    return _push(vault_root, settings)
+
+
 def pull_ff_only(vault_root: Path) -> dict[str, Any]:
-    """``git pull --ff-only``. On failure → block."""
+    """``git pull --ff-only``. Network blip → offline; any other failure → block."""
     settings = sync_settings(vault_root)
     st = read_status(vault_root)
     reason = unsafe_git_state(vault_root)
@@ -614,11 +816,10 @@ def pull_ff_only(vault_root: Path) -> dict[str, Any]:
         }
 
     # Dirty tree: still attempt ff-only; git will refuse if it would overwrite
-    proc = _run_git(vault_root, "pull", "--ff-only", timeout=_GIT_NETWORK_TIMEOUT_S)
+    proc = _run_git_network(vault_root, "pull", "--ff-only")
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "git pull --ff-only failed").strip()
-        _block(vault_root, err, st=st)
-        return {"ok": False, "error": "pull_failed", "message": err[:500], "status": read_status(vault_root)}
+        return _network_failure(vault_root, err, "pull_failed", st=st)
 
     st = read_status(vault_root)
     st["last_pull"] = {
@@ -629,6 +830,7 @@ def pull_ff_only(vault_root: Path) -> dict[str, Any]:
     st["state"] = "ok"
     st["error"] = None
     st["blocked_at"] = None
+    _clear_offline(st)
     write_status(vault_root, st)
     return {"ok": True, "pulled": True, "status": read_status(vault_root), "branch": settings.default_branch}
 
@@ -663,13 +865,10 @@ def rebase_onto_remote(vault_root: Path) -> dict[str, Any]:
             "status": st,
         }
 
-    fetch = _run_git(
-        vault_root, "fetch", "origin", settings.default_branch, timeout=_GIT_NETWORK_TIMEOUT_S
-    )
+    fetch = _run_git_network(vault_root, "fetch", "origin", settings.default_branch)
     if fetch.returncode != 0:
         err = (fetch.stderr or fetch.stdout or "git fetch failed").strip()
-        _block(vault_root, err, st=st)
-        return {"ok": False, "error": "fetch_failed", "message": err[:500], "status": read_status(vault_root)}
+        return _network_failure(vault_root, err, "fetch_failed", st=st)
 
     proc = _run_git(vault_root, "rebase", f"origin/{settings.default_branch}")
     if proc.returncode != 0:
@@ -690,6 +889,7 @@ def rebase_onto_remote(vault_root: Path) -> dict[str, Any]:
     st["state"] = "ok"
     st["error"] = None
     st["blocked_at"] = None
+    _clear_offline(st)
     write_status(vault_root, st)
 
     result: dict[str, Any] = {
@@ -724,6 +924,9 @@ def run_action(
                 "sync_enabled": sync_enabled(vault_root),
                 "contract_active": git_contract.git_contract_active(vault_root),
                 "unsafe": unsafe_git_state(vault_root),
+                "offline": st.get("state") == "offline",
+                "next_retry_at": st.get("next_retry_at") if st.get("state") == "offline" else None,
+                "retry_count": int(st.get("retry_count") or 0) if st.get("state") == "offline" else 0,
                 "status": st,
             }
         if action == "clear_block":
@@ -772,8 +975,12 @@ class VaultSyncController:
     def tick(self, *, index_busy: bool = False) -> None:
         if not sync_enabled(self.root):
             return
-        if is_blocked(self.root):
-            return
+        st = read_status(self.root)
+        if st.get("state") == "blocked":
+            if _heal_transient_block(self.root, st) is None:
+                return
+            if self.verbose:
+                logger.info("git-sync: network-error block converted to offline; retrying")
         settings = sync_settings(self.root)
         now = time.monotonic()
 
@@ -793,6 +1000,8 @@ class VaultSyncController:
                         result.get("hash", "")[:8],
                         result.get("message"),
                     )
+                elif result.get("error") == "offline":
+                    logger.info("git-sync offline (commit kept local): %s", result.get("message"))
                 elif not result.get("ok"):
                     logger.warning("git-sync blocked: %s", result.get("message"))
             return
@@ -812,6 +1021,11 @@ class VaultSyncController:
             if self.verbose:
                 logger.info("git-sync pull: skipped (wal_over_limit)")
             return
+        if offline_retry_due(read_status(self.root)):
+            # Offline retry runs on its own backoff clock, not the pull interval.
+            self._last_pull_at = now
+            self._pull_then_push_backlog(label="offline retry")
+            return
         if self._last_pull_at and (now - self._last_pull_at) < settings.pull_interval_seconds:
             return
         # First tick: don't pull immediately — wait one interval from start
@@ -819,9 +1033,21 @@ class VaultSyncController:
             self._last_pull_at = now
             return
         self._last_pull_at = now
+        self._pull_then_push_backlog(label="pull")
+
+    def _pull_then_push_backlog(self, *, label: str) -> None:
+        """ff-only pull, then push any local commits a failed push left behind."""
         with _lock_for(self.root):
             result = pull_ff_only(self.root)
-        if self.verbose and not result.get("ok"):
-            logger.warning("git-sync pull blocked: %s", result.get("message"))
-        elif self.verbose and result.get("ok"):
-            logger.info("git-sync pull: ok")
+            if result.get("ok"):
+                pushed = push_if_ahead(self.root)
+                if pushed is not None:
+                    result = pushed
+        if not self.verbose:
+            return
+        if result.get("ok"):
+            logger.info("git-sync %s: ok%s", label, " (pushed backlog)" if result.get("pushed") else "")
+        elif result.get("error") == "offline":
+            logger.info("git-sync %s: still offline: %s", label, result.get("message"))
+        else:
+            logger.warning("git-sync %s blocked: %s", label, result.get("message"))

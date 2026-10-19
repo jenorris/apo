@@ -85,6 +85,8 @@ Omit `ref=` only when intentionally querying the indexed primary working tree. A
 
 On conflict / non-ff / push reject: **stop and surface** — status in `.apo/git-sync-status.json` (`state=blocked`) and tool payload. No force-push, no auto-resolve.
 
+Remote unreachable (DNS, connect refused/timeout, dropped link) is **not** a block: `state=offline`, local commits continue, and the watcher retries pull + backlog push at 60s × 2^n (capped at `pull_interval_seconds`) until the remote answers. A legacy `blocked` status whose error is a network failure self-heals to `offline`.
+
 `action=rebase` is the explicit recovery when `pull` (ff-only) blocks because local commits exist the remote doesn't (another session's sync won the race): fetch, then replay local commits onto `origin/<default_branch>` so the follow-up push stays a fast-forward. It is never run implicitly — only on explicit tool call. On a rebase conflict, Apo aborts the rebase immediately (working tree never carries `<<<<<<<` markers into a note) and blocks same as any other failure; still no content auto-resolve.
 
 `blocked` is sticky: every later commit and pull returns early until `git_sync action=clear_block`. Nothing else surfaces it, so set `sync.on_block_command` to get told — it fires once per block episode (not per tick) with `$APO_SYNC_ERROR` and `$APO_VAULT_ROOT` exported, and a failing hook never masks the block.
