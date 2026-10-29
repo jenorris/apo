@@ -840,8 +840,12 @@ async def graph_neighbors(
     limit: int = 50,
     offset: int = 0,
     vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
+    kinds: Annotated[
+        list[str] | None,
+        Field(description="Edge kinds: wikilink, md_link, related, supersedes, source, resource."),
+    ] = None,
 ) -> dict:
-    """Wiki-link graph traversal from a note — index-backed, no vault walk."""
+    """Typed link graph from a note (wiki, markdown, frontmatter links) — index-backed."""
     return await asyncio.to_thread(
         apo_ops.graph_neighbors,
         path,
@@ -850,6 +854,7 @@ async def graph_neighbors(
         limit=limit,
         offset=offset,
         vault=vault,
+        kinds=kinds,
     )
 
 

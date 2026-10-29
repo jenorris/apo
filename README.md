@@ -170,7 +170,7 @@ sequenceDiagram
 
 | Layer | Role |
 |-------|------|
-| **Engine** (`engine/`) | Chunk, embed, hybrid search; cache frontmatter + wikilink backlinks |
+| **Engine** (`engine/`) | Chunk, embed, hybrid search; cache frontmatter + typed links (wiki, markdown, frontmatter — [docs/links.md](docs/links.md)) |
 | **MCP** (`engine/mcp/`) | Tool schema for hosts; never lets the agent write sqlite directly |
 | **Watcher** | FS events + deferred queue → sole `index.db` writer |
 

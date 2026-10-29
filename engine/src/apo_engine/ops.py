@@ -24,6 +24,7 @@ from apo_engine import (
     git_catalog,
     git_contract,
     git_sync,
+    links,
     note_lint,
     search_contract,
     okf as apo_okf,
@@ -2296,7 +2297,9 @@ def backlinks(path: str, *, limit: int = 100, offset: int = 0, vault: str = "") 
         except ValueError:
             pass
         # Over-fetch one past the page for exact has_more.
-        rows = core.list_backlinks(targets, exclude_source, limit + offset + 1)
+        rows = core.list_backlinks(
+            targets, exclude_source, limit + offset + 1, target_path=exclude_source or None
+        )
     has_more = len(rows) > offset + limit
     rows = rows[offset : offset + limit]
     hits = [
@@ -2321,6 +2324,16 @@ def backlinks(path: str, *, limit: int = 100, offset: int = 0, vault: str = "") 
     return _stamp_qualified(out, vault=b.name, path=path)
 
 
+def _unresolved_node(row: dict[str, Any]) -> str:
+    """Display id for a link target that is not an indexed note."""
+    key = row["target_key"]
+    if row["status"] == "external":
+        return key
+    if row["status"] == "foreign" and row.get("target_vault"):
+        return f"{row['target_vault']}:{key}"
+    return key if key.endswith(links.NOTE_SUFFIXES) else f"{key}.md"
+
+
 def graph_neighbors(
     path: str,
     *,
@@ -2329,8 +2342,9 @@ def graph_neighbors(
     limit: int = 50,
     offset: int = 0,
     vault: str = "",
+    kinds: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Index-backed link graph: inbound backlinks and/or outbound wiki-links."""
+    """Index-backed link graph: inbound and/or outbound typed links (``kinds`` filters)."""
     direction = (direction or "both").strip().lower()
     if direction not in {"in", "out", "both"}:
         return _err(error="bad_request", message="direction must be in|out|both")
@@ -2346,18 +2360,30 @@ def graph_neighbors(
         return _err(path=path, error="bad_path", message=str(e))
 
     rel = str(Path(rel_path.replace("\\", "/")))
-    if not rel.endswith(".md"):
-        rel_md = f"{rel}.md"
-    else:
-        rel_md = rel
-    stem = Path(rel_md).stem.lower()
-    targets = {Path(rel_md.removesuffix(".md")).as_posix().lower(), stem}
+    rel_md = rel if rel.endswith(links.NOTE_SUFFIXES) else f"{rel}.md"
+    kind_filter = [k.strip() for k in (kinds or []) if k and k.strip()]
 
     seen_nodes: set[str] = set()
-    seen_edges: set[tuple[str, str, str]] = set()
+    seen_edges: set[tuple[str, str, str, str]] = set()
     edges: list[dict[str, Any]] = []
     frontier: set[str] = {rel_md}
     visited: set[str] = set()
+
+    def _edge(src: str, dst: str, way: str, hop: int, row: dict[str, Any]) -> None:
+        edges.append(
+            {
+                "from": src,
+                "to": dst,
+                "direction": way,
+                "hop": hop,
+                "kind": row["kind"],
+                "status": row["status"],
+                "line": row["line"],
+                "text": row["text"],
+                "qualified_from": _qualified_path(b.name, src),
+                "qualified_to": _qualified_path(b.name, dst),
+            }
+        )
 
     with vaults.bind(b):
         for hop in range(depth):
@@ -2367,53 +2393,33 @@ def graph_neighbors(
                     continue
                 visited.add(node)
                 seen_nodes.add(node)
-                node_stem = Path(node).stem.lower()
-                node_targets = {node.replace("\\", "/").removesuffix(".md").lower(), node_stem}
+                node_key = links.link_key(node)
+                node_targets = {node_key, node_key.rsplit("/", 1)[-1]}
 
                 if direction in {"in", "both"}:
-                    for src, line, text in core.list_backlinks(node_targets, limit=limit * 2):
-                        edge_key = (src, "in", node)
+                    for row in core.list_links(
+                        target_path=node, target_keys=node_targets, kinds=kind_filter, limit=limit * 2
+                    ):
+                        src = row["source"]
+                        edge_key = (src, "in", node, row["kind"])
                         if edge_key in seen_edges:
                             continue
                         seen_edges.add(edge_key)
-                        tgt = src if src.endswith(".md") else f"{src}.md"
-                        edges.append(
-                            {
-                                "from": src,
-                                "to": node,
-                                "direction": "in",
-                                "hop": hop + 1,
-                                "line": line,
-                                "text": text,
-                                "qualified_from": _qualified_path(b.name, src),
-                                "qualified_to": _qualified_path(b.name, node),
-                            }
-                        )
+                        _edge(src, node, "in", hop + 1, row)
                         seen_nodes.add(src)
                         if hop + 1 < depth:
-                            next_frontier.add(tgt)
+                            next_frontier.add(src)
 
                 if direction in {"out", "both"}:
-                    for tgt_key, line, text in core.list_outlinks(node, limit=limit * 2):
-                        tgt = tgt_key if tgt_key.endswith(".md") else f"{tgt_key}.md"
-                        edge_key = (node, "out", tgt)
+                    for row in core.list_links(source=node, kinds=kind_filter, limit=limit * 2):
+                        tgt = row["target_path"] or _unresolved_node(row)
+                        edge_key = (node, "out", tgt, row["kind"])
                         if edge_key in seen_edges:
                             continue
                         seen_edges.add(edge_key)
-                        edges.append(
-                            {
-                                "from": node,
-                                "to": tgt,
-                                "direction": "out",
-                                "hop": hop + 1,
-                                "line": line,
-                                "text": text,
-                                "qualified_from": _qualified_path(b.name, node),
-                                "qualified_to": _qualified_path(b.name, tgt),
-                            }
-                        )
+                        _edge(node, tgt, "out", hop + 1, row)
                         seen_nodes.add(tgt)
-                        if hop + 1 < depth:
+                        if hop + 1 < depth and row["target_path"]:
                             next_frontier.add(tgt)
             frontier = next_frontier - visited
 

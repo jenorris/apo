@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from functools import cmp_to_key
 from itertools import islice
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 import heapq
 
 import sqlite_vec
@@ -36,6 +36,7 @@ except ImportError:  # numpy is transitive (fastembed/rerank extra) — not a ba
     _np = None
 
 from . import config
+from . import links
 from . import oversize
 from . import ranking
 from . import rerank
@@ -73,7 +74,6 @@ HASH_ALGO = "blake2b"
 _FRONTMATTER = re.compile(r"^---\n.*?\n---\n", re.DOTALL)
 _FRONTMATTER_YAML = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)")
-_WIKILINK = re.compile(r"\[\[([^\]#|]+)(?:[#|][^\]]*)?\]\]")
 _FM_KEY_SAFE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 def _embed_commit_batch() -> int:
@@ -827,63 +827,181 @@ def note_catalog_json(text: str, rel: str, mtime: float | None = None) -> str | 
     return json.dumps(fm, default=str)
 
 
-def _extract_wikilinks(text: str) -> list[tuple[int, str, str, str]]:
-    """Return (line, target_key, target_stem, line_text) for each [[wiki-link]] in text."""
-    if "[[" not in text:
+def _known_vault_ids() -> frozenset[str] | None:
+    """Vault ids for ``[[vault:path]]`` detection — None accepts any well-formed prefix.
+
+    Deliberately does not load the registry: indexing runs per bound vault and a
+    registry load here would warm ``vaults.load_bindings``' cache from inside it.
+    """
+    return None
+
+
+def _note_links(
+    rel: str,
+    text: str,
+    fm_json: str | None,
+    *,
+    known_vaults: frozenset[str] | None,
+) -> list[links.Link]:
+    """Outbound typed links for one note (markdown: body + link fields; YAML/mmd: link fields)."""
+    from apo_engine.note_format import is_mmd_note, is_yaml_note
+
+    fm: dict | None = None
+    if fm_json:
+        try:
+            parsed = json.loads(fm_json)
+            fm = parsed if isinstance(parsed, dict) else None
+        except (json.JSONDecodeError, TypeError):
+            fm = None
+    body = not (is_yaml_note(rel) or is_mmd_note(rel))
+    if not body and not fm:
         return []
-    rows: list[tuple[int, str, str, str]] = []
-    for lineno, line in enumerate(text.splitlines(), 1):
-        for m in _WIKILINK.finditer(line):
-            target = m.group(1).strip().removesuffix(".md").lower()
-            if not target:
-                continue
-            stem = target.rsplit("/", 1)[-1]
-            rows.append((lineno, target, stem, line.strip()[:200]))
-    return rows
+    return links.extract_links(
+        rel,
+        text,
+        fm,
+        link_fields=_link_fields_for(rel),
+        body=body,
+        known_vaults=known_vaults,
+    )
 
 
-def _stem_index_add(idx: dict[str, list[str]], path: str) -> None:
-    norm = path.replace("\\", "/")
-    if not norm.endswith(".md"):
+def _link_fields_for(rel: str) -> tuple[tuple[str, str], ...]:
+    return links.DEFAULT_LINK_FIELDS
+
+
+def _insert_links(db: sqlite3.Connection, rel: str, rows: list[links.Link]) -> None:
+    if not rows:
         return
-    stem = Path(norm).stem.lower()
-    if norm not in idx.get(stem, []):
-        idx.setdefault(stem, []).append(norm)
+    db.executemany(
+        "INSERT INTO backlinks(source, target_key, target_stem, line, text, kind, mode, status, "
+        "target_vault, alias, heading) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [
+            (rel, r.target_key, r.target_stem, r.line, r.text, r.kind, r.mode, r.status,
+             r.target_vault, r.alias, r.heading)
+            for r in rows
+        ],
+    )
 
 
-def _build_stem_index(db: sqlite3.Connection, extra_paths: list[str] | None = None) -> dict[str, list[str]]:
-    """Basename → vault-relative paths for unique [[stem]] wikilink resolution."""
-    idx: dict[str, list[str]] = {}
-    try:
-        for (path,) in db.execute("SELECT path FROM files"):
-            _stem_index_add(idx, path)
-    except sqlite3.OperationalError:
-        pass
-    for path in extra_paths or []:
-        _stem_index_add(idx, path)
-    return idx
+def _link_keys_for_paths(db: sqlite3.Connection, paths: Iterable[str]) -> set[str]:
+    """Every key a link could use to reach these paths: full key, stem, current title."""
+    keys: set[str] = set()
+    plist = [p for p in paths if p]
+    for p in plist:
+        k = links.link_key(p)
+        keys.add(k)
+        keys.add(k.rsplit("/", 1)[-1])
+    for i in range(0, len(plist), 400):
+        chunk = plist[i : i + 400]
+        qs = ",".join("?" * len(chunk))
+        for (title,) in db.execute(
+            f"SELECT link_title FROM files WHERE path IN ({qs}) AND link_title IS NOT NULL", chunk
+        ):
+            keys.add(title)
+    return keys
 
 
-def _resolve_basename_wikilink(target: str, stem_index: dict[str, list[str]]) -> str:
-    """Resolve bare ``[[stem]]`` to a unique vault path when unambiguous."""
-    if "/" in target:
-        return target
-    matches = stem_index.get(target.lower(), [])
-    if len(matches) == 1:
-        return matches[0].removesuffix(".md").lower()
-    return target
+_RESOLVE_SCOPED_MAX_PARAMS = 2000
 
 
-def _resolve_wikilinks_for_index(
-    wikilinks: list[tuple[int, str, str, str]],
-    stem_index: dict[str, list[str]],
-) -> list[tuple[int, str, str, str]]:
-    out: list[tuple[int, str, str, str]] = []
-    for ln, tk, ts, tx in wikilinks:
-        resolved = _resolve_basename_wikilink(tk, stem_index)
-        new_stem = resolved.rsplit("/", 1)[-1] if "/" in resolved else ts
-        out.append((ln, resolved, new_stem, tx))
-    return out
+def resolve_links(
+    db: sqlite3.Connection,
+    *,
+    sources: Iterable[str] | None = None,
+    paths: Iterable[str] | None = None,
+    keys: Iterable[str] | None = None,
+) -> None:
+    """Set-based link resolution against ``files`` (no args → every row).
+
+    Scoped form re-resolves rows emitted by ``sources`` plus rows that could point at
+    ``paths`` (added, changed or removed notes) — by their keys or current target.
+    An exact vault-path match wins; a name (stem or title) resolves only when unique,
+    else ``ambiguous``; no match is ``dangling``. ``external``/``foreign`` rows are final.
+    """
+    where = "status NOT IN ('external','foreign')"
+    params: list[Any] = []
+    if sources is not None or paths is not None or keys is not None:
+        src = sorted(set(sources or ()))
+        pth = sorted(set(paths or ()))
+        key_set = set(keys or ()) | _link_keys_for_paths(db, pth)
+        clauses: list[str] = []
+        if src:
+            clauses.append(f"source IN ({','.join('?' * len(src))})")
+            params.extend(src)
+        if pth:
+            clauses.append(f"target_path IN ({','.join('?' * len(pth))})")
+            params.extend(pth)
+        if key_set:
+            ks = sorted(key_set)
+            clauses.append(f"target_key IN ({','.join('?' * len(ks))})")
+            params.extend(ks)
+        if not clauses:
+            return
+        if len(params) <= _RESOLVE_SCOPED_MAX_PARAMS:
+            where += " AND (" + " OR ".join(clauses) + ")"
+        else:
+            params = []  # big batch (first scan) — one full pass beats huge IN lists
+    name_match = (
+        "FROM files f WHERE b.mode = 'name' AND instr(b.target_key, '/') = 0 "
+        "AND (f.link_stem = b.target_key OR f.link_title = b.target_key)"
+    )
+    target = (
+        "COALESCE((SELECT MIN(f.path) FROM files f WHERE f.link_key = b.target_key), "
+        f"(SELECT CASE WHEN COUNT(DISTINCT f.path) = 1 THEN MIN(f.path) END {name_match}))"
+    )
+    # One statement: SET expressions see the pre-update row, so status recomputes target.
+    db.execute(
+        f"""UPDATE backlinks AS b SET
+                target_path = {target},
+                status = CASE
+                    WHEN {target} IS NOT NULL THEN 'resolved'
+                    WHEN (SELECT COUNT(DISTINCT f.path) {name_match}) > 1 THEN 'ambiguous'
+                    ELSE 'dangling' END
+            WHERE {where}""",
+        params,
+    )
+
+
+def links_backfill_needed(db: sqlite3.Connection) -> bool:
+    row = db.execute("SELECT value FROM meta WHERE key='links_schema_version'").fetchone()
+    return not row or row[0] != links.LINKS_SCHEMA_VERSION
+
+
+def _mark_links_current(db: sqlite3.Connection) -> None:
+    db.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES ('links_schema_version', ?)",
+        (links.LINKS_SCHEMA_VERSION,),
+    )
+
+
+def backfill_links(*, verbose: bool = False) -> int:
+    """Re-extract every indexed note's links from disk — no chunk or vector writes.
+
+    Runs on the single writer (watcher scan / CLI). Covers embed-backoff and
+    quarantined notes too, since it walks ``files`` rather than the change scan.
+    Returns the number of notes re-extracted.
+    """
+    root = vaults.notes_root()
+    db = writer_connect()
+    known_vaults = _known_vault_ids()
+    rels = [r[0] for r in db.execute("SELECT path FROM files")]
+    done = 0
+    for rel in rels:
+        try:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        fm_json = note_catalog_json(text, rel)
+        db.execute("DELETE FROM backlinks WHERE source=?", (rel,))
+        _insert_links(db, rel, _note_links(rel, text, fm_json, known_vaults=known_vaults))
+        done += 1
+    resolve_links(db)
+    _mark_links_current(db)
+    db.commit()
+    if verbose:
+        print(f"  links: re-extracted {done} note(s)", flush=True)
+    return done
 
 
 # --------------------------------------------------------------------------- #
@@ -994,6 +1112,60 @@ def _ensure_files_columns(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE files ADD COLUMN embed_quarantined INTEGER NOT NULL DEFAULT 0")
     if "embed_fail_at" not in cols:
         db.execute("ALTER TABLE files ADD COLUMN embed_fail_at REAL")
+
+
+# files.link_* — generated columns the link resolver joins on. SQLite lower() is
+# ASCII-only; links.link_key() lowercases the same way on the Python side.
+_FILES_LINK_KEY_SQL = (
+    "lower(CASE WHEN substr(path, -3) = '.md' THEN substr(path, 1, length(path) - 3) ELSE path END)"
+)
+_FILES_LINK_COLUMNS = (
+    ("link_key", _FILES_LINK_KEY_SQL),
+    ("link_stem", "substr(link_key, length(rtrim(link_key, replace(link_key, '/', ''))) + 1)"),
+    (
+        "link_title",
+        "CASE WHEN json_valid(frontmatter) AND json_type(frontmatter, '$.title') = 'text' "
+        "THEN lower(trim(json_extract(frontmatter, '$.title'))) END",
+    ),
+)
+_BACKLINKS_LINK_COLUMNS = (
+    ("kind", "TEXT NOT NULL DEFAULT 'wikilink'"),
+    ("mode", "TEXT NOT NULL DEFAULT 'name'"),
+    ("target_path", "TEXT"),
+    ("status", "TEXT NOT NULL DEFAULT 'unresolved'"),
+    ("target_vault", "TEXT"),
+    ("alias", "TEXT"),
+    ("heading", "TEXT"),
+)
+
+
+def _ensure_link_columns(db: sqlite3.Connection) -> None:
+    """Typed-link columns on ``backlinks`` + resolver keys on ``files`` (additive ALTERs)."""
+    fcols = {row[1] for row in db.execute("PRAGMA table_xinfo(files)").fetchall()}
+    for name, expr in _FILES_LINK_COLUMNS:
+        if name not in fcols:
+            db.execute(f"ALTER TABLE files ADD COLUMN {name} TEXT GENERATED ALWAYS AS ({expr}) VIRTUAL")
+    bcols = {row[1] for row in db.execute("PRAGMA table_info(backlinks)").fetchall()}
+    for name, ddl in _BACKLINKS_LINK_COLUMNS:
+        if name not in bcols:
+            db.execute(f"ALTER TABLE backlinks ADD COLUMN {name} {ddl}")
+    db.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS files_link_key ON files(link_key);
+        CREATE INDEX IF NOT EXISTS files_link_stem ON files(link_stem);
+        CREATE INDEX IF NOT EXISTS files_link_title ON files(link_title);
+        CREATE INDEX IF NOT EXISTS backlinks_target_path ON backlinks(target_path);
+        """
+    )
+
+
+def links_ready(db: sqlite3.Connection) -> bool:
+    """True when this index has the typed-link schema (readers on an un-migrated index fall back)."""
+    try:
+        cols = {row[1] for row in db.execute("PRAGMA table_info(backlinks)").fetchall()}
+    except sqlite3.Error:
+        return False
+    return "status" in cols
 
 
 def _ensure_ref_catalog_tables(db: sqlite3.Connection) -> None:
@@ -1171,13 +1343,16 @@ def connect(path: Path | None = None, *, read_only: bool = False) -> sqlite3.Con
         )
         _ensure_chunk_columns(db)
         _ensure_files_columns(db)
+        _ensure_link_columns(db)
         _ensure_ref_catalog_tables(db)
         _schema_ready.add(key)
-    elif read_only and key not in _schema_ready:
+    elif read_only and f"{key}#ro" not in _schema_ready:
+        # Separate marker: a reader must not mark the index ready for the writer, or
+        # the writer skips writer-only migrations (e.g. _ensure_link_columns).
         _ensure_chunk_columns(db)
         _ensure_files_columns(db)
         _ensure_ref_catalog_tables(db)
-        _schema_ready.add(key)
+        _schema_ready.add(f"{key}#ro")
     return db
 
 
@@ -1854,7 +2029,12 @@ def _index_vault_impl(
     file_stamps: list[tuple[str, float, str, str | None]] = []
     stats = IndexStats()
     mtime_refreshed = False
-    stem_index = _build_stem_index(db)
+    if not rebuild and links_backfill_needed(db):
+        backfill_links(verbose=verbose)
+        db = writer_connect()
+    known_vaults = _known_vault_ids()
+    link_sources: list[str] = []
+    removed_paths: list[str] = []
 
     # Stream paths — avoid materializing the full vault path list in memory.
     notes_iter = _iter_notes(root, ignore)
@@ -1904,7 +2084,6 @@ def _index_vault_impl(
             fm = parse_yaml_document(text) or {}
             id_prefix = f"yaml:{rel}"
             fm_json = json.dumps(fm, default=str)
-            wikilinks: list = []
             note_rows: list[tuple] = []
             for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
                 chunk_yaml_note(text, rel, fm)
@@ -1917,11 +2096,9 @@ def _index_vault_impl(
                 )
         elif is_mmd_note(rel):
             fm_json = note_catalog_json(text, rel, mtime=st.st_mtime)
-            wikilinks = []
             note_rows = _mmd_chunk_rows(text, rel, mtime=st.st_mtime)
         else:
             fm_json = note_catalog_json(text, rel)
-            wikilinks = _extract_wikilinks(text)
             note_rows = _markdown_chunk_rows(text, rel)
         for row in note_rows:
             sec_bytes = row[9]
@@ -1936,13 +2113,8 @@ def _index_vault_impl(
                     config.SECTION_WARN_BYTES,
                 )
             pending.append(row)
-        if wikilinks:
-            _stem_index_add(stem_index, rel)
-            resolved = _resolve_wikilinks_for_index(wikilinks, stem_index)
-            db.executemany(
-                "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
-                [(rel, tk, ts, ln, tx) for ln, tk, ts, tx in resolved],
-            )
+        _insert_links(db, rel, _note_links(rel, text, fm_json, known_vaults=known_vaults))
+        link_sources.append(rel)
         file_stamps.append((rel, st.st_mtime, h, fm_json, st.st_size))
 
     if limit is None:
@@ -1950,6 +2122,7 @@ def _index_vault_impl(
             if rel not in on_disk:
                 _delete_path(db, rel)
                 db.execute("DELETE FROM files WHERE path=?", (rel,))
+                removed_paths.append(rel)
                 stats.removed += 1
 
     work_done = bool(pending) or stats.removed > 0 or stats.added > 0 or stats.changed > 0
@@ -1978,7 +2151,12 @@ def _index_vault_impl(
             (rel, mtime, h, fm_json, file_bytes),
         )
         stamped += 1
-    if stamped or dropped or work_done or mtime_refreshed:
+    if rebuild:
+        resolve_links(db)
+        _mark_links_current(db)
+    elif link_sources or removed_paths:
+        resolve_links(db, sources=link_sources, paths=link_sources + removed_paths)
+    if stamped or dropped or work_done or mtime_refreshed or rebuild:
         _finalize_index_writes(db)
 
     stats.seconds = time.time() - t0
@@ -2363,7 +2541,7 @@ class _FilePlan:
     text: str = ""
     pending: list[PendingChunk] = field(default_factory=list)
     frontmatter_json: str | None = None
-    wikilinks: list[tuple[int, str, str, str]] = field(default_factory=list)
+    links: list[links.Link] = field(default_factory=list)
 
 
 def index_file(full_path: Path, verbose: bool = False) -> int:
@@ -2391,6 +2569,7 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
     candidates: list[tuple[str, Path, float]] = []  # rel, path, mtime
     purge_rels: list[str] = []
     ignore_res = _compile_ignore(_load_ignore())
+    known_vaults = _known_vault_ids()
 
     for raw in sorted(paths, key=lambda p: str(p)):
         full_path = Path(raw).resolve()
@@ -2457,7 +2636,6 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
             fm = parse_yaml_document(text) or {}
             id_prefix = f"yaml:{plan.rel}"
             plan.frontmatter_json = json.dumps(fm, default=str)
-            plan.wikilinks = []
             for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
                 chunk_yaml_note(text, rel, fm)
             ):
@@ -2469,12 +2647,11 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
                 )
         elif is_mmd_note(rel):
             plan.frontmatter_json = note_catalog_json(text, rel, mtime=st_mtime)
-            plan.wikilinks = []
             plan.pending.extend(_mmd_chunk_rows(text, rel, mtime=st_mtime))
         else:
             plan.frontmatter_json = note_catalog_json(text, rel)
-            plan.wikilinks = _extract_wikilinks(text)
             plan.pending.extend(_markdown_chunk_rows(text, rel))
+        plan.links = _note_links(rel, text, plan.frontmatter_json, known_vaults=known_vaults)
         plans.append(plan)
 
     active = plans
@@ -2486,19 +2663,12 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
 
     for rel in purge_rels:
         _delete_path_by_rel(db, rel)
-    stem_index = _build_stem_index(db, extra_paths=[p.rel for p in active if p.wikilinks])
     for plan in active:
         prev = known.get(plan.rel)
         _delete_path(db, plan.rel)
         if not (prev is not None and prev[1] == ""):
             db.execute("DELETE FROM files WHERE path=?", (plan.rel,))
-        if plan.wikilinks:
-            _stem_index_add(stem_index, plan.rel)
-            resolved = _resolve_wikilinks_for_index(plan.wikilinks, stem_index)
-            db.executemany(
-                "INSERT INTO backlinks(source, target_key, target_stem, line, text) VALUES (?,?,?,?,?)",
-                [(plan.rel, tk, ts, ln, tx) for ln, tk, ts, tx in resolved],
-            )
+        _insert_links(db, plan.rel, plan.links)
     db.commit()
 
     # Assign vectors: reuse by body hash, else queue for embed.
@@ -2576,6 +2746,9 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
             (plan.rel, plan.mtime, plan.file_hash, plan.frontmatter_json, plan.file_bytes),
         )
         stamped += 1
+    if active or purge_rels:
+        touched = [plan.rel for plan in active]
+        resolve_links(db, sources=touched, paths=touched + purge_rels)
     if purge_rels or stamped or dropped:
         _finalize_index_writes(db)
     else:
@@ -2617,6 +2790,7 @@ def purge_source(full_path: Path) -> bool:
         return False
     db = writer_connect()
     _delete_path_by_rel(db, rel)
+    resolve_links(db, paths=[rel])
     db.commit()
     return True
 
@@ -4177,37 +4351,131 @@ def frontmatter_field(rel_path: str, field: str) -> Any:
     return fm.get(field) if isinstance(fm, dict) else None
 
 
-def list_outlinks(source: str, *, limit: int = 100) -> list[tuple[str, int, str]]:
-    """(target_key, line, line text) for [[wiki-links]] emitted from source."""
-    rel = source.replace("\\", "/").strip("/")
-    if not rel.endswith(".md"):
-        rel = f"{rel}.md"
+_LINK_COLS = "source, target_key, target_path, kind, status, line, text, alias, heading, target_vault"
+
+
+def _link_row(r: tuple) -> dict[str, Any]:
+    source, key, tpath, kind, status, line, text, alias, heading, tvault = r
+    return {
+        "source": source,
+        "target": tpath or key,
+        "target_key": key,
+        "target_path": tpath,
+        "kind": kind,
+        "status": status,
+        "line": line,
+        "text": text,
+        "alias": alias,
+        "heading": heading,
+        "target_vault": tvault,
+    }
+
+
+def _kinds_sql(kinds: Iterable[str] | None, params: list[Any]) -> str:
+    ks = sorted({k for k in (kinds or ()) if k})
+    if not ks:
+        return ""
+    params.extend(ks)
+    return f" AND kind IN ({','.join('?' * len(ks))})"
+
+
+def list_links(
+    *,
+    source: str | None = None,
+    target_path: str | None = None,
+    target_keys: set[str] | None = None,
+    kinds: Iterable[str] | None = None,
+    exclude_source: str = "",
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Typed link rows — outbound (``source``) or inbound (``target_path`` / ``target_keys``).
+
+    Inbound: rows resolved to ``target_path``; when the target is not an indexed note,
+    rows whose key or stem matches ``target_keys`` (dangling links to it). Ambiguous
+    rows never match — a ``[[stem]]`` shared by two notes belongs to neither.
+    On an index without the typed-link schema, falls back to wiki-link key matching.
+    """
     db = reader_connect()
-    return db.execute(
-        """SELECT target_key, line, text FROM backlinks
-           WHERE source = ? ORDER BY line LIMIT ?""",
-        (rel, limit),
-    ).fetchall()
+    typed = links_ready(db)
+    params: list[Any] = []
+    if source is not None:
+        cols = _LINK_COLS if typed else "source, target_key, NULL, 'wikilink', 'unresolved', line, text, NULL, NULL, NULL"
+        sql = f"SELECT {cols} FROM backlinks WHERE source = ?"
+        params.append(source)
+        if typed:
+            sql += _kinds_sql(kinds, params)
+        sql += " ORDER BY line"
+    else:
+        keys = sorted(target_keys or ())
+        kq = ",".join("?" * len(keys))
+        if not typed:
+            if not keys:
+                return []
+            sql = (
+                "SELECT source, target_key, NULL, 'wikilink', 'unresolved', line, text, NULL, NULL, NULL "
+                f"FROM backlinks WHERE (target_key IN ({kq}) OR target_stem IN ({kq}))"
+            )
+            params.extend([*keys, *keys])
+        elif target_path:
+            # 'unresolved' = legacy rows not yet backfilled; 'dangling' + exact key = the
+            # target exists on disk but its index row has not landed yet.
+            sql = f"SELECT {_LINK_COLS} FROM backlinks WHERE (target_path = ?"
+            params.append(target_path)
+            if keys:
+                sql += (
+                    f" OR (status = 'unresolved' AND (target_key IN ({kq}) OR target_stem IN ({kq})))"
+                    f" OR (status = 'dangling' AND target_key IN ({kq}))"
+                )
+                params.extend([*keys, *keys, *keys])
+            sql += ")"
+            sql += _kinds_sql(kinds, params)
+        else:
+            if not keys:
+                return []
+            sql = (
+                f"SELECT {_LINK_COLS} FROM backlinks WHERE status IN ('unresolved','dangling') "
+                f"AND (target_key IN ({kq}) OR target_stem IN ({kq}))"
+            )
+            params.extend([*keys, *keys])
+            sql += _kinds_sql(kinds, params)
+        if exclude_source:
+            sql += " AND source != ?"
+            params.append(exclude_source)
+        sql += " ORDER BY source, line"
+    sql += " LIMIT ?"
+    params.append(limit)
+    return [_link_row(r) for r in db.execute(sql, params).fetchall()]
+
+
+def list_outlinks(source: str, *, limit: int = 100) -> list[tuple[str, int, str]]:
+    """(target, line, line text) for links emitted from source (resolved path when known)."""
+    rel = source.replace("\\", "/").strip("/")
+    if not rel.endswith(links.NOTE_SUFFIXES):
+        rel = f"{rel}.md"
+    return [(r["target"], r["line"], r["text"]) for r in list_links(source=rel, limit=limit)]
 
 
 def list_backlinks(
-    target_keys: set[str], exclude_source: str = "", limit: int = 100
+    target_keys: set[str],
+    exclude_source: str = "",
+    limit: int = 100,
+    *,
+    target_path: str | None = None,
 ) -> list[tuple[str, int, str]]:
-    """(source path, line, line text) for notes linking to any of target_keys (stem or full path)."""
-    if not target_keys:
+    """(source path, line, line text) for notes linking to a note.
+
+    Pass ``target_path`` (the note's vault-relative path) when it is indexed;
+    ``target_keys`` (stem / path / title keys) cover legacy rows and missing targets.
+    """
+    if not target_keys and not target_path:
         return []
-    db = reader_connect()
-    keys = list(target_keys)
-    qs = ",".join("?" * len(keys))
-    sql = f"""SELECT source, line, text FROM backlinks
-              WHERE (target_key IN ({qs}) OR target_stem IN ({qs}))"""
-    params: list = [*keys, *keys]
-    if exclude_source:
-        sql += " AND source != ?"
-        params.append(exclude_source)
-    sql += " ORDER BY source, line LIMIT ?"
-    params.append(limit)
-    return db.execute(sql, params).fetchall()
+    rows = list_links(
+        target_path=target_path,
+        target_keys=target_keys,
+        exclude_source=exclude_source,
+        limit=limit,
+    )
+    return [(r["source"], r["line"], r["text"]) for r in rows]
 
 
 @dataclass

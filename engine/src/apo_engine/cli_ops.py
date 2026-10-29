@@ -209,7 +209,10 @@ def _render(cmd: str, result: dict[str, Any], args: argparse.Namespace) -> None:
                 print(f"  {n}")
             print(f"edges ({len(edges)}):")
             for e in edges:
-                print(f"  {e.get('src', '')} -> {e.get('dst', '')} [{e.get('direction', '')}]")
+                print(
+                    f"  {e.get('from', '')} -> {e.get('to', '')} "
+                    f"[{e.get('direction', '')} {e.get('kind', '')} {e.get('status', '')}]"
+                )
 
     elif cmd == "history":
         commits = result.get("commits")
@@ -483,6 +486,7 @@ def _cmd_graph_neighbors(args: argparse.Namespace) -> int:
         limit=args.limit,
         offset=args.offset,
         vault=args.vault,
+        kinds=args.kind,
     )
     return _emit("graph-neighbors", result, args)
 
@@ -657,12 +661,15 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--no-diff", action="store_true", help="skip the before/after read used to print a diff")
     pt.set_defaults(func=_cmd_patch_table)
 
-    pg = sub.add_parser("graph-neighbors", parents=[common], help="wiki-link graph traversal")
+    pg = sub.add_parser("graph-neighbors", parents=[common], help="typed link graph traversal")
     pg.add_argument("path")
     pg.add_argument("--depth", type=int, default=1)
     pg.add_argument("--direction", default="both", choices=["in", "out", "both"])
     pg.add_argument("--limit", type=int, default=50)
     pg.add_argument("--offset", type=int, default=0)
+    pg.add_argument(
+        "--kind", action="append", default=None, help="edge kind filter (repeatable): wikilink, md_link, related, …"
+    )
     pg.set_defaults(func=_cmd_graph_neighbors)
 
     pf = sub.add_parser("filter", parents=[common], help="frontmatter catalog (no embeddings)")

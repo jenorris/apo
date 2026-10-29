@@ -4,6 +4,39 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- **Typed, resolved links** ([docs/links.md](docs/links.md)). The index now stores
+  relative markdown links and frontmatter link fields (`related`, `supersedes`,
+  `sources.resource`, `resource`) alongside `[[wikilinks]]`. Each row carries
+  `kind`, `status` (`resolved`, `ambiguous`, `dangling`, `external`, `foreign`),
+  `target_path`, `alias` and `heading`. One extractor (`links.py`) replaces the
+  index's wikilink regex.
+- `graph_neighbors` takes `kinds` (MCP) / `--kind` (CLI), and its edges report
+  `kind` and `status`.
+- `apo-engine index --links-only` re-extracts links for every indexed note
+  without re-embedding.
+
+### Changed
+
+- **Link resolution is set-based and re-runs on every index batch, scan and
+  purge.** A link written before its target exists now resolves when the target
+  is indexed. Deleting a target turns its inbound path links `dangling`. A bare
+  `[[stem]]` shared by two notes is `ambiguous` and no longer counts as a
+  backlink for both. Backlink counts and neighbor boosts in search ranking match
+  on the resolved path, so same-stem notes no longer inflate each other.
+- Search backlink counts now include markdown and frontmatter links, not just
+  wikilinks.
+- Upgrade: the first watcher scan after upgrade backfills links (no re-embed),
+  gated by meta `links_schema_version`. The schema change only adds columns.
+
+### Fixed
+
+- A read-only connection opened first in a process no longer marks the index
+  schema ready for the writer, which made the writer skip its migrations.
+- `apo-local graph-neighbors` printed empty edge endpoints (it read `src`/`dst`
+  where the result has `from`/`to`).
+
 ## [0.35.1] — 2026-10-19
 
 ### Fixed
