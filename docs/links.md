@@ -51,7 +51,8 @@ path_rules:
   entries, which are dropped on load.
 - **Re-extraction:** a change to any link-field declaration re-extracts links
   without re-embedding. The watcher does it as soon as the contract file
-  changes, and the next scan checks again. Meta `links_schema_version` stores
+  changes, and the periodic reconcile scan (`WATCH_RECONCILE_INTERVAL`) checks
+  again. Meta `links_schema_version` stores
   the extractor version plus a fingerprint of the declarations.
 
 ## Status
