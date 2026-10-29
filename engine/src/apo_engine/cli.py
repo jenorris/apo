@@ -27,6 +27,9 @@ def _cmd_index(args) -> int:
         with cm:
             return _vacuum_index(b)
 
+    if getattr(args, "links_only", False):
+        return _links_only_index(vault_arg, force_inline=bool(args.force_inline))
+
     inline_requested = bool(args.inline or args.force_inline) or (args.limit is not None)
 
     if inline_requested and not args.force_inline:
@@ -61,6 +64,26 @@ def _cmd_index(args) -> int:
     )
     print(json.dumps(result, indent=2))
     return 0 if result.get("ok") else 1
+
+
+def _links_only_index(vault_arg: str, *, force_inline: bool) -> int:
+    """Re-extract typed links for every indexed note (no re-embed).
+
+    The watcher does this on its own when the link schema version changes; this is
+    the manual path, so it refuses a live watcher (second writer) unless forced.
+    """
+    if not force_inline and apo_ops.watcher_status().get("running"):
+        print(
+            "error: watcher is running — it backfills links itself on its next scan. "
+            "Pass --force-inline to run here anyway (second concurrent index.db writer).",
+            file=sys.stderr,
+        )
+        return 1
+    cm, b = _bind_cli_vault(vault_arg)
+    with cm:
+        n = core.backfill_links(verbose=True)
+        print(f"[{b.name}] links re-extracted for {n} note(s)")
+    return 0
 
 
 def _vacuum_index(b) -> int:
@@ -337,6 +360,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="run the index in this process (today's direct core.index_vault behavior); "
         "refused if a watcher is live unless --force-inline",
+    )
+    pi.add_argument(
+        "--links-only",
+        action="store_true",
+        help="re-extract typed links for every indexed note without re-embedding",
     )
     pi.add_argument(
         "--force-inline",

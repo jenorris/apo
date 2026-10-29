@@ -274,7 +274,7 @@ def _backlink_count(path: str) -> int:
             return cached[1]
     stem = Path(rel).name.lower()
     targets = {key, stem}
-    rows = core.list_backlinks(targets, limit=500)
+    rows = core.list_backlinks(targets, limit=500, target_path=path.replace("\\", "/"))
     count = len({r[0] for r in rows})
     with _backlink_count_lock:
         _backlink_count_cache[key] = (now, count)
@@ -326,6 +326,23 @@ def _prefetch_path_boost_data(paths: Iterable[str]) -> None:
     with _frontmatter_boost_lock:
         for path, fields in fm_warm.items():
             _frontmatter_boost_cache[path] = (now, fields)
+
+    if core.links_ready(db):
+        # Resolved links: count distinct sources per exact target path (no stem overcount).
+        by_path: dict[str, set[str]] = {p: set() for p in uniq}
+        for i in range(0, len(uniq), batch_size):
+            chunk = uniq[i : i + batch_size]
+            ph = ",".join("?" * len(chunk))
+            for source, target_path in db.execute(
+                f"SELECT source, target_path FROM backlinks WHERE target_path IN ({ph})",
+                chunk,
+            ):
+                by_path[str(target_path)].add(str(source))
+        with _backlink_count_lock:
+            for p, srcs in by_path.items():
+                bk = p.removesuffix(".md").lower()
+                _backlink_count_cache[bk] = (now, len(srcs))
+        return
 
     lookup: dict[str, set[str]] = {}
     boost_keys: set[str] = set()
@@ -508,11 +525,14 @@ def _neighbor_paths_for(top_paths: list[str], *, limit: int = 80) -> set[str]:
             rel = f"{rel}.md"
         stem = Path(rel).stem.lower()
         keys = {rel.removesuffix(".md").lower(), stem}
-        for src, _, _ in core.list_backlinks(keys, limit=limit):
+        for src, _, _ in core.list_backlinks(keys, limit=limit, target_path=rel):
             neighbors.add(src.replace("\\", "/"))
-        for tgt, _, _ in core.list_outlinks(rel, limit=limit):
-            t = tgt.replace("\\", "/")
-            neighbors.add(t if t.endswith(".md") else f"{t}.md")
+        for row in core.list_links(source=rel, limit=limit):
+            if row["target_path"]:
+                neighbors.add(row["target_path"])
+            elif row["status"] == "unresolved":  # legacy row, not yet backfilled
+                t = row["target_key"].replace("\\", "/")
+                neighbors.add(t if t.endswith(".md") else f"{t}.md")
     return neighbors
 
 
