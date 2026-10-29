@@ -47,6 +47,14 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ### Fixed
 
+- **Contract edits reach the watcher's contract hooks.** Every OKF contract
+  file (`system/contracts/*.schema.yaml`) matches the default index ignore
+  list, so the watcher dropped its file events before they reached the
+  "contracts changed" check. The links backfill and the desk reprojection
+  for a contract edit then waited for the next reconcile scan
+  (`WATCH_RECONCILE_INTERVAL`, 5 minutes by default). The
+  event handler now flags `system/contracts/` changes before the ignore filter.
+
 - A read-only connection opened first in a process no longer marks the index
   schema ready for the writer, which made the writer skip its migrations.
 - `apo-local graph-neighbors` printed empty edge endpoints (it read `src`/`dst`

@@ -167,6 +167,42 @@ def _event_path_noise(raw: str, root: Path, ignore_res: list) -> bool:
             return True
     return bool(core._is_ignored(rel, ignore_res))
 
+def _contracts_event_rel(raw: str, root: Path) -> str | None:
+    """Vault-relative path of an FS event under ``system/contracts/``, else None.
+
+    Checked before ``_event_path_noise``: the contract files themselves match
+    ``DEFAULT_YAML_IGNORE`` (they are not indexed as notes), so the ignore filter
+    would drop exactly the events the contract hooks need.
+    """
+    from . import vault_project
+
+    if not raw:
+        return None
+    norm = str(raw).replace("\\", "/")
+    roots = {str(root).replace("\\", "/").rstrip("/") + "/"}
+    try:
+        roots.add(root.resolve().as_posix().rstrip("/") + "/")
+    except OSError:
+        pass
+    for root_s in roots:  # fsevents reports real paths; root may be a symlink
+        if norm.startswith(root_s):
+            rel = norm[len(root_s):]
+            return rel if vault_project.is_contracts_rel(rel) else None
+    return None
+
+
+def _backfill_links_if_needed(label: str, *, verbose: bool) -> bool:
+    """Re-extract links when the stored link state no longer matches the contract."""
+    try:
+        if core.links_backfill_needed(core.writer_connect()):
+            core.backfill_links(verbose=verbose)
+            return True
+    except Exception as link_err:
+        if verbose:
+            logger.warning("[%s] links backfill error: %s", label, link_err)
+    return False
+
+
 def _format_indexed_summary(
     stats: core.QueueStats, ready: list[Path], root: Path
 ) -> str | None:
@@ -398,8 +434,12 @@ def _watch_one(
     hook_health = watch_health.HookHealthTracker(root)
 
     ignore_res = core._compile_ignore(core._load_ignore())
+    contracts_dirty = threading.Event()
 
     def on_fs_event(raw: str) -> None:
+        if _contracts_event_rel(raw, root) is not None:
+            contracts_dirty.set()
+            event_queue.put("contracts")
         if _event_path_noise(raw, root, ignore_res):
             return
         p = _note_path(root, raw)
@@ -517,37 +557,36 @@ def _watch_one(
 
                 now = time.monotonic()
                 ready = debouncer.ready(now=now)
+                # Contract files are ignore-listed, so they never reach `ready`;
+                # on_fs_event flags them before the ignore filter instead.
+                contracts_changed = contracts_dirty.is_set()
+                contracts_dirty.clear()
                 if ready:
                     stats.indexed += _index_paths(ready, verbose=verbose)
                     from . import vault_project
 
                     try:
-                        contracts_changed = any(
+                        contracts_changed = contracts_changed or any(
                             vault_project.is_contracts_rel(p.relative_to(root).as_posix())
                             for p in ready
                         )
                     except ValueError:
-                        contracts_changed = False
+                        pass
+                if contracts_changed:
+                    from . import vault_project
+
                     try:
-                        if contracts_changed:
-                            vault_project.maybe_reproject(
-                                reason=f"contracts:{label}", verbose=verbose
-                            )
+                        vault_project.maybe_reproject(
+                            reason=f"contracts:{label}", verbose=verbose
+                        )
                     except Exception as proj_err:
                         if verbose:
                             logger.warning(
                                 "[%s] desk-project error: %s", label, proj_err
                             )
                     # OKF contract link_fields changed → re-extract links now, not
-                    # at the next poll scan (index_vault runs the same check).
-                    try:
-                        if contracts_changed and core.links_backfill_needed(core.writer_connect()):
-                            core.backfill_links(verbose=verbose)
-                    except Exception as link_err:
-                        if verbose:
-                            logger.warning(
-                                "[%s] links backfill error: %s", label, link_err
-                            )
+                    # at the next reconcile scan (index_vault runs the same check).
+                    _backfill_links_if_needed(label, verbose=verbose)
 
                 # Desk overlay lives outside vault roots — poll mtime each cycle.
                 # Also doubles as the desk-reprojection hook's heartbeat: it runs
