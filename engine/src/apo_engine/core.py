@@ -866,8 +866,27 @@ def _note_links(
     )
 
 
+def _links_contract():
+    """The bound vault's OKF contract (mtime-cached), or None."""
+    from apo_engine.okf import contract as okf_contract
+
+    try:
+        return okf_contract.get_contract(vaults.notes_root())
+    except Exception:
+        return None
+
+
 def _link_fields_for(rel: str) -> tuple[tuple[str, str], ...]:
-    return links.DEFAULT_LINK_FIELDS
+    from apo_engine.okf import contract as okf_contract
+
+    return okf_contract.link_fields_for(_links_contract(), rel)
+
+
+def links_state() -> str:
+    """Extractor version + the contract's link-field fingerprint (stored in meta)."""
+    from apo_engine.okf import contract as okf_contract
+
+    return f"{links.LINKS_SCHEMA_VERSION}:{okf_contract.link_fields_fingerprint(_links_contract())}"
 
 
 def _insert_links(db: sqlite3.Connection, rel: str, rows: list[links.Link]) -> None:
@@ -964,14 +983,15 @@ def resolve_links(
 
 
 def links_backfill_needed(db: sqlite3.Connection) -> bool:
+    """True when stored links predate this extractor or the contract's link fields."""
     row = db.execute("SELECT value FROM meta WHERE key='links_schema_version'").fetchone()
-    return not row or row[0] != links.LINKS_SCHEMA_VERSION
+    return not row or row[0] != links_state()
 
 
 def _mark_links_current(db: sqlite3.Connection) -> None:
     db.execute(
         "INSERT OR REPLACE INTO meta(key, value) VALUES ('links_schema_version', ?)",
-        (links.LINKS_SCHEMA_VERSION,),
+        (links_state(),),
     )
 
 
@@ -4445,6 +4465,28 @@ def list_links(
     sql += " LIMIT ?"
     params.append(limit)
     return [_link_row(r) for r in db.execute(sql, params).fetchall()]
+
+
+def graph_snapshot(kinds: Iterable[str] | None = None) -> tuple[list[tuple], list[tuple]]:
+    """Whole-vault link graph from the index: (note rows, edge rows).
+
+    Notes: (path, frontmatter JSON). Edges, aggregated per (source, target, kind):
+    (source, target_path, target_key, kind, status, target_vault, count).
+    """
+    db = reader_connect()
+    notes = db.execute("SELECT path, frontmatter FROM files ORDER BY path").fetchall()
+    if not links_ready(db):
+        return notes, []
+    params: list[Any] = []
+    kind_sql = _kinds_sql(kinds, params).replace(" AND ", " WHERE ", 1)
+    edges = db.execute(
+        f"""SELECT source, target_path, target_key, kind, status, target_vault, COUNT(*)
+            FROM backlinks{kind_sql}
+            GROUP BY source, COALESCE(target_path, target_key), kind
+            ORDER BY source, kind, COALESCE(target_path, target_key)""",
+        params,
+    ).fetchall()
+    return notes, edges
 
 
 def list_outlinks(source: str, *, limit: int = 100) -> list[tuple[str, int, str]]:

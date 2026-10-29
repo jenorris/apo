@@ -26,6 +26,34 @@ Default link fields, used when a vault declares none:
 `related`, `supersedes`, `sources.resource` (each list element's `resource`),
 and `resource`. YAML and `.mmd` notes contribute link fields only.
 
+## Declaring link fields in the OKF contract
+
+A vault's OKF contract (`system/contracts/okf-contract.schema.yaml`) decides
+which frontmatter fields are links. Each entry has a `key`, which is a
+frontmatter path (dots, `[N]`, `[id=x]`, with lists fanned out), and a `kind`,
+which is the edge kind (a slug). A bare string is shorthand: `parents` means
+`{key: parents, kind: parents}`.
+
+```yaml
+link_fields:                    # replaces the defaults; [] = no frontmatter links
+  - {key: related,          kind: related}
+  - {key: sources.resource, kind: source}
+  - {key: depends_on,       kind: depends-on}
+path_rules:
+  - match: "adr/**"
+    link_fields:                # extends the top-level list for matching notes
+      - {key: supersedes, kind: supersedes}
+```
+
+- **Defaults:** with no contract, or with `link_fields` omitted, the defaults
+  above apply.
+- **Validation:** `vault(contracts)` and `vault(lint)` report malformed
+  entries, which are dropped on load.
+- **Re-extraction:** a change to any link-field declaration re-extracts links
+  without re-embedding. The watcher does it as soon as the contract file
+  changes, and the next scan checks again. Meta `links_schema_version` stores
+  the extractor version plus a fingerprint of the declarations.
+
 ## Status
 
 | `status` | Meaning |
@@ -54,6 +82,40 @@ Manual backfill, with the watcher stopped:
 
 ```bash
 apo-engine index --links-only
+```
+
+## Graph export
+
+`vault(action=export)` (MCP) and `apo-local graph-export` (CLI) return the
+link graph as networkx node-link JSON, which is the hand-off format for
+renderers:
+
+```json
+{"directed": true, "multigraph": true,
+ "graph": {"vault": "work", "generated_at": "…", "focus": "x.md", "depth": 1},
+ "nodes": [{"id": "x.md", "kind": "note", "title": "X", "okf_type": "Reference"}],
+ "links": [{"source": "x.md", "target": "y.md", "key": "related", "kind": "related",
+            "status": "resolved", "count": 1}]}
+```
+
+Scope options:
+
+- **Whole vault:** the default.
+- **`folder=`:** notes under the folder, keeping only links with both ends inside.
+- **`path=` + `depth=` (1–3):** an ego graph. It walks resolved links in both
+  directions, and the focus note is always the first node, which suits a
+  per-page local graph.
+
+Filters:
+
+- `kinds=` keeps only the listed edge kinds.
+- `include_unresolved=true` adds `dangling`, `ambiguous`, `external` and
+  `foreign` target nodes.
+- `max_nodes` caps the node count and sets `truncated`. The MCP action
+  defaults to 500; the CLI has no cap.
+
+```bash
+apo-local graph-export --path areas/x.md --depth 2 -o /tmp/x-graph.json
 ```
 
 ## Querying

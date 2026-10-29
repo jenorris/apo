@@ -55,6 +55,7 @@ _NOTE_VERBS = frozenset(
         "patch",
         "patch-table",
         "graph-neighbors",
+        "graph-export",
         "filter",
         "backlinks",
         "history",
@@ -65,7 +66,8 @@ _USAGE = """apo — unified Apo CLI
 
 Usage:
   apo <note-verb> ...      note-facing ops: read, search, write, append, patch,
-                           patch-table, graph-neighbors, filter, backlinks, history
+                           patch-table, graph-neighbors, graph-export, filter,
+                           backlinks, history
                            (same backend as apo-local / the MCP note tools)
   apo engine <cmd> ...     admin/index ops: index, search-eval, stats,
                            watch, desk-project, okf, optima-merge

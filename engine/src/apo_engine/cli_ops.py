@@ -4,9 +4,10 @@ Calls straight into :mod:`apo_engine.ops` (shared index.db, no daemon) — the
 same backend ``engine/mcp/server.py``'s ``@mcp.tool`` functions call, so
 behavior (concurrency guards, OKF validation, region hashes) matches the MCP
 surface exactly. This is the human/shell-facing sibling of ``apo-engine``
-(index/watch/serve/admin) — it exposes only the 10 vault-facing tools:
+(index/watch/serve/admin) — it exposes the 10 vault-facing tools:
 read_note, search_notes, write_note, append_note, patch_note, patch_table,
-graph_neighbors, filter_notes, backlinks, history. It does NOT expose
+graph_neighbors, filter_notes, backlinks, history — plus graph-export (the
+``vault(action=export)`` link graph). It does NOT expose
 apo_admin, vault (registry/desk-project), index, serve, watch,
 okf, search-eval, desk-project, or optima-merge — those stay on apo-engine
 or the MCP apo_admin tool.
@@ -26,6 +27,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -491,6 +493,23 @@ def _cmd_graph_neighbors(args: argparse.Namespace) -> int:
     return _emit("graph-neighbors", result, args)
 
 
+def _cmd_graph_export(args: argparse.Namespace) -> int:
+    result = apo_ops.graph_export(
+        vault=args.vault,
+        folder=args.folder,
+        path=args.path or "",
+        depth=args.depth,
+        kinds=args.kind,
+        include_unresolved=args.include_unresolved,
+        limit=args.max_nodes,
+    )
+    if args.output and result.get("ok"):
+        Path(args.output).expanduser().write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {result['node_count']} nodes, {result['link_count']} links → {args.output}")
+        return 0
+    return _emit("graph-export", result, args)
+
+
 def _cmd_filter(args: argparse.Namespace) -> int:
     if args.where is not None:
         where = _load_json_arg(args.where)
@@ -671,6 +690,16 @@ def main(argv: list[str] | None = None) -> int:
         "--kind", action="append", default=None, help="edge kind filter (repeatable): wikilink, md_link, related, …"
     )
     pg.set_defaults(func=_cmd_graph_neighbors)
+
+    px = sub.add_parser("graph-export", parents=[common], help="typed link graph as node-link JSON")
+    px.add_argument("--folder", default="", help="only notes under this folder")
+    px.add_argument("--path", default="", help="ego graph around this note")
+    px.add_argument("--depth", type=int, default=1, help="ego graph hops (1-3)")
+    px.add_argument("--kind", action="append", default=None, help="edge kind filter (repeatable)")
+    px.add_argument("--include-unresolved", action="store_true", help="add dangling/external/foreign nodes")
+    px.add_argument("--max-nodes", type=int, default=None, help="cap nodes (sets truncated)")
+    px.add_argument("-o", "--output", default="", help="write JSON here instead of stdout")
+    px.set_defaults(func=_cmd_graph_export)
 
     pf = sub.add_parser("filter", parents=[common], help="frontmatter catalog (no embeddings)")
     pf.add_argument("kv", nargs="*", help="key=value predicates (equality; JSON-decoded values)")

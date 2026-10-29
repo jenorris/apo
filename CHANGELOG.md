@@ -6,6 +6,21 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ### Added
 
+- **OKF contract `link_fields`** ([docs/links.md](docs/links.md)). The vault
+  contract declares which frontmatter fields are links (`{key, kind}`; a bare
+  key is shorthand). `[]` turns frontmatter links off; omitting it keeps the
+  defaults. `path_rules[].link_fields` adds fields for matching notes.
+  `vault(contracts|lint)` reports malformed entries. Changing the
+  declarations re-extracts links without re-embedding, and the watcher does
+  it as soon as the contract file changes.
+- **Graph export.** `vault(action=export)` and `apo-local` / `apo
+  graph-export` return the typed link graph as networkx node-link JSON
+  (directed multigraph keyed by `kind`). Scope it to the whole vault, a
+  `folder=`, or a `path=` ego graph out to `depth=` 1–3. Options: `kinds=`
+  filter, `include_unresolved=` for dangling/external/foreign nodes, and a
+  `max_nodes` cap (500 by default over MCP). `-o` writes the CLI output to a
+  file.
+
 - **Typed, resolved links** ([docs/links.md](docs/links.md)). The index now stores
   relative markdown links and frontmatter link fields (`related`, `supersedes`,
   `sources.resource`, `resource`) alongside `[[wikilinks]]`. Each row carries

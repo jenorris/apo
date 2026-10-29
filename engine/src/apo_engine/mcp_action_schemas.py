@@ -91,6 +91,17 @@ class VaultOkfDryRunRequest(_ActionBase):
     contract: Annotated[str, Field(description="Proposed okf-contract.schema.yaml text.")] = ""
 
 
+class VaultExportRequest(_ActionBase):
+    action: Literal["export"]
+    vault: str = ""
+    folder: str = ""
+    path: Annotated[str, Field(description="Ego graph around this note.")] = ""
+    depth: int = 1
+    kinds: list[str] | None = None
+    include_unresolved: bool = False
+    max_nodes: int | None = 500
+
+
 VaultAction = Annotated[
     Union[
         VaultListRequest,
@@ -102,11 +113,12 @@ VaultAction = Annotated[
         VaultLintRequest,
         VaultCloneRequest,
         VaultOkfDryRunRequest,
+        VaultExportRequest,
     ],
     Field(discriminator="action"),
 ]
 
 VAULT_ACTION_FIELD_DESC = (
-    "list | contracts | describe | merge | project | stats | lint | clone | okf_dry_run — "
+    "list | contracts | describe | merge | project | stats | lint | clone | okf_dry_run | export — "
     "each variant lists only its own params."
 )

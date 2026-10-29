@@ -1025,7 +1025,7 @@ async def history(
 async def vault(
     request: Annotated[VaultAction, Field(description=VAULT_ACTION_FIELD_DESC)],
 ) -> dict:
-    """Vault registry, contracts, desk projection, habit KPIs, corpus lint, and system/ scaffold clone."""
+    """Vault registry, contracts, desk projection, KPIs, corpus lint, system/ clone, link-graph export."""
     kwargs = request.model_dump(mode="python", exclude={"action"})
     return await asyncio.to_thread(apo_ops.vault_op, request.action, **kwargs)
 
