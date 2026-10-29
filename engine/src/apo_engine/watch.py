@@ -519,15 +519,17 @@ def _watch_one(
                 ready = debouncer.ready(now=now)
                 if ready:
                     stats.indexed += _index_paths(ready, verbose=verbose)
-                    try:
-                        from . import vault_project
+                    from . import vault_project
 
-                        if any(
-                            vault_project.is_contracts_rel(
-                                p.relative_to(root).as_posix()
-                            )
+                    try:
+                        contracts_changed = any(
+                            vault_project.is_contracts_rel(p.relative_to(root).as_posix())
                             for p in ready
-                        ):
+                        )
+                    except ValueError:
+                        contracts_changed = False
+                    try:
+                        if contracts_changed:
                             vault_project.maybe_reproject(
                                 reason=f"contracts:{label}", verbose=verbose
                             )
@@ -535,6 +537,16 @@ def _watch_one(
                         if verbose:
                             logger.warning(
                                 "[%s] desk-project error: %s", label, proj_err
+                            )
+                    # OKF contract link_fields changed → re-extract links now, not
+                    # at the next poll scan (index_vault runs the same check).
+                    try:
+                        if contracts_changed and core.links_backfill_needed(core.writer_connect()):
+                            core.backfill_links(verbose=verbose)
+                    except Exception as link_err:
+                        if verbose:
+                            logger.warning(
+                                "[%s] links backfill error: %s", label, link_err
                             )
 
                 # Desk overlay lives outside vault roots — poll mtime each cycle.

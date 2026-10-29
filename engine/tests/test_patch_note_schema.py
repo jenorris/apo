@@ -165,6 +165,7 @@ class PatchNoteSchemaTest(unittest.TestCase):
                 "lint",
                 "clone",
                 "okf_dry_run",
+                "export",
             },
         )
 

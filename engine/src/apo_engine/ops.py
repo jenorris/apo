@@ -2132,6 +2132,159 @@ def _read_note_at_ref(
     return _stamp_qualified(out, vault=b.name, path=path_s)
 
 
+def graph_export(
+    *,
+    vault: str = "",
+    folder: str = "",
+    path: str = "",
+    depth: int = 1,
+    kinds: list[str] | None = None,
+    include_unresolved: bool = False,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Typed link graph as networkx node-link JSON (renderer hand-off; docs/links.md).
+
+    Scope: whole vault, ``folder`` (both ends inside it), or the ego graph of
+    ``path`` out to ``depth`` hops over resolved links (either direction).
+    ``include_unresolved`` adds dangling / ambiguous / external / foreign targets
+    as nodes. ``limit`` caps nodes (ego/folder nodes kept first) and sets
+    ``truncated``. Parallel edges of different kinds share a pair, so the graph
+    is a multigraph keyed by ``kind``.
+    """
+    if depth < 1 or depth > 3:
+        return _err(error="bad_request", message="depth must be 1..3")
+    if limit is not None and limit < 1:
+        return _err(error="bad_request", message="limit must be >= 1 or null")
+    if folder and path:
+        return _err(error="bad_request", message="pass folder= or path=, not both")
+    try:
+        b = _binding((vault or "").strip())
+    except OpsError as e:
+        return _err(error=e.code, message=e.message)
+    kind_filter = [k.strip() for k in (kinds or []) if k and k.strip()]
+    with vaults.bind(b):
+        note_rows, edge_rows = core.graph_snapshot(kind_filter)
+
+    notes: dict[str, dict[str, Any]] = {}
+    for rel, fm_json in note_rows:
+        fm: dict[str, Any] = {}
+        if fm_json:
+            try:
+                parsed = json.loads(fm_json)
+                fm = parsed if isinstance(parsed, dict) else {}
+            except (json.JSONDecodeError, TypeError):
+                fm = {}
+        node: dict[str, Any] = {"id": rel, "kind": "note", "title": _str_or_none(fm.get("title")) or Path(rel).stem}
+        for key in ("okf_type", "status"):
+            val = _str_or_none(fm.get(key))
+            if val:
+                node[key] = val
+        notes[rel] = node
+
+    edges: list[dict[str, Any]] = []
+    for source, tpath, tkey, kind, status, tvault, count in edge_rows:
+        if source not in notes:
+            continue
+        if tpath:
+            target = tpath
+        elif include_unresolved:
+            target = _unresolved_node(
+                {"target_key": tkey, "status": status, "target_vault": tvault}
+            )
+        else:
+            continue
+        edges.append(
+            {"source": source, "target": target, "key": kind, "kind": kind, "status": status, "count": count}
+        )
+
+    if path:
+        rel = path.replace("\\", "/").strip("/")
+        if rel not in notes and f"{rel}.md" in notes:
+            rel = f"{rel}.md"
+        if rel not in notes:
+            return _err(path=path, error="not_found", message="path is not an indexed note")
+        adj: dict[str, set[str]] = {}
+        for e in edges:
+            if e["status"] == "resolved":
+                adj.setdefault(e["source"], set()).add(e["target"])
+                adj.setdefault(e["target"], set()).add(e["source"])
+        ordered = [rel]
+        seen = {rel}
+        frontier = [rel]
+        for _ in range(depth):
+            nxt: list[str] = []
+            for n in frontier:
+                for m in sorted(adj.get(n, ())):
+                    if m not in seen:
+                        seen.add(m)
+                        ordered.append(m)
+                        nxt.append(m)
+            frontier = nxt
+        scope: list[str] | None = ordered
+    elif folder:
+        prefix = folder.replace("\\", "/").strip("/") + "/"
+        scope = [p for p in notes if p.startswith(prefix)]
+    else:
+        scope = None
+
+    if scope is not None:
+        keep = set(scope)
+        edges = [e for e in edges if e["source"] in keep and (e["target"] in keep or e["target"] not in notes)]
+        if path:
+            # Ego graph: unresolved targets only of the focus note's own links.
+            edges = [e for e in edges if e["target"] in keep or e["source"] == scope[0]]
+        node_ids = list(scope)
+    else:
+        node_ids = list(notes)
+    extra = sorted({e["target"] for e in edges if e["target"] not in notes})
+    node_ids.extend(extra)
+
+    truncated = False
+    if limit is not None and len(node_ids) > limit:
+        node_ids = node_ids[:limit]
+        truncated = True
+    keep_ids = set(node_ids)
+    edges = [e for e in edges if e["source"] in keep_ids and e["target"] in keep_ids]
+
+    by_target_status = {e["target"]: e["status"] for e in edges if e["target"] not in notes}
+    nodes_out: list[dict[str, Any]] = []
+    for nid in node_ids:
+        if nid in notes:
+            nodes_out.append(notes[nid])
+        else:
+            st = by_target_status.get(nid, "dangling")
+            nodes_out.append({"id": nid, "kind": "external" if st == "external" else st})
+
+    graph: dict[str, Any] = {
+        "vault": b.name,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    if path:
+        graph.update({"focus": scope[0] if scope else path, "depth": depth})
+    if folder:
+        graph["folder"] = folder
+    if kind_filter:
+        graph["kinds"] = kind_filter
+    return {
+        "ok": True,
+        "directed": True,
+        "multigraph": True,
+        "graph": graph,
+        "nodes": nodes_out,
+        "links": edges,
+        "node_count": len(nodes_out),
+        "link_count": len(edges),
+        "truncated": truncated,
+        "vault": b.name,
+    }
+
+
+def _str_or_none(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def filter_notes(
     where: dict | None = None,
     *,
@@ -4599,8 +4752,13 @@ def vault_op(
     to: str = "",
     dry_run: bool = False,
     mode: str = "full",
+    path: str = "",
+    depth: int = 1,
+    kinds: list[str] | None = None,
+    include_unresolved: bool = False,
+    max_nodes: int | None = 500,
 ) -> dict[str, Any]:
-    """Vault management: list | contracts | describe | merge | project | stats | lint | okf_dry_run | clone.
+    """Vault management: list | contracts | describe | merge | project | stats | lint | okf_dry_run | clone | export.
 
     Read-only except ``stats`` (habit KPI rollups) and ``clone`` (file copy). ``project`` returns
     desk ``body`` + ``guidance``; ``mode="full"`` (default) is the complete body, ``mode="index"``
@@ -4617,6 +4775,8 @@ def vault_op(
     previews the file list without writing. Existing destination files are always skipped (never
     overwritten) — remove/rename first to replace one. Does not create or register vaults — both
     ``vault=`` and ``to=`` must already exist in the discovery registry.
+    ``export`` returns the typed link graph as node-link JSON (whole vault, ``folder=``, or
+    ``path=``/``depth=`` ego graph; ``kinds=``, ``include_unresolved=``; ``max_nodes`` cap).
     """
     act = (action or "list").strip().lower()
     if act not in (
@@ -4629,10 +4789,23 @@ def vault_op(
         "lint",
         "okf_dry_run",
         "clone",
+        "export",
     ):
         return _err(
             error="bad_action",
-            message="action must be list|contracts|describe|merge|project|stats|lint|okf_dry_run|clone",
+            message="action must be list|contracts|describe|merge|project|stats|lint|okf_dry_run|clone|export",
+        )
+
+    if act == "export":
+        # Typed link graph as node-link JSON — see graph_export.
+        return graph_export(
+            vault=vault,
+            folder=folder,
+            path=path,
+            depth=depth,
+            kinds=kinds,
+            include_unresolved=include_unresolved,
+            limit=max_nodes,
         )
 
     if act == "okf_dry_run":

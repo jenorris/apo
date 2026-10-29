@@ -49,6 +49,7 @@ class DispatchTests(unittest.TestCase):
             "patch",
             "patch-table",
             "graph-neighbors",
+            "graph-export",
             "filter",
             "backlinks",
             "history",

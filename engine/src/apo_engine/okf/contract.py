@@ -111,6 +111,8 @@ class PathRule:
     okf_type: str | None = None
     required_fields: list[str] = field(default_factory=list)
     notes: str = ""
+    # Extra (key, kind) link fields for notes this rule matches — extends the top level.
+    link_fields: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -145,6 +147,10 @@ class OkfContract:
     #: Actor recorded in ``generated.by``. SPEC §7 forms: ``<producer>/<version>``,
     #: ``human:<id>``, ``process:<id>``.
     generated_by: str = "apo/engine"
+    # --- Typed links (docs/links.md) -------------------------------------------
+    #: Frontmatter fields that are links, as (fm_path key, edge kind). None = the
+    #: engine defaults (links.DEFAULT_LINK_FIELDS); [] = no frontmatter links.
+    link_fields: list[tuple[str, str]] | None = None
 
 
 def utc_now() -> str:
@@ -275,6 +281,7 @@ def load_contract(path: Path) -> OkfContract:
                 okf_type=str(raw["okf_type"]) if raw.get("okf_type") else None,
                 required_fields=[str(x) for x in req],
                 notes=str(raw.get("notes") or ""),
+                link_fields=parse_link_fields(raw.get("link_fields")) or [],
             )
         )
 
@@ -307,7 +314,71 @@ def load_contract(path: Path) -> OkfContract:
         reserved_filenames=[str(x) for x in (data.get("reserved_filenames") or ["index.md", "log.md"])],
         path_rules=rules,
         legacy_type_map={str(k): str(v) for k, v in legacy.items()},
+        link_fields=parse_link_fields(data.get("link_fields")),
     )
+
+
+def _link_field_entry(raw: Any) -> tuple[str, str] | None:
+    """``{key, kind}`` mapping, or a bare key string (kind = the key's last segment)."""
+    from apo_engine import fm_path, links
+
+    if isinstance(raw, str):
+        key, kind = raw.strip(), ""
+    elif isinstance(raw, dict):
+        key, kind = str(raw.get("key") or "").strip(), str(raw.get("kind") or "").strip()
+    else:
+        return None
+    if not key or "[]" in key:
+        return None
+    try:
+        fm_path.split_path(key)
+    except fm_path.FmPathError:
+        return None
+    kind = kind or key.rsplit(".", 1)[-1].split("[", 1)[0]
+    kind = kind.lower().replace(" ", "_")
+    return (key, kind) if links.is_kind_slug(kind) else None
+
+
+def parse_link_fields(raw: Any) -> list[tuple[str, str]] | None:
+    """Contract ``link_fields`` → [(key, kind)]; None when absent (engine defaults apply)."""
+    if raw is None or not isinstance(raw, list):
+        return None
+    out: list[tuple[str, str]] = []
+    for item in raw:
+        entry = _link_field_entry(item)
+        if entry and entry not in out:
+            out.append(entry)
+    return out
+
+
+def link_fields_for(contract: OkfContract | None, rel_path: str) -> tuple[tuple[str, str], ...]:
+    """Link fields for one note: contract top level (or defaults), plus its path rule's extras."""
+    from apo_engine import links
+
+    if contract is None:
+        return links.DEFAULT_LINK_FIELDS
+    base = list(links.DEFAULT_LINK_FIELDS if contract.link_fields is None else contract.link_fields)
+    rule = match_rule(contract, rel_path)
+    if rule is not None:
+        keys = {k for k, _ in base}
+        base.extend(e for e in rule.link_fields if e[0] not in keys)
+    return tuple(base)
+
+
+def link_fields_fingerprint(contract: OkfContract | None) -> str:
+    """Stable digest of every link-field declaration — a change re-extracts links."""
+    import hashlib
+    import json
+
+    if contract is None:
+        payload: Any = None
+    else:
+        payload = [
+            contract.link_fields,
+            [[r.match, r.link_fields] for r in contract.path_rules if r.link_fields],
+        ]
+    raw = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return hashlib.blake2b(raw, digest_size=8).hexdigest()
 
 
 ENFORCEMENTS = ("exempt", "reserved", "soft", "hard")
@@ -339,9 +410,31 @@ KNOWN_TOP_KEYS = frozenset(
         "path_rules",
         "legacy_type_map",
         "type_profiles",
+        "link_fields",
     }
 )
-KNOWN_RULE_KEYS = frozenset({"match", "enforcement", "okf_type", "required_fields", "notes"})
+KNOWN_RULE_KEYS = frozenset({"match", "enforcement", "okf_type", "required_fields", "notes", "link_fields"})
+
+
+def _link_fields_findings(value: Any, where: str) -> list[dict[str, str]]:
+    from apo_engine import vault_contracts as vc
+
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return [vc.finding("contract.invalid_shape", where, f"{where} must be a list of {{key, kind}}")]
+    out: list[dict[str, str]] = []
+    for i, item in enumerate(value):
+        if _link_field_entry(item) is None:
+            out.append(
+                vc.finding(
+                    "contract.invalid_shape",
+                    f"{where}[{i}]",
+                    "link field needs a frontmatter key path (dots, [N], [id=x]; no []) "
+                    "and a kind slug ([a-z][a-z0-9_-]*); dropped on load",
+                )
+            )
+    return out
 
 
 def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
@@ -371,6 +464,7 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
     f = vc.mapping_finding(data.get("type_profiles"), "type_profiles")
     if f:
         findings.append(f)
+    findings.extend(_link_fields_findings(data.get("link_fields"), "link_fields"))
     rules = data.get("path_rules")
     if rules is None:
         return findings
@@ -395,6 +489,7 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
         if f:
             findings.append(f)
         findings.extend(vc.str_list_findings(rule.get("required_fields"), f"{where}.required_fields"))
+        findings.extend(_link_fields_findings(rule.get("link_fields"), f"{where}.link_fields"))
     return findings
 
 
