@@ -20,6 +20,8 @@ tests/test_mcp_auth_google.py).
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -29,7 +31,13 @@ from pathlib import Path
 import httpx
 from pydantic import AnyHttpUrl
 
-from fastmcp.server.auth import AccessToken, JWTVerifier, RemoteAuthProvider
+from fastmcp.server.auth import (
+    AccessToken,
+    AuthProvider,
+    JWTVerifier,
+    RemoteAuthProvider,
+    TokenVerifier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -202,8 +210,53 @@ def build_auth_provider(
     )
 
 
-def build_auth_provider_from_env() -> RemoteAuthProvider | None:
-    """Construct the auth provider from ``APO_MCP_AUTH``/``APO_MCP_AUTH_CONFIG``.
+class StaticBearerTokenVerifier(TokenVerifier):
+    """Shared-secret bearer auth for machine clients on a private network.
+
+    The tokens file maps a client name to the SHA-256 hex digest of its token
+    (``{"clients": {"optima-service": {"sha256": "<hex>"}}}``), so the file on
+    disk never holds a usable secret. Each client keeps its own plaintext
+    token and can be revoked by deleting its entry and restarting the server.
+    """
+
+    def __init__(self, digests: dict[str, str]):
+        super().__init__()
+        if not digests:
+            raise AuthConfigError("token auth needs at least one client digest")
+        self._digests = {name: d.lower() for name, d in digests.items()}
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        presented = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        for name, digest in self._digests.items():
+            if hmac.compare_digest(presented, digest):
+                return AccessToken(token=token, client_id=name, scopes=[])
+        logger.warning("Bearer token rejected: no matching client digest")
+        return None
+
+
+def load_token_digests(tokens_path: Path) -> dict[str, str]:
+    try:
+        raw = json.loads(Path(tokens_path).expanduser().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AuthConfigError(f"cannot read tokens file {tokens_path}: {exc}") from exc
+    clients = raw.get("clients") if isinstance(raw, dict) else None
+    if not isinstance(clients, dict):
+        raise AuthConfigError("tokens file needs a top-level 'clients' object")
+    digests: dict[str, str] = {}
+    for name, entry in clients.items():
+        digest = entry.get("sha256") if isinstance(entry, dict) else None
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise AuthConfigError(f"client {name!r} needs a 64-char 'sha256' digest")
+        digests[name] = digest
+    return digests
+
+
+def build_auth_provider_from_env() -> AuthProvider | None:
+    """Construct the auth provider from ``APO_MCP_AUTH`` and its config env.
+
+    ``APO_MCP_AUTH=google`` (+ ``APO_MCP_AUTH_CONFIG``) is the public desma
+    endpoint; ``APO_MCP_AUTH=token`` (+ ``APO_MCP_TOKENS_FILE``) is static
+    bearer auth for machine clients reaching a tailnet-exposed instance.
 
     Returns ``None`` when auth is not enabled (``APO_MCP_AUTH`` unset) so the
     existing no-auth stdio/loopback path is unaffected — every other client
@@ -213,9 +266,14 @@ def build_auth_provider_from_env() -> RemoteAuthProvider | None:
     kind = (os.environ.get("APO_MCP_AUTH") or "").strip().lower()
     if not kind:
         return None
+    if kind == "token":
+        tokens_path = os.environ.get("APO_MCP_TOKENS_FILE")
+        if not tokens_path:
+            raise AuthConfigError("APO_MCP_AUTH=token requires APO_MCP_TOKENS_FILE")
+        return StaticBearerTokenVerifier(load_token_digests(Path(tokens_path)))
     if kind != "google":
         raise AuthConfigError(
-            f"unsupported APO_MCP_AUTH={kind!r}; only 'google' is implemented"
+            f"unsupported APO_MCP_AUTH={kind!r}; expected 'google' or 'token'"
         )
 
     config_path = os.environ.get("APO_MCP_AUTH_CONFIG")
