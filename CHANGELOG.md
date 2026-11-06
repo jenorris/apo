@@ -4,7 +4,35 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.36.0] — 2026-11-05
+
+Apo now speaks the 2026-07-28 MCP protocol, can confine a token client to a
+set of vaults, and exports its typed link graph.
+
 ### Added
+
+- **MCP 2026-07-28** (FastMCP 4). The HTTP server answers `server/discover` /
+  stateless 2026-07-28 clients, such as laravel/mcp's default, which got HTTP
+  400 before. `initialize` clients (2025-11-25 and older: Claude Code, Cursor,
+  Hermes) negotiate exactly as before.
+- **Static bearer-token auth** (`APO_MCP_AUTH=token`, `APO_MCP_TOKENS_FILE`)
+  for machine clients on a private network. The tokens file holds only
+  SHA-256 digests. Revoke a client by deleting its entry and restarting.
+- **Vault-scoped tokens.** A tokens-file entry may list `vaults` (plus an
+  optional `default_vault`), and the server enforces it:
+  - a call naming any other vault (`vault=`, `vaults=[]`, a `vault_id:`
+    prefix, the `vault` tool's request, or a `note://` resource) fails with
+    `vault_out_of_scope`;
+  - calls that name no vault use the client's default vault;
+  - `apo_admin` and unrecognised tools are refused and hidden;
+  - `memory://vaults` lists only in-scope vaults.
+
+  Unscoped callers are untouched.
+- **`vault(action=grammar)`** compiles a GBNF grammar from one vault's own
+  contracts. `op=write` covers write envelopes and `op=query` covers
+  `filter_notes` clauses. A grammar-constrained local model can then only name
+  folders and `okf_type`s the vault declares. It returns a `grammar_hash` for
+  caching.
 
 - **OKF contract `link_fields`** ([docs/links.md](docs/links.md)). The vault
   contract declares which frontmatter fields are links (`{key, kind}`; a bare
@@ -34,6 +62,10 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ### Changed
 
+- **fastmcp 3.4.6 → 4.1.6** (mcp SDK 1.29 → 2.3). Upgrade: `uv sync` in
+  `engine/` and restart MCP servers. Stdio servers spawned by long-lived hosts
+  (Hermes gateways, MCP proxies) keep the old code until their host restarts.
+  New `vault` actions mean new tool copy, so quit Cursor/Claude fully (Cmd+Q).
 - **Link resolution is set-based and re-runs on every index batch, scan and
   purge.** A link written before its target exists now resolves when the target
   is indexed. Deleting a target turns its inbound path links `dangling`. A bare
