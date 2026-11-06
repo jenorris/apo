@@ -27,6 +27,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 from pydantic import AnyHttpUrl
@@ -217,24 +218,37 @@ class StaticBearerTokenVerifier(TokenVerifier):
     (``{"clients": {"optima-service": {"sha256": "<hex>"}}}``), so the file on
     disk never holds a usable secret. Each client keeps its own plaintext
     token and can be revoked by deleting its entry and restarting the server.
+
+    An entry may also carry a vault scope —
+    ``{"sha256": ..., "vaults": ["atlas", "grid"], "default_vault": "atlas"}``
+    — surfaced as access-token claims (``apo_vaults`` / ``apo_default_vault``)
+    and enforced by :class:`apo_engine.vault_scope.VaultScopeMiddleware`.
+    Entries without ``vaults`` are unscoped, exactly as before.
     """
 
-    def __init__(self, digests: dict[str, str]):
+    def __init__(self, digests: dict[str, str], scopes: dict[str, dict] | None = None):
         super().__init__()
         if not digests:
             raise AuthConfigError("token auth needs at least one client digest")
         self._digests = {name: d.lower() for name, d in digests.items()}
+        self._scopes = scopes or {}
 
     async def verify_token(self, token: str) -> AccessToken | None:
         presented = hashlib.sha256(token.encode("utf-8")).hexdigest()
         for name, digest in self._digests.items():
             if hmac.compare_digest(presented, digest):
-                return AccessToken(token=token, client_id=name, scopes=[])
+                scope = self._scopes.get(name) or {}
+                claims = (
+                    {"apo_vaults": list(scope["vaults"]), "apo_default_vault": scope["default_vault"]}
+                    if scope.get("vaults")
+                    else {}
+                )
+                return AccessToken(token=token, client_id=name, scopes=[], claims=claims)
         logger.warning("Bearer token rejected: no matching client digest")
         return None
 
 
-def load_token_digests(tokens_path: Path) -> dict[str, str]:
+def _read_token_clients(tokens_path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(Path(tokens_path).expanduser().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -242,13 +256,42 @@ def load_token_digests(tokens_path: Path) -> dict[str, str]:
     clients = raw.get("clients") if isinstance(raw, dict) else None
     if not isinstance(clients, dict):
         raise AuthConfigError("tokens file needs a top-level 'clients' object")
+    return clients
+
+
+def load_token_digests(tokens_path: Path) -> dict[str, str]:
     digests: dict[str, str] = {}
-    for name, entry in clients.items():
+    for name, entry in _read_token_clients(tokens_path).items():
         digest = entry.get("sha256") if isinstance(entry, dict) else None
         if not isinstance(digest, str) or len(digest) != 64:
             raise AuthConfigError(f"client {name!r} needs a 64-char 'sha256' digest")
         digests[name] = digest
     return digests
+
+
+def load_token_scopes(tokens_path: Path) -> dict[str, dict]:
+    """Per-client vault scopes: ``{name: {"vaults": [...], "default_vault": str}}``.
+
+    Only clients whose entry has ``vaults`` appear. ``default_vault`` defaults
+    to the first listed vault and must be one of them.
+    """
+    scopes: dict[str, dict] = {}
+    for name, entry in _read_token_clients(tokens_path).items():
+        if not isinstance(entry, dict) or "vaults" not in entry:
+            continue
+        vaults = entry["vaults"]
+        if (
+            not isinstance(vaults, list)
+            or not vaults
+            or not all(isinstance(v, str) and v.strip() for v in vaults)
+        ):
+            raise AuthConfigError(f"client {name!r}: 'vaults' must be a non-empty list of vault ids")
+        vaults = [v.strip() for v in vaults]
+        default = (entry.get("default_vault") or vaults[0]).strip()
+        if default not in vaults:
+            raise AuthConfigError(f"client {name!r}: default_vault {default!r} is not in its vaults")
+        scopes[name] = {"vaults": vaults, "default_vault": default}
+    return scopes
 
 
 def build_auth_provider_from_env() -> AuthProvider | None:
@@ -270,7 +313,9 @@ def build_auth_provider_from_env() -> AuthProvider | None:
         tokens_path = os.environ.get("APO_MCP_TOKENS_FILE")
         if not tokens_path:
             raise AuthConfigError("APO_MCP_AUTH=token requires APO_MCP_TOKENS_FILE")
-        return StaticBearerTokenVerifier(load_token_digests(Path(tokens_path)))
+        return StaticBearerTokenVerifier(
+            load_token_digests(Path(tokens_path)), load_token_scopes(Path(tokens_path))
+        )
     if kind != "google":
         raise AuthConfigError(
             f"unsupported APO_MCP_AUTH={kind!r}; expected 'google' or 'token'"
