@@ -7,6 +7,7 @@ Read + write paths for gateways. Index writes stay watcher-owned (deferred enque
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sqlite3
 import threading
@@ -4757,8 +4758,9 @@ def vault_op(
     kinds: list[str] | None = None,
     include_unresolved: bool = False,
     max_nodes: int | None = 500,
+    op: str = "",
 ) -> dict[str, Any]:
-    """Vault management: list | contracts | describe | merge | project | stats | lint | okf_dry_run | clone | export.
+    """Vault management: list | contracts | describe | merge | project | stats | lint | okf_dry_run | clone | export | grammar.
 
     Read-only except ``stats`` (habit KPI rollups) and ``clone`` (file copy). ``project`` returns
     desk ``body`` + ``guidance``; ``mode="full"`` (default) is the complete body, ``mode="index"``
@@ -4777,6 +4779,18 @@ def vault_op(
     ``vault=`` and ``to=`` must already exist in the discovery registry.
     ``export`` returns the typed link graph as node-link JSON (whole vault, ``folder=``, or
     ``path=``/``depth=`` ego graph; ``kinds=``, ``include_unresolved=``; ``max_nodes`` cap).
+    ``grammar`` (vault=, op=<write|query>) compiles a GBNF grammar for constraining an external
+    local model's output to this vault's own schema — a closed-vocabulary ``folder-value``/
+    ``okf-type-value`` templated from this vault's own contracts (usage-contract ``layout``,
+    okf-contract ``path_rules``), so a grammar-constrained caller can never reference a folder or
+    okf_type this vault doesn't declare. Read-only, never touches the vault; compiles one already-
+    named vault's grammar at a time (no cross-vault vocabulary — mixing vaults would cross-pollinate
+    contracts). ``op="write"`` covers write/append/patch envelopes; ``op="query"`` covers
+    ``filter_notes``-style ``where=`` clauses. Response includes ``grammar_hash`` (blake2b-16 of the
+    grammar text) so a caller can cache the compiled grammar and skip recompiling when it hasn't
+    changed. Does not enumerate tags (no authoritative controlled tag vocabulary exists in Apo) or
+    free-text fields (title/path/field values) — those stay shape-checked only in the grammar, never
+    membership-checked.
     """
     act = (action or "list").strip().lower()
     if act not in (
@@ -4790,10 +4804,11 @@ def vault_op(
         "okf_dry_run",
         "clone",
         "export",
+        "grammar",
     ):
         return _err(
             error="bad_action",
-            message="action must be list|contracts|describe|merge|project|stats|lint|okf_dry_run|clone|export",
+            message="action must be list|contracts|describe|merge|project|stats|lint|okf_dry_run|clone|export|grammar",
         )
 
     if act == "export":
@@ -4899,6 +4914,42 @@ def vault_op(
         if tips:
             out["tip"] = "; ".join(dict.fromkeys(tips))
         return out
+
+    if act == "grammar":
+        if vaults:
+            return _err(
+                error="bad_request",
+                message="grammar accepts vault= (single vault), not vaults=",
+            )
+        op_s = (op or "").strip().lower()
+        if op_s not in ("write", "query"):
+            return _err(error="bad_request", message="grammar requires op=write|query")
+        key = (vault or "").strip()
+        try:
+            b = _binding(key) if key else _binding("")
+        except OpsError as e:
+            return _err(error=e.code, message=e.message)
+        root = b.resolved().root
+        found = vault_contracts.discover_contracts(root)
+        contracts = vault_contracts.present_contracts(found, full=True)
+        row = {"contracts": contracts}
+        compiled = vault_project.compile_vault_grammar(
+            row, op_s, top_level_dirs=_top_level_dirs(root)
+        )
+        grammar_text = compiled["grammar"]
+        grammar_hash = hashlib.blake2b(
+            grammar_text.encode("utf-8", "replace"), digest_size=8
+        ).hexdigest()
+        return {
+            "ok": True,
+            "action": "grammar",
+            "op": op_s,
+            "vault": b.name,
+            "grammar": grammar_text,
+            "grammar_hash": grammar_hash,
+            "folders": compiled["folders"],
+            "okf_types": compiled["okf_types"],
+        }
 
     if act == "clone":
         if vaults:

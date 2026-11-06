@@ -359,6 +359,190 @@ def format_okf_path_rules_lines(
     return header + rows + [""]
 
 
+def _gbnf_literal(value: str) -> str:
+    """Escape a value for embedding inside a GBNF double-quoted literal."""
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _gbnf_closed_string_rule(rule_name: str, values: list[str], *, fallback: str) -> str:
+    """``name ::= "\\"" ( "v1" | "v2" | ... ) "\\""`` — a closed-vocab JSON string rule."""
+    vals = [v for v in values if str(v).strip()] or [fallback]
+    alts = " | ".join('"' + _gbnf_literal(v) + '"' for v in vals)
+    return rule_name + r' ::= "\"" ( ' + alts + r' ) "\""'
+
+
+def _grammar_vocab(
+    okf: dict[str, Any], usage: dict[str, Any], *, top_level_dirs: list[str]
+) -> tuple[list[str], list[str]]:
+    """Shared closed-vocab extraction for both grammar ops: (folders, okf_types).
+
+    Folders come from usage-contract ``layout`` (the vault's own declared PARA
+    buckets); okf_types come from okf-contract ``path_rules``. Falls back to
+    this vault's actual top-level directories / declared default_okf_type when
+    a contract is absent or empty, so ``grammar`` never emits an empty (and
+    therefore invalid) GBNF alternation.
+    """
+    path_rules = okf.get("path_rules") if isinstance(okf.get("path_rules"), list) else []
+    okf_types = sorted(
+        {
+            str(r.get("okf_type")).strip()
+            for r in path_rules
+            if isinstance(r, dict) and str(r.get("okf_type") or "").strip()
+        }
+    )
+    if not okf_types:
+        okf_types = [str(okf.get("default_okf_type") or "Note").strip() or "Note"]
+
+    layout = usage.get("layout") if isinstance(usage.get("layout"), dict) else {}
+    folders = sorted(f for f in layout.keys() if str(f).strip())
+    if not folders:
+        folders = list(top_level_dirs) or ["."]
+
+    return folders, okf_types
+
+
+def compile_write_grammar(
+    okf: dict[str, Any], usage: dict[str, Any], *, top_level_dirs: list[str]
+) -> dict[str, Any]:
+    """Compile the structural-envelope GBNF grammar for a write/append/patch/replace.
+
+    Closed vocab (``folder``, ``okf-type``) is templated from this vault's own
+    contracts, so the grammar can only ever reference a folder or type this
+    vault actually declares. ``title``/``path``/``content``/``text``/field
+    values stay shape-checked free strings, never enumerated — a fresh note's
+    title, its content, an existing note's exact path, and what to append to
+    it can't be known ahead of time the way a folder or type can. Only
+    ``write`` carries ``target``/``okf-type`` (it's creating a note under a
+    known vault taxonomy); ``append``/``patch``/``replace`` address an
+    *existing* note by ``path`` alone, matching the real write/append/patch
+    RPC endpoints — a folder slot there would be redundant with, and could
+    disagree with, ``path``. Deliberately has no ``tags`` or ``vault`` slot:
+    Apo has no authoritative controlled tag vocabulary to enumerate, and a
+    grammar is compiled for one already-chosen vault at a time — mixing
+    another vault's folders/types in would cross-pollinate contracts, which
+    is against vault policy.
+
+    ``replace`` is distinct from ``patch``: ``patch``'s ``field-set`` only
+    ever edits the small closed set of frontmatter keys in ``field-key``
+    (never free-text body content); ``replace`` swaps an existing note's
+    *body* wholesale. Both address an existing note by ``path`` alone. A
+    caller applying ``replace`` MUST read the note first to preserve its
+    existing frontmatter before writing — this grammar has no read step and
+    cannot enforce that; it only guarantees the ``path``/``content`` shape.
+    (See ``~/.hermes/profiles/*/plugins/apo/__init__.py::_tool_write_guided``
+    for the read-then-write caller that upholds this.)
+    """
+    folders, okf_types = _grammar_vocab(okf, usage, top_level_dirs=top_level_dirs)
+    folder_rule = _gbnf_closed_string_rule("folder-value", folders, fallback=".")
+    okf_type_rule = _gbnf_closed_string_rule("okf-type-value", okf_types, fallback="Note")
+
+    grammar = "\n".join(
+        [
+            "root ::= ws command",
+            "",
+            'command ::= "(" ws (write-command | append-command | patch-command | replace-command) ws ")"',
+            "",
+            'write-command   ::= "write" ws target ws okf-type ws title ws content',
+            'append-command  ::= "append" ws path ws text-field',
+            'patch-command   ::= "patch" ws path ws field-set',
+            'replace-command ::= "replace" ws path ws content',
+            "",
+            'target ::= "(" ws "folder" ws folder-value ws ")"',
+            "",
+            'okf-type   ::= "(" ws "okf-type" ws okf-type-value ws ")"',
+            'title      ::= "(" ws "title" ws free-string ws ")"',
+            'path       ::= "(" ws "path" ws free-string ws ")"',
+            'content    ::= "(" ws "content" ws free-string ws ")"',
+            'text-field ::= "(" ws "text" ws free-string ws ")"',
+            "",
+            'field-set ::= "(" ws "fields" ws field (ws field)* ws ")"',
+            'field     ::= "(" ws field-key ws free-string ws ")"',
+            "",
+            folder_rule,
+            okf_type_rule,
+            'field-key ::= "status" | "due" | "priority" | "description"',
+            "",
+            r'free-string ::= "\"" char* "\""',
+            r'char        ::= [^"\\] | "\\" ["\\/bfnrt]',
+            "",
+            r"ws ::= [ \t\n]*",
+        ]
+    )
+    return {"grammar": grammar, "folders": folders, "okf_types": okf_types}
+
+
+def compile_query_grammar(
+    okf: dict[str, Any], usage: dict[str, Any], *, top_level_dirs: list[str]
+) -> dict[str, Any]:
+    """Compile the search GBNF grammar for this vault's ``apo_filter_notes``
+    shape: ``folder=`` scope (a top-level parameter) plus an optional
+    ``where=`` frontmatter predicate — NOT a single flat predicate. Folder is
+    a directory scope, not a frontmatter field, and the real filter API keeps
+    them separate; earlier drafts of this grammar conflated the two into one
+    ``where=``-style eq-field, which would have produced calls
+    ``apo_filter_notes`` doesn't actually accept that shape for.
+
+    Lower stakes than the write grammar (a bad query returns wrong/empty
+    results, never mutates the vault), so kept intentionally shallow: at
+    least one of folder/where must be present (an empty search is a
+    degenerate "list everything" case, allowed by the real API but not
+    useful as this tool's only output), and ``where`` stays flat —
+    field/operator/value triples, no nesting. ``okf_type`` is the only closed
+    ``where`` field for now: it's the one frontmatter key with an
+    authoritative enum (okf-contract ``path_rules``); other floor fields like
+    ``status`` have no declared value set to enumerate, so they're left out
+    rather than fabricating one — same discipline as the write grammar's
+    ``tags``/``vault`` omissions.
+    """
+    folders, okf_types = _grammar_vocab(okf, usage, top_level_dirs=top_level_dirs)
+    folder_rule = _gbnf_closed_string_rule("folder-value", folders, fallback=".")
+    okf_type_rule = _gbnf_closed_string_rule("okf-type-value", okf_types, fallback="Note")
+
+    grammar = "\n".join(
+        [
+            "root ::= ws command",
+            "",
+            'command     ::= "(" ws "search" ws search-body ws ")"',
+            "search-body ::= (folder-part ws where-part) | folder-part | where-part",
+            "",
+            'folder-part ::= "(" ws "folder" ws folder-value ws ")"',
+            'where-part  ::= "(" ws "where" ws clause (ws clause)* ws ")"',
+            'clause      ::= "(" ws (eq-clause | cmp-clause) ws ")"',
+            "",
+            'eq-clause  ::= ("eq" | "ne") ws eq-field ws eq-value',
+            'cmp-clause ::= ("lt" | "lte" | "gt" | "gte") ws date-field ws date-value',
+            "",
+            'eq-field   ::= "okf_type"',
+            'date-field ::= "created" | "modified"',
+            "",
+            "eq-value ::= okf-type-value",
+            "",
+            folder_rule,
+            okf_type_rule,
+            "",
+            r'date-value ::= "\"" digit digit digit digit "-" digit digit "-" digit digit "\""',
+            "digit      ::= [0-9]",
+            "",
+            r"ws ::= [ \t\n]*",
+        ]
+    )
+    return {"grammar": grammar, "folders": folders, "okf_types": okf_types}
+
+
+def compile_vault_grammar(
+    row: dict[str, Any], op: str, *, top_level_dirs: list[str]
+) -> dict[str, Any]:
+    """Dispatch to ``compile_write_grammar``/``compile_query_grammar`` from a
+    ``vault_op``-shaped ``row`` (the same ``{"contracts": {...}}`` shape
+    ``_contract_data`` reads elsewhere in this module).
+    """
+    okf = _contract_data(row, "okf-contract") or {}
+    usage = _contract_data(row, "usage-contract") or {}
+    if op == "query":
+        return compile_query_grammar(okf, usage, top_level_dirs=top_level_dirs)
+    return compile_write_grammar(okf, usage, top_level_dirs=top_level_dirs)
+
+
 def format_read_routing_lines(
     name: str, read: dict[str, Any], *, token_budget: int | None
 ) -> list[str]:

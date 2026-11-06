@@ -166,6 +166,7 @@ class PatchNoteSchemaTest(unittest.TestCase):
                 "clone",
                 "okf_dry_run",
                 "export",
+                "grammar",
             },
         )
 

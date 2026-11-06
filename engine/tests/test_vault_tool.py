@@ -1169,5 +1169,139 @@ class PreferContractsDirTest(unittest.TestCase):
         )
 
 
+class VaultGrammarOpTest(unittest.TestCase):
+    """``vault_op("grammar", ...)`` — GBNF compiled from a vault's own contracts.
+
+    Separate fixture from ``VaultOpTest`` (its own tmpdir/registry) rather than
+    reusing ``alpha``/``beta`` — those two are asserted elsewhere on their exact
+    ``contract_ids``, and adding an okf-contract to either would break those.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="apo-vault-grammar-"))
+        self.root = self.tmp / "gamma"
+        (self.root / "areas").mkdir(parents=True)
+        (self.root / "projects").mkdir(parents=True)
+        cdir = self.root / "system" / "contracts"
+        cdir.mkdir(parents=True)
+        (cdir / "usage-contract.schema.yaml").write_text(
+            "usage_contract_version: '0.1'\n"
+            "vault_id: gamma\n"
+            "purpose: test\n"
+            "layout:\n"
+            "  areas: standing responsibilities\n"
+            "  projects: time-bounded initiatives\n",
+            encoding="utf-8",
+        )
+        (cdir / "okf-contract.schema.yaml").write_text(
+            "okf_version: '0.1'\n"
+            "default_okf_type: Note\n"
+            "path_rules:\n"
+            "  - match: 'areas/threads/**/*.md'\n"
+            "    enforcement: soft\n"
+            "    okf_type: Thread\n"
+            "  - match: 'projects/*.md'\n"
+            "    enforcement: soft\n"
+            "    okf_type: Project\n"
+            "    required_fields: [status]\n",
+            encoding="utf-8",
+        )
+        registry = {
+            "default": "gamma",
+            "vaults": {
+                "gamma": {
+                    "root": str(self.root),
+                    "index": str(self.tmp / "gamma.db"),
+                    "collection": "gamma",
+                },
+            },
+        }
+        self.reg_path = self.tmp / "vaults.json"
+        self.reg_path.write_text(json.dumps(registry), encoding="utf-8")
+        self._env = unittest.mock.patch.dict(
+            os.environ,
+            {
+                "APO_VAULTS": str(self.reg_path),
+                "APO_NOTES_ROOT": str(self.root),
+                "APO_INDEX": str(self.tmp / "legacy.db"),
+                "APO_COLLECTION": "legacy",
+            },
+            clear=False,
+        )
+        self._env.start()
+
+    def tearDown(self):
+        self._env.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_requires_op(self):
+        out = ops.vault_op("grammar", vault="gamma")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_request")
+
+    def test_rejects_bad_op(self):
+        out = ops.vault_op("grammar", vault="gamma", op="delete")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_request")
+
+    def test_write_grammar_reflects_contract_vocab(self):
+        out = ops.vault_op("grammar", vault="gamma", op="write")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["op"], "write")
+        self.assertEqual(out["vault"], "gamma")
+        self.assertEqual(set(out["folders"]), {"areas", "projects"})
+        self.assertEqual(set(out["okf_types"]), {"Thread", "Project"})
+        grammar = out["grammar"]
+        self.assertIn('"areas"', grammar)
+        self.assertIn('"projects"', grammar)
+        self.assertIn('"Thread"', grammar)
+        self.assertIn('"Project"', grammar)
+        # Structural envelope only — no closed tag/vault slot (see ops.py docstring).
+        self.assertNotIn("tag-value", grammar)
+        self.assertIn("free-string", grammar)
+        self.assertEqual(len(out["grammar_hash"]), 16)
+        # write carries actual body content; append/patch address an existing
+        # note by path alone (no redundant folder target) — see docstring.
+        self.assertIn('"content"', grammar)
+        self.assertIn('"text"', grammar)
+        self.assertEqual(
+            grammar.count('target ::= "(" ws "folder"'), 1,
+            "folder target should only appear once, for write-command",
+        )
+        # replace: whole-body swap on an existing note, distinct from patch's
+        # frontmatter-only field-set (see docstring on why replace needs a
+        # read-then-write caller rather than being a grammar-level guarantee).
+        self.assertIn("replace-command", grammar)
+        self.assertIn('replace-command ::= "replace" ws path ws content', grammar)
+
+    def test_query_grammar_shares_vocab_with_write(self):
+        write_out = ops.vault_op("grammar", vault="gamma", op="write")
+        query_out = ops.vault_op("grammar", vault="gamma", op="query")
+        self.assertTrue(query_out["ok"])
+        self.assertEqual(sorted(query_out["folders"]), sorted(write_out["folders"]))
+        self.assertEqual(sorted(query_out["okf_types"]), sorted(write_out["okf_types"]))
+        self.assertIn('"where"', query_out["grammar"])
+        self.assertNotEqual(query_out["grammar_hash"], write_out["grammar_hash"])
+        # folder is a scope parameter (apo_filter_notes' folder=), not a
+        # where= predicate field — must not be reachable via eq-field.
+        self.assertIn('folder-part ::= "(" ws "folder"', query_out["grammar"])
+        self.assertIn('eq-field   ::= "okf_type"', query_out["grammar"])
+
+    def test_grammar_hash_stable_across_calls(self):
+        first = ops.vault_op("grammar", vault="gamma", op="write")
+        second = ops.vault_op("grammar", vault="gamma", op="write")
+        self.assertEqual(first["grammar_hash"], second["grammar_hash"])
+
+    def test_unknown_vault(self):
+        out = ops.vault_op("grammar", vault="does-not-exist", op="write")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_vault")
+
+    def test_vaults_plural_rejected(self):
+        out = ops.vault_op("grammar", vaults=["gamma"], op="write")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "bad_request")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -102,6 +102,12 @@ class VaultExportRequest(_ActionBase):
     max_nodes: int | None = 500
 
 
+class VaultGrammarRequest(_ActionBase):
+    action: Literal["grammar"]
+    vault: str = ""
+    op: Annotated[str, Field(description="write | query.")] = ""
+
+
 VaultAction = Annotated[
     Union[
         VaultListRequest,
@@ -114,11 +120,12 @@ VaultAction = Annotated[
         VaultCloneRequest,
         VaultOkfDryRunRequest,
         VaultExportRequest,
+        VaultGrammarRequest,
     ],
     Field(discriminator="action"),
 ]
 
 VAULT_ACTION_FIELD_DESC = (
-    "list | contracts | describe | merge | project | stats | lint | clone | okf_dry_run | export — "
+    "list | contracts | describe | merge | project | stats | lint | clone | okf_dry_run | export | grammar — "
     "each variant lists only its own params."
 )
