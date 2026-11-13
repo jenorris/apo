@@ -85,7 +85,7 @@ def load_git_contract(vault_root: Path, explicit: str | None = None) -> dict[str
     return vc.load_yaml_cached(path)
 
 
-def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+def _check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
     """Shape findings for a parsed git contract (advisory, never blocks)."""
     findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
     f = vc.enum_finding(data.get("host"), HOSTS, "host")
@@ -121,6 +121,20 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
                 )
             )
     return findings
+
+
+def parse_contract(data: dict[str, Any]) -> vc.ContractParse:
+    """Normalize containers consumed by history and sync."""
+    normalized = dict(data)
+    normalized["sync"] = data.get("sync") if isinstance(data.get("sync"), dict) else {}
+    normalized["never_commit"] = (
+        data.get("never_commit") if isinstance(data.get("never_commit"), list) else []
+    )
+    return vc.ContractParse(normalized, tuple(_check_contract(data)))
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    return list(parse_contract(data).findings)
 
 
 def is_git_work_tree(vault_root: Path) -> bool:

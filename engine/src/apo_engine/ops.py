@@ -122,6 +122,8 @@ def _vault_lint_merged_payload(
             if hit is not None and now - hit[0] < _LINT_SWEEP_CACHE_TTL:
                 return hit[1]
     data = archival_contract.load_archival_contract(root)
+    if data is not None:
+        data = archival_contract.parse_contract(data).normalized
     arch = archival_contract.lint_vault(
         root,
         data,

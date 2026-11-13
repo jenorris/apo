@@ -100,7 +100,8 @@ def table_rule_for(vault_root: Path, rel: str) -> dict[str, Any]:
     Empty dict when no contract or no pattern matches. First match wins.
     """
     path = (rel or "").replace("\\", "/").lstrip("./")
-    for rule in normalize_rules(load_table_contract(vault_root)):
+    data = load_table_contract(vault_root)
+    for rule in parse_contract(data or {}).normalized["tables"]:
         match = rule["match"]
         if fnmatch.fnmatchcase(path, match) or fnmatch.fnmatch(path, match):
             return rule
@@ -139,7 +140,7 @@ def header_synonyms_of(rule: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+def _check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
     """Shape findings for a parsed table contract (advisory, never blocks)."""
     findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
     rules = data.get("tables")
@@ -187,3 +188,15 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
                 )
             )
     return findings
+
+
+def parse_contract(data: dict[str, Any]) -> vc.ContractParse:
+    """Normalize both table-rule shapes once and return checker findings."""
+    return vc.ContractParse(
+        {"tables": normalize_rules(data)},
+        tuple(_check_contract(data)),
+    )
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    return list(parse_contract(data).findings)

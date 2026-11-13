@@ -266,7 +266,10 @@ def load_contract(path: Path) -> OkfContract:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         raise ValueError(f"OKF contract must be a mapping: {path}")
+    return parse_contract(data, path=path).normalized
 
+
+def _contract_from_data(path: Path, data: dict[str, Any]) -> OkfContract:
     rules: list[PathRule] = []
     for raw in data.get("path_rules") or []:
         if not isinstance(raw, dict) or not raw.get("match"):
@@ -491,6 +494,17 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
         findings.extend(vc.str_list_findings(rule.get("required_fields"), f"{where}.required_fields"))
         findings.extend(_link_fields_findings(rule.get("link_fields"), f"{where}.link_fields"))
     return findings
+
+
+def parse_contract(data: dict[str, Any], *, path: Path | None = None):
+    """Normalize OKF runtime state and checker findings from one parsed mapping."""
+    from apo_engine import vault_contracts as vc
+
+    contract_path = path or Path("<contract>")
+    return vc.ContractParse(
+        _contract_from_data(contract_path, data),
+        tuple(check_contract(data)),
+    )
 
 
 def get_contract(vault_root: Path) -> OkfContract | None:

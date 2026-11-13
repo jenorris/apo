@@ -23,6 +23,7 @@ engine-side loaders that live beside each contract's reader (``search_contract``
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -42,6 +43,14 @@ _LEGACY_FILES: dict[str, str] = {
 _yaml_cache_lock = threading.Lock()
 _yaml_cache: dict[tuple[str, int, int], dict[str, Any]] = {}
 _YAML_CACHE_MAX = 64
+
+
+@dataclass(frozen=True)
+class ContractParse:
+    """One family-owned normalization and advisory-check result."""
+
+    normalized: Any
+    findings: tuple[dict[str, str], ...] = ()
 
 
 def load_yaml_cached(path: Path) -> dict[str, Any] | None:

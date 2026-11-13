@@ -3,7 +3,7 @@
 
 set dotenv-load := true
 
-# PATH binaries from `uv tool install --editable "engine[mcp]"` — override via env
+# PATH binaries linked from the locked development environment — override via env
 # if your install lives elsewhere. These recipes deliberately keep shelling out to
 # apo-engine/apo-local/apo-mcp by their original names (not the unified `apo`/`apo
 # engine ...` entry point added alongside them) so `just` keeps working immediately
@@ -23,18 +23,17 @@ default:
     @just --list
 
 
-# One-time setup: engine venv (editable + MCP + test deps) for dev/test, plus a
-# PATH-installed copy (apo-engine, apo-mcp) for MCP hosts and the watcher.
+# Sync the authoritative lockfile and link its console scripts onto PATH.
 setup:
-    cd engine && python3 -m venv .venv && .venv/bin/pip install -U pip && .venv/bin/pip install -e '.[mcp,dev]'
     command -v uv >/dev/null 2>&1 || { echo "uv not found on PATH — install it first (e.g. brew install uv)"; exit 1; }
-    uv tool install --editable "engine[mcp]"
-    @echo "ready — run 'just ollama' then 'just index' then 'just mcp'"
+    cd engine && uv sync --locked --extra mcp --extra dev
+    mkdir -p "${HOME}/.local/bin"
+    for bin in apo apo-engine apo-local apo-mcp; do ln -sfn "{{ justfile_directory() }}/engine/.venv/bin/$bin" "${HOME}/.local/bin/$bin"; done
+    @echo "ready — ensure ~/.local/bin is on PATH, then run 'just ollama', 'just index', and 'just mcp'"
 
-# Re-sync the PATH-installed apo-engine/apo-mcp after engine dependency changes
-# (source edits are picked up live via --editable; this is only for new deps).
+# Re-sync the locked environment and refresh PATH links.
 tool-reinstall:
-    uv tool install --editable "engine[mcp]" --reinstall
+    just setup
 
 # Engine test suite (hermetic — never touches ~/.apo or your vault).
 # PYTHONPATH=src so git worktrees hit this tree's sources (venv may be

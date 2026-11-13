@@ -19,10 +19,10 @@ from apo_engine import __version__ as apo_version
 from apo_engine import apo_admin as apo_admin_ops
 from apo_engine import config as apo_config
 from apo_engine import deferred as index_deferred
+from apo_engine import core as apo_core
 from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
 from apo_engine.mcp_auth import build_auth_provider_from_env
-from apo_engine.mcp_backend import ApoStore
 from apo_engine.mcp_instructions import MCP_INSTRUCTIONS as _MCP_INSTRUCTIONS
 from apo_engine.mcp_action_schemas import (
     VAULT_ACTION_FIELD_DESC,
@@ -307,7 +307,6 @@ def _delete_note_sync(path: str, vault: str = "") -> dict:
 
 def _memory_status_sync() -> dict:
     vaults: dict[str, Any] = {}
-    store = ApoStore()
     for name, v in VAULTS.items():
         info: dict[str, Any] = {
             "root": str(v.root),
@@ -320,7 +319,7 @@ def _memory_status_sync() -> dict:
         }
         try:
             with _bound(v):
-                info["indexed_chunks"] = store.count()
+                info["indexed_chunks"] = apo_core.count_chunks()
             info["index"] = "ok"
         except Exception as e:
             info["index"] = f"error: {e}"

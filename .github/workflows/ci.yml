@@ -17,6 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: engine/uv.lock
+
       # setup-python macOS builds omit SQLite loadable extensions (needed for sqlite-vec).
       # Homebrew Python links Homebrew SQLite, which enables enable_load_extension.
       - name: Set up Python (Ubuntu)
@@ -39,14 +45,11 @@ jobs:
           print("sqlite", sqlite3.sqlite_version, "ok")
           PY
 
-      - name: Install engine (editable + MCP + dev)
+      - name: Sync locked engine environment
         working-directory: engine
         run: |
           PYTHON="${PYTHON_BIN:-python}"
-          # Homebrew Python is PEP 668 externally-managed — always use a venv.
-          "$PYTHON" -m venv .venv
-          .venv/bin/python -m pip install -U pip
-          .venv/bin/python -m pip install -e '.[mcp,dev]'
+          uv sync --locked --python "$PYTHON" --extra mcp --extra dev
 
       - name: Run tests
         working-directory: engine

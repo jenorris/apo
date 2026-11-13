@@ -195,7 +195,11 @@ Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habit
 
 ### CLI entry points
 
-`just setup` installs four console scripts onto `PATH`. **`apo` is the one to reach for by hand going forward** — it dispatches by leading token, so the other three never need separate memorizing:
+`just setup` runs `uv sync --locked --extra mcp --extra dev` and links four
+console scripts from `engine/.venv/bin` into `~/.local/bin`. Ensure
+`~/.local/bin` is on `PATH`. **`apo` is the one to reach for by hand going
+forward** — it dispatches by leading token, so the other three never need
+separate memorizing:
 
 | Command | Routes to | Covers |
 |---------|-----------|--------|

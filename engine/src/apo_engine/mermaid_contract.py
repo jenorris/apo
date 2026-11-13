@@ -65,7 +65,7 @@ def _rule_list_findings(
     return out
 
 
-def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+def _check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
     """Shape findings for a parsed mermaid contract (advisory, never blocks)."""
     findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
     findings.extend(_rule_list_findings(data.get("catalogs"), "catalogs", KNOWN_CATALOG_RULE_KEYS))
@@ -103,8 +103,22 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
     return findings
 
 
+def parse_contract(data: dict[str, Any]) -> vc.ContractParse:
+    normalized = dict(data)
+    for key in ("catalogs", "diagrams"):
+        normalized[key] = [
+            rule for rule in (data.get(key) or []) if isinstance(rule, dict)
+        ]
+    return vc.ContractParse(normalized, tuple(_check_contract(data)))
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    return list(parse_contract(data).findings)
+
+
 def diagram_rule_for(vault_root: Path, rel: str) -> dict[str, Any]:
-    data = load_mermaid_contract(vault_root)
+    raw = load_mermaid_contract(vault_root)
+    data = parse_contract(raw or {}).normalized if raw else None
     if not data:
         return {}
     rules = data.get("diagrams")
@@ -121,7 +135,8 @@ def diagram_rule_for(vault_root: Path, rel: str) -> dict[str, Any]:
 
 
 def catalog_rule_for(vault_root: Path, rel: str) -> dict[str, Any]:
-    data = load_mermaid_contract(vault_root)
+    raw = load_mermaid_contract(vault_root)
+    data = parse_contract(raw or {}).normalized if raw else None
     if not data:
         return {}
     rules = data.get("catalogs")

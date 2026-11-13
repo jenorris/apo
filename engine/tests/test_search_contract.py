@@ -90,6 +90,23 @@ class SearchContractTests(unittest.TestCase):
         sources = [r["source"] for r in out["results"]]
         self.assertNotIn("noise/log.md", sources)
 
+    def test_checker_recognizes_boost_vocab_consumed_by_loader(self):
+        data = {
+            "search_contract_version": "0.1",
+            "boost_vocab": ["architecture", "service"],
+        }
+        self.assertEqual(search_contract.load_boost_vocab(self.vault), [])
+        findings = search_contract.check_contract(data)
+        self.assertFalse(
+            any(
+                row["code"] == "contract.unknown_key"
+                and row["field"] == "boost_vocab"
+                for row in findings
+            )
+        )
+        parsed = search_contract.parse_contract(data)
+        self.assertEqual(parsed.normalized["boost_vocab"], ["architecture", "service"])
+
     def test_empty_vault_contract_disables_env_fallback(self):
         _write_search_contract(self.vault, [])
         search_contract.clear_default_exclude_cache()

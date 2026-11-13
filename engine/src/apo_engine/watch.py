@@ -7,10 +7,12 @@ import queue
 import sqlite3
 import threading
 import time
+from collections.abc import Callable, Iterable
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
-from . import config, core, deferred, git_sync, watch_health
+from . import config, core, deferred, git_sync, watch_health, watch_hooks
 from .note_format import is_note_path
 
 # Every watcher log line — and, via the "apo" logger hierarchy, `core.py`'s
@@ -211,7 +213,16 @@ def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
         return 0
 
 
-def run_watch(interval: float | None = None, *, use_events: bool | None = None, verbose: bool = True) -> None:
+HookFactory = Callable[[Any, bool], Iterable[tuple[str, Callable[..., Any]]]]
+
+
+def run_watch(
+    interval: float | None = None,
+    *,
+    use_events: bool | None = None,
+    verbose: bool = True,
+    hook_factories: Iterable[HookFactory] = (),
+) -> None:
     """Watch one or more vaults; consume deferred/purge queues; index incrementally.
 
     Multi-vault discovery (``APO_COLLECTION_ROOT`` / ``APO_VAULT_PATHS`` /
@@ -223,6 +234,7 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
     from . import vaults
 
     _configure_logging(verbose)
+    hook_factories = tuple(hook_factories)
 
     _default, bindings = vaults.load_bindings()
     # Single-vault legacy (no discovery env): one thread, no supervisor.
@@ -232,7 +244,13 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
     if len(bindings) == 1 and not registry_mode:
         b = next(iter(bindings.values()))
         with vaults.bind(b):
-            _watch_one(b, interval=interval, use_events=use_events, verbose=verbose)
+            _watch_one(
+                b,
+                interval=interval,
+                use_events=use_events,
+                verbose=verbose,
+                hook_factories=hook_factories,
+            )
         return
 
     if verbose:
@@ -268,6 +286,7 @@ def run_watch(interval: float | None = None, *, use_events: bool | None = None, 
                         use_events=use_events,
                         verbose=verbose,
                         stop=stop_ev,
+                        hook_factories=hook_factories,
                     )
                 except (Exception, SystemExit) as e:
                     # SystemExit escapes `except Exception` and is dropped silently by
@@ -369,6 +388,7 @@ def _watch_one(
     use_events: bool | None = None,
     verbose: bool = True,
     stop: threading.Event | None = None,
+    hook_factories: Iterable[HookFactory] = (),
 ) -> None:
     """Watch a single bound vault (caller must ``vaults.bind`` first)."""
     poll = interval if interval is not None else config.WATCH_POLL_INTERVAL
@@ -392,10 +412,23 @@ def _watch_one(
     debouncer = PathDebouncer(debounce_s)
     event_queue: queue.Queue[str] = queue.Queue()
     sync_ctl = git_sync.VaultSyncController(root, verbose=verbose)
-    from . import optima_merge as _optima_merge
-
-    merge_ctl = _optima_merge.VaultMergeController(root, verbose=verbose)
     hook_health = watch_health.HookHealthTracker(root)
+    hooks = watch_hooks.WatchHooks(hook_health, verbose=verbose)
+
+    def desk_reproject(*, index_busy: bool) -> None:
+        del index_busy
+        from . import vault_project
+
+        vault_project.maybe_reproject(reason="desk-poll", verbose=verbose)
+
+    hooks.register(watch_health.DESK_REPROJECT, desk_reproject)
+    hooks.register(
+        watch_health.GIT_SYNC,
+        lambda *, index_busy: sync_ctl.tick(index_busy=index_busy),
+    )
+    for factory in hook_factories:
+        for name, hook in factory(binding, verbose):
+            hooks.register(name, hook)
 
     ignore_res = core._compile_ignore(core._load_ignore())
 
@@ -549,75 +582,12 @@ def _watch_one(
                                 "[%s] links backfill error: %s", label, link_err
                             )
 
-                # Desk overlay lives outside vault roots — poll mtime each cycle.
-                # Also doubles as the desk-reprojection hook's heartbeat: it runs
-                # unconditionally every cycle, unlike the contracts-triggered call
-                # above, so its tick timing is what `watch-hooks.json` tracks.
-                _t0 = time.monotonic()
-                try:
-                    from . import vault_project
-
-                    vault_project.maybe_reproject(reason="desk-poll", verbose=verbose)
-                except Exception as proj_err:
-                    hook_health.record(
-                        watch_health.DESK_REPROJECT,
-                        seconds=time.monotonic() - _t0,
-                        ok=False,
-                        error=str(proj_err),
-                    )
-                    if verbose:
-                        logger.warning(
-                            "[%s] desk-poll project error: %s", label, proj_err
-                        )
-                else:
-                    hook_health.record(
-                        watch_health.DESK_REPROJECT,
-                        seconds=time.monotonic() - _t0,
-                        ok=True,
-                    )
-
                 if verbose:
                     summary = _format_indexed_summary(stats, ready, root)
                     if summary is not None:
                         logger.info("[%s] indexed: %s", label, summary)
 
-                _t0 = time.monotonic()
-                try:
-                    sync_ctl.tick(index_busy=debouncer.waiting() > 0)
-                except Exception as sync_err:
-                    hook_health.record(
-                        watch_health.GIT_SYNC,
-                        seconds=time.monotonic() - _t0,
-                        ok=False,
-                        error=str(sync_err),
-                    )
-                    if verbose:
-                        logger.warning("[%s] git-sync tick error: %s", label, sync_err)
-                else:
-                    hook_health.record(
-                        watch_health.GIT_SYNC, seconds=time.monotonic() - _t0, ok=True
-                    )
-
-                _t0 = time.monotonic()
-                try:
-                    merge_ctl.tick(index_busy=debouncer.waiting() > 0)
-                except Exception as merge_err:
-                    hook_health.record(
-                        watch_health.OPTIMA_MERGE,
-                        seconds=time.monotonic() - _t0,
-                        ok=False,
-                        error=str(merge_err),
-                    )
-                    if verbose:
-                        logger.warning(
-                            "[%s] optima-merge tick error: %s", label, merge_err
-                        )
-                else:
-                    hook_health.record(
-                        watch_health.OPTIMA_MERGE,
-                        seconds=time.monotonic() - _t0,
-                        ok=True,
-                    )
+                hooks.trigger_all(index_busy=debouncer.waiting() > 0)
 
                 if due_poll:
                     last_scan = now
@@ -657,6 +627,9 @@ def _watch_one(
     finally:
         if owns_stop:
             stop.set()
+        stalled_hooks = hooks.shutdown(timeout=5.0)
+        if stalled_hooks and verbose:
+            logger.warning("[%s] hooks did not stop: %s", label, ", ".join(stalled_hooks))
         core.writer_close()
         if observer is not None:
             observer.stop()

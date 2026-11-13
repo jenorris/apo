@@ -168,7 +168,8 @@ def _is_transient_network_error(err: str | None) -> bool:
 
 def sync_settings(vault_root: Path) -> SyncSettings:
     """Parse sync knobs from the live git contract (missing → disabled)."""
-    data = git_contract.load_git_contract(vault_root) or {}
+    raw = git_contract.load_git_contract(vault_root) or {}
+    data = git_contract.parse_contract(raw).normalized
     sync = data.get("sync") if isinstance(data.get("sync"), dict) else {}
     never = data.get("never_commit") if isinstance(data.get("never_commit"), list) else []
     branch = str(data.get("default_branch") or "main").strip() or "main"
