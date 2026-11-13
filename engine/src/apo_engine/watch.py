@@ -28,6 +28,9 @@ _LOG_BACKUP_COUNT = 3
 
 logger = logging.getLogger("apo.watch")
 
+# Longest an idle watch cycle goes without waking the hook workers.
+HOOK_HEARTBEAT_S = 5.0
+
 
 def log_file_path() -> Path:
     """Resolve the watcher's rotated log file.
@@ -539,6 +542,7 @@ def _watch_one(
             )
 
     last_scan = 0.0
+    last_hook_trigger = float("-inf")
     lock_backoff = 0.0
     reconcile = (
         poll
@@ -626,7 +630,21 @@ def _watch_one(
                     if summary is not None:
                         logger.info("[%s] indexed: %s", label, summary)
 
-                hooks.trigger_all(index_busy=debouncer.waiting() > 0)
+                # Hooks gate themselves, but every trigger wakes one worker thread per
+                # hook. Idle cycles only need the heartbeat: git-sync's commit debounce
+                # is 45 s (min 1 s) and the desk poll gap is 15 s, so a due hook runs
+                # at most HOOK_HEARTBEAT_S late.
+                did_work = bool(
+                    woke
+                    or due_poll
+                    or ready
+                    or contracts_changed
+                    or stats.indexed
+                    or stats.purged
+                )
+                if did_work or (now - last_hook_trigger) >= HOOK_HEARTBEAT_S:
+                    hooks.trigger_all(index_busy=debouncer.waiting() > 0)
+                    last_hook_trigger = now
 
                 if due_poll:
                     last_scan = now

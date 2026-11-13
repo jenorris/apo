@@ -6,6 +6,7 @@ Read + write paths for gateways. Index writes stay watcher-owned (deferred enque
 
 from __future__ import annotations
 
+import contextvars
 import json
 import hashlib
 import os
@@ -13,6 +14,8 @@ import posixpath
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time as dt_time
 from pathlib import Path
 from typing import Any, Literal
@@ -1289,6 +1292,31 @@ def _search_at_ref(
     return _attach_folder_tip(out, folder_clean, root=root)
 
 
+_SEARCH_FANOUT_WORKERS = 3
+
+
+def _run_search_pairs(
+    pairs: list[tuple[vaults.VaultBinding, str]],
+    run_pair: Callable[[vaults.VaultBinding, str], tuple[str, Any]],
+) -> list[tuple[str, Any]]:
+    """Run ``run_pair`` per (binding, folder) pair; outcomes keep ``pairs`` order.
+
+    One pair stays on the caller thread. Several share a small pool; each task runs
+    in its own copy of the caller's context so ``vaults.bind`` and the per-search
+    rerank/degraded ContextVars never leak between workers.
+    """
+    if len(pairs) <= 1:
+        return [run_pair(b, f) for b, f in pairs]
+    with ThreadPoolExecutor(
+        max_workers=min(_SEARCH_FANOUT_WORKERS, len(pairs)),
+        thread_name_prefix="apo-search",
+    ) as pool:
+        futures = [
+            pool.submit(contextvars.copy_context().run, run_pair, b, f) for b, f in pairs
+        ]
+        return [fut.result() for fut in futures]
+
+
 def search(
     query: str,
     *,
@@ -1373,9 +1401,9 @@ def search(
     default_exclude_by_vault: dict[str, list[str]] = {}
     failed = 0
     total_attempts = len(pairs)
-    for b, folder_clean in pairs:
+    def run_pair(b: vaults.VaultBinding, folder_clean: str) -> tuple[str, Any]:
         try:
-            rows, w, reranked, applied_default = _search_one_vault(
+            return "ok", _search_one_vault(
                 query,
                 b,
                 k=fetch_k,
@@ -1388,6 +1416,15 @@ def search(
                 intent=intent,
                 explain=explain,
             )
+        except SystemExit as e:
+            return "exit", e
+        except Exception as e:
+            return "error", e
+
+    outcomes = _run_search_pairs(pairs, run_pair)
+    for (b, folder_clean), (status, value) in zip(pairs, outcomes):
+        if status == "ok":
+            rows, w, reranked, applied_default = value
             if applied_default:
                 if fanout_vaults:
                     default_exclude_by_vault[b.name] = applied_default
@@ -1396,27 +1433,21 @@ def search(
             all_rows.extend(rows)
             warnings.extend(w)
             any_reranked = any_reranked or reranked
-        except SystemExit as e:
-            msg = str(e) or "index unavailable"
-            if total_attempts > 1:
-                failed += 1
-                prefix = f"vault {b.name}" if fanout_vaults else ""
-                if folder_clean:
-                    prefix = f"{prefix} folder {folder_clean}".strip()
-                warnings.append(f"{prefix}: search_failed ({msg})".strip())
-                continue
-            return _err(error="search_failed", message=msg)
-        except Exception as e:
-            if err := _sqlite_index_err(e):
+            continue
+        if status == "exit":
+            msg = str(value) or "index unavailable"
+        else:
+            if err := _sqlite_index_err(value):
                 return err
-            if total_attempts > 1:
-                failed += 1
-                prefix = f"vault {b.name}" if fanout_vaults else ""
-                if folder_clean:
-                    prefix = f"{prefix} folder {folder_clean}".strip()
-                warnings.append(f"{prefix}: search_failed ({e})".strip())
-                continue
-            return _err(error="search_failed", message=str(e))
+            msg = str(value)
+        if total_attempts > 1:
+            failed += 1
+            prefix = f"vault {b.name}" if fanout_vaults else ""
+            if folder_clean:
+                prefix = f"{prefix} folder {folder_clean}".strip()
+            warnings.append(f"{prefix}: search_failed ({msg})".strip())
+            continue
+        return _err(error="search_failed", message=msg)
 
     if total_attempts > 1 and failed == total_attempts:
         return _err(

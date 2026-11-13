@@ -9,6 +9,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import threading
 from dataclasses import dataclass, field as dc_field, replace as dc_replace
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -1187,8 +1188,14 @@ def _require_safe_http_bind(host: str, *, auth_provider: object | None) -> None:
     raise RuntimeError("unauthenticated HTTP requires an explicit loopback bind host")
 
 
+def _start_query_embed_warm() -> threading.Thread:
+    """Warm off the main thread: the Ollama preload is a blocking network call."""
+    t = threading.Thread(target=_maybe_warm_query_embed, name="apo-embed-warm", daemon=True)
+    t.start()
+    return t
+
+
 def main() -> None:
-    _maybe_warm_query_embed()
     # Default: stdio, one subprocess per client (Claude Code, Cursor, each Hermes
     # gateway) — matches how every client's mcp_servers.apo entry launches this file
     # today. APO_MCP_TRANSPORT=http instead runs a shared, long-lived server multiple
@@ -1213,6 +1220,7 @@ def main() -> None:
     if transport in ("http", "streamable-http"):
         host = os.environ.get("APO_MCP_HOST", "127.0.0.1")
         _require_safe_http_bind(host, auth_provider=_AUTH_PROVIDER)
+        _start_query_embed_warm()
         mcp.run(
             transport="http",
             host=host,
@@ -1222,6 +1230,7 @@ def main() -> None:
             host_origin_protection="auto",
         )
     else:
+        _start_query_embed_warm()
         mcp.run()
 
 

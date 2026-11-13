@@ -120,12 +120,22 @@ class VaultRegistryTests(unittest.TestCase):
     def test_collection_fallback_random_and_cached(self):
         plain = self.root / "not-a-git-repo"
         plain.mkdir()
-        first = vaults.compute_collection_id(plain)
-        vaults._vault_id_cache.clear()  # force re-derivation, not just in-process memoization
-        second = vaults.compute_collection_id(plain)
+        # self.root is a tempdir; real (non-temp) roots are the ones that persist.
+        with mock.patch.object(vaults, "is_ephemeral_root", return_value=False):
+            first = vaults.compute_collection_id(plain)
+            vaults._vault_id_cache.clear()  # force re-derivation, not just in-process memoization
+            second = vaults.compute_collection_id(plain)
         self.assertEqual(first, second)
         store = json.loads(vaults._FALLBACK_ID_STORE.read_text(encoding="utf-8"))
         self.assertEqual(store[str(plain.resolve())], first)
+
+    def test_collection_fallback_for_temp_root_is_not_persisted(self):
+        plain = self.root / "scratch-vault"
+        plain.mkdir()
+        first = vaults.compute_collection_id(plain)
+        vaults._vault_id_cache.clear()
+        self.assertEqual(vaults.compute_collection_id(plain), first)  # stable in-process
+        self.assertFalse(vaults._FALLBACK_ID_STORE.exists())
 
     def test_bind_switches_index_key(self):
         a = self.root / "a"
