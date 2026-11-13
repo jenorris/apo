@@ -27,9 +27,11 @@ import math
 import re
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import config
 from . import index_db
 from .index_models import Hit
 from . import link_index
@@ -107,40 +109,73 @@ _STEM_PHRASE_STOP = frozenset(
 
 def _phrase_stem_boost(path: str, query: str) -> float:
     """Boost when consecutive query words appear hyphenated in the filename stem."""
-    stem = Path(path).stem.lower()
     words = re.findall(r"[a-z0-9]+", (query or "").lower())
+    return _phrase_stem_score(Path(path).stem.lower(), _stem_phrases(words))
+
+
+def _stem_phrases(words: list[str]) -> list[tuple[str, float]]:
+    """(hyphenated phrase, boost) pairs worth looking for in a filename stem."""
+    phrases: list[tuple[str, float]] = []
     if len(words) < 2:
-        return 1.0
-    best = 1.0
+        return phrases
     for n in (4, 3, 2):
         for i in range(len(words) - n + 1):
             phrase_words = words[i : i + n]
             if sum(1 for w in phrase_words if w not in _STEM_PHRASE_STOP) < 1:
                 continue
-            hyphen = "-".join(phrase_words)
-            if hyphen in stem:
-                best = max(best, 1.0 + 0.14 * n)
+            phrases.append(("-".join(phrase_words), 1.0 + 0.14 * n))
+    return phrases
+
+
+def _phrase_stem_score(stem: str, phrases: list[tuple[str, float]]) -> float:
+    """:func:`_phrase_stem_boost` for a lowercased stem and :func:`_stem_phrases` output."""
+    best = 1.0
+    for hyphen, boost in phrases:
+        if boost > best and hyphen in stem:
+            best = boost
     return best
 
 
-_frontmatter_boost_cache: dict[str, tuple[float, dict[str, str]]] = {}
+# The MCP process is long-lived and serves several vaults: both per-path caches are
+# LRU-bounded and keyed by (index, path) so one vault's frontmatter / backlink count
+# never answers for another vault's identical relative path.
+_BOOST_CACHE_TTL = 30.0
+_BOOST_CACHE_MAX = 4096
+
+_frontmatter_boost_cache: OrderedDict[tuple[str, str], tuple[float, dict[str, str]]] = OrderedDict()
 _frontmatter_boost_lock = threading.Lock()
 
 
-def _frontmatter_boost_fields(path: str) -> dict[str, str]:
-    """Cached title/permalink/description from index frontmatter for rank boosts."""
-    key = path.replace("\\", "/")
-    now = time.monotonic()
-    with _frontmatter_boost_lock:
-        cached = _frontmatter_boost_cache.get(key)
-        if cached is not None and (now - cached[0]) < 30.0:
-            return cached[1]
-    db = index_db.reader_connect()
-    row = db.execute("SELECT frontmatter FROM files WHERE path=?", (key,)).fetchone()
+def _cache_scope() -> str:
+    """Identify the active index without ``index_path()``'s per-call ``resolve()`` syscalls."""
+    binding = vaults.active()
+    return str(binding.index if binding is not None else config.INDEX_PATH)
+
+
+def _boost_cache_get(
+    cache: OrderedDict, lock: threading.Lock, key: tuple[str, str], now: float
+) -> tuple | None:
+    with lock:
+        cached = cache.get(key)
+        if cached is not None and (now - cached[0]) < _BOOST_CACHE_TTL:
+            cache.move_to_end(key)
+            return cached
+    return None
+
+
+def _boost_cache_put_locked(cache: OrderedDict, key: tuple[str, str], value: tuple) -> None:
+    """Insert and evict the oldest entries; the caller holds the cache's lock."""
+    cache[key] = value
+    cache.move_to_end(key)
+    while len(cache) > _BOOST_CACHE_MAX:
+        cache.popitem(last=False)
+
+
+def _boost_fields_from_json(raw_fm: str | None) -> dict[str, str]:
     fields: dict[str, str] = {}
-    if row and row[0]:
+    if raw_fm:
         try:
-            fm = json.loads(row[0])
+            fm = json.loads(raw_fm)
             if isinstance(fm, dict):
                 for k in ("title", "permalink", "description"):
                     v = fm.get(k)
@@ -148,8 +183,22 @@ def _frontmatter_boost_fields(path: str) -> dict[str, str]:
                         fields[k] = v.strip()
         except (json.JSONDecodeError, TypeError):
             pass
+    return fields
+
+
+def _frontmatter_boost_fields(path: str) -> dict[str, str]:
+    """Cached title/permalink/description from index frontmatter for rank boosts."""
+    rel = path.replace("\\", "/")
+    key = (_cache_scope(), rel)
+    now = time.monotonic()
+    cached = _boost_cache_get(_frontmatter_boost_cache, _frontmatter_boost_lock, key, now)
+    if cached is not None:
+        return cached[1]
+    db = index_db.reader_connect()
+    row = db.execute("SELECT frontmatter FROM files WHERE path=?", (rel,)).fetchone()
+    fields = _boost_fields_from_json(row[0] if row else None)
     with _frontmatter_boost_lock:
-        _frontmatter_boost_cache[key] = (now, fields)
+        _boost_cache_put_locked(_frontmatter_boost_cache, key, (now, fields))
     return fields
 
 
@@ -257,27 +306,27 @@ def _generic_table_header_demotion(chunk_kind: str, text: str) -> float:
     return 0.55 if _is_generic_table_header_text(text) else 1.0
 
 
-_backlink_count_cache: dict[str, tuple[float, int]] = {}
+_backlink_count_cache: OrderedDict[tuple[str, str], tuple[float, int]] = OrderedDict()
 _backlink_count_lock = threading.Lock()
 
 
 def _backlink_count(path: str) -> int:
     """Distinct inbound wiki-link sources for a path (cached briefly per search)."""
     rel = path.replace("\\", "/").removesuffix(".md")
-    key = rel.lower()
+    lowered = rel.lower()
+    key = (_cache_scope(), lowered)
     now = time.monotonic()
-    with _backlink_count_lock:
-        cached = _backlink_count_cache.get(key)
-        if cached is not None and (now - cached[0]) < 30.0:
-            return cached[1]
+    cached = _boost_cache_get(_backlink_count_cache, _backlink_count_lock, key, now)
+    if cached is not None:
+        return cached[1]
     stem = Path(rel).name.lower()
-    targets = {key, stem}
+    targets = {lowered, stem}
     rows = link_index.list_backlinks(
         targets, limit=500, target_path=path.replace("\\", "/")
     )
     count = len({r[0] for r in rows})
     with _backlink_count_lock:
-        _backlink_count_cache[key] = (now, count)
+        _boost_cache_put_locked(_backlink_count_cache, key, (now, count))
     return count
 
 
@@ -301,6 +350,7 @@ def _prefetch_path_boost_data(paths: Iterable[str]) -> None:
     if not uniq:
         return
     db = index_db.reader_connect()
+    scope = _cache_scope()
     now = time.monotonic()
     fm_warm: dict[str, dict[str, str]] = {}
     batch_size = 400
@@ -311,21 +361,10 @@ def _prefetch_path_boost_data(paths: Iterable[str]) -> None:
             f"SELECT path, frontmatter FROM files WHERE path IN ({ph})",
             chunk,
         ):
-            fields: dict[str, str] = {}
-            if raw_fm:
-                try:
-                    fm = json.loads(raw_fm)
-                    if isinstance(fm, dict):
-                        for k in ("title", "permalink", "description"):
-                            v = fm.get(k)
-                            if isinstance(v, str) and v.strip():
-                                fields[k] = v.strip()
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            fm_warm[str(path).replace("\\", "/")] = fields
+            fm_warm[str(path).replace("\\", "/")] = _boost_fields_from_json(raw_fm)
     with _frontmatter_boost_lock:
         for path, fields in fm_warm.items():
-            _frontmatter_boost_cache[path] = (now, fields)
+            _boost_cache_put_locked(_frontmatter_boost_cache, (scope, path), (now, fields))
 
     if link_index.links_ready(db):
         # Resolved links: count distinct sources per exact target path (no stem overcount).
@@ -341,7 +380,7 @@ def _prefetch_path_boost_data(paths: Iterable[str]) -> None:
         with _backlink_count_lock:
             for p, srcs in by_path.items():
                 bk = p.removesuffix(".md").lower()
-                _backlink_count_cache[bk] = (now, len(srcs))
+                _boost_cache_put_locked(_backlink_count_cache, (scope, bk), (now, len(srcs)))
         return
 
     lookup: dict[str, set[str]] = {}
@@ -369,7 +408,43 @@ def _prefetch_path_boost_data(paths: Iterable[str]) -> None:
                     sources[bk].add(src)
     with _backlink_count_lock:
         for bk, srcs in sources.items():
-            _backlink_count_cache[bk] = (now, len(srcs))
+            _boost_cache_put_locked(_backlink_count_cache, (scope, bk), (now, len(srcs)))
+
+
+_FOLDER_STEMS_CACHE_MAX = 64
+_folder_stems_cache: OrderedDict[tuple[str, str], tuple[float, list[tuple[str, str]]]] = OrderedDict()
+_folder_stems_lock = threading.Lock()
+
+
+def _stem_lower(path: str) -> str:
+    """``Path(path).stem.lower()`` for an index-relative posix path, without pathlib."""
+    name = path.rsplit("/", 1)[-1]
+    dot = name.rfind(".")
+    return (name[:dot] if 0 < dot < len(name) - 1 else name).lower()
+
+
+def _folder_stems(folder_clean: str) -> list[tuple[str, str]]:
+    """Cached ``(path, lowercase stem)`` rows for the ``.md`` files under a folder."""
+    key = (_cache_scope(), folder_clean)
+    now = time.monotonic()
+    cached = _boost_cache_get(_folder_stems_cache, _folder_stems_lock, key, now)
+    if cached is not None:
+        return cached[1]
+    db = index_db.reader_connect()
+    prefix = content.escape_like(folder_clean) + "/%"
+    rows = [
+        (path, _stem_lower(path))
+        for (path,) in db.execute(
+            "SELECT path FROM files WHERE path LIKE ? ESCAPE '\\' AND path LIKE '%.md'",
+            (prefix,),
+        )
+    ]
+    with _folder_stems_lock:
+        _folder_stems_cache[key] = (now, rows)
+        _folder_stems_cache.move_to_end(key)
+        while len(_folder_stems_cache) > _FOLDER_STEMS_CACHE_MAX:
+            _folder_stems_cache.popitem(last=False)
+    return rows
 
 
 def _phrase_stem_paths_in_folder(query: str, folder_prefix: str, *, limit: int = 12) -> list[str]:
@@ -380,19 +455,16 @@ def _phrase_stem_paths_in_folder(query: str, folder_prefix: str, *, limit: int =
     words = re.findall(r"[a-z0-9]+", (query or "").lower())
     if len(words) < 2:
         return []
-    db = index_db.reader_connect()
-    prefix = content.escape_like(folder_clean) + "/%"
-    rows = db.execute(
-        "SELECT path FROM files WHERE path LIKE ? ESCAPE '\\' AND path LIKE '%.md'",
-        (prefix,),
-    ).fetchall()
+    long_words = [w for w in words if len(w) > 2]
+    if not long_words:
+        return []
+    phrases = _stem_phrases(words)
     scored: list[tuple[float, str]] = []
-    for (path,) in rows:
-        stem = Path(path).stem.lower()
+    for path, stem in _folder_stems(folder_clean):
         # Cheap prefilter before hyphenated phrase scan (O(folder) but skips regex work).
-        if not any(len(w) > 2 and w in stem for w in words):
+        if not any(w in stem for w in long_words):
             continue
-        boost = _phrase_stem_boost(path, query)
+        boost = _phrase_stem_score(stem, phrases)
         if boost > 1.05:
             scored.append((boost, path))
     scored.sort(key=lambda t: t[0], reverse=True)
@@ -519,17 +591,20 @@ def _path_retrieval_boost(
 def _neighbor_paths_for(top_paths: list[str], *, limit: int = 80) -> set[str]:
     """1-hop wiki-link neighbors of top-ranked note paths (index-only)."""
     neighbors: set[str] = set()
+    queries: list[dict[str, Any]] = []
     for raw in top_paths[:5]:
         rel = raw.replace("\\", "/")
         if not rel.endswith(".md"):
             rel = f"{rel}.md"
         stem = Path(rel).stem.lower()
         keys = {rel.removesuffix(".md").lower(), stem}
-        for src, _, _ in link_index.list_backlinks(
-            keys, limit=limit, target_path=rel
-        ):
-            neighbors.add(src.replace("\\", "/"))
-        for row in link_index.list_links(source=rel, limit=limit):
+        queries.append({"target_path": rel, "target_keys": keys, "limit": limit})
+        queries.append({"source": rel, "limit": limit})
+    results = link_index.list_links_many(queries)
+    for backlinks, outlinks in zip(results[::2], results[1::2]):
+        for row in backlinks:
+            neighbors.add(row["source"].replace("\\", "/"))
+        for row in outlinks:
             if row["target_path"]:
                 neighbors.add(row["target_path"])
             elif row["status"] == "unresolved":  # legacy row, not yet backfilled

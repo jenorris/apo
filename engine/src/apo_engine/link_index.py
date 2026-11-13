@@ -301,7 +301,8 @@ def _kinds_sql(kinds: Iterable[str] | None, params: list[Any]) -> str:
     return f" AND kind IN ({','.join('?' * len(ks))})"
 
 
-def list_links(
+def _links_sql(
+    typed: bool,
     *,
     source: str | None = None,
     target_path: str | None = None,
@@ -309,16 +310,8 @@ def list_links(
     kinds: Iterable[str] | None = None,
     exclude_source: str = "",
     limit: int = 100,
-) -> list[dict[str, Any]]:
-    """Typed link rows — outbound (``source``) or inbound (``target_path`` / ``target_keys``).
-
-    Inbound: rows resolved to ``target_path``; when the target is not an indexed note,
-    rows whose key or stem matches ``target_keys`` (dangling links to it). Ambiguous
-    rows never match — a ``[[stem]]`` shared by two notes belongs to neither.
-    On an index without the typed-link schema, falls back to wiki-link key matching.
-    """
-    db = reader_connect()
-    typed = links_ready(db)
+) -> tuple[str, list[Any]] | None:
+    """``(sql, params)`` for one :func:`list_links` query, or None when it can match nothing."""
     params: list[Any] = []
     if source is not None:
         cols = _LINK_COLS if typed else "source, target_key, NULL, 'wikilink', 'unresolved', line, text, NULL, NULL, NULL"
@@ -332,7 +325,7 @@ def list_links(
         kq = ",".join("?" * len(keys))
         if not typed:
             if not keys:
-                return []
+                return None
             sql = (
                 "SELECT source, target_key, NULL, 'wikilink', 'unresolved', line, text, NULL, NULL, NULL "
                 f"FROM backlinks WHERE (target_key IN ({kq}) OR target_stem IN ({kq}))"
@@ -353,7 +346,7 @@ def list_links(
             sql += _kinds_sql(kinds, params)
         else:
             if not keys:
-                return []
+                return None
             sql = (
                 f"SELECT {_LINK_COLS} FROM backlinks WHERE status IN ('unresolved','dangling') "
                 f"AND (target_key IN ({kq}) OR target_stem IN ({kq}))"
@@ -366,7 +359,64 @@ def list_links(
         sql += " ORDER BY source, line"
     sql += " LIMIT ?"
     params.append(limit)
+    return sql, params
+
+
+def list_links(
+    *,
+    source: str | None = None,
+    target_path: str | None = None,
+    target_keys: set[str] | None = None,
+    kinds: Iterable[str] | None = None,
+    exclude_source: str = "",
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Typed link rows — outbound (``source``) or inbound (``target_path`` / ``target_keys``).
+
+    Inbound: rows resolved to ``target_path``; when the target is not an indexed note,
+    rows whose key or stem matches ``target_keys`` (dangling links to it). Ambiguous
+    rows never match — a ``[[stem]]`` shared by two notes belongs to neither.
+    On an index without the typed-link schema, falls back to wiki-link key matching.
+    """
+    db = reader_connect()
+    built = _links_sql(
+        links_ready(db),
+        source=source,
+        target_path=target_path,
+        target_keys=target_keys,
+        kinds=kinds,
+        exclude_source=exclude_source,
+        limit=limit,
+    )
+    if built is None:
+        return []
+    sql, params = built
     return [_link_row(r) for r in db.execute(sql, params).fetchall()]
+
+
+def list_links_many(queries: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Run several :func:`list_links` queries (same keyword args each) in one SQL statement.
+
+    Returns one row list per query, in order, each identical to what ``list_links`` would
+    return for it (every query keeps its own ORDER BY / LIMIT inside a subselect).
+    """
+    db = reader_connect()
+    typed = links_ready(db)
+    parts: list[str] = []
+    params: list[Any] = []
+    for idx, query in enumerate(queries):
+        built = _links_sql(typed, **query)
+        if built is None:
+            continue
+        sql, p = built
+        parts.append(f"SELECT {idx} AS q, * FROM ({sql})")
+        params.extend(p)
+    out: list[list[dict[str, Any]]] = [[] for _ in queries]
+    if not parts:
+        return out
+    for row in db.execute(" UNION ALL ".join(parts), params).fetchall():
+        out[row[0]].append(_link_row(row[1:]))
+    return out
 
 
 def graph_snapshot(kinds: Iterable[str] | None = None) -> tuple[list[tuple], list[tuple]]:
@@ -421,4 +471,4 @@ def list_backlinks(
     )
     return [(r["source"], r["line"], r["text"]) for r in rows]
 
-__owned__ = ['links_ready', 'list_links', 'list_backlinks', '_note_links', '_links_contract', '_link_fields_for', 'links_state', '_insert_links', '_link_keys_for_paths', '_RESOLVE_SCOPED_MAX_PARAMS', 'resolve_links', 'links_backfill_needed', '_mark_links_current', 'backfill_links', '_FILES_LINK_KEY_SQL', '_FILES_LINK_COLUMNS', '_BACKLINKS_LINK_COLUMNS', '_ensure_link_columns', '_LINK_COLS', '_link_row', '_kinds_sql', 'graph_snapshot', 'list_outlinks']
+__owned__ = ['links_ready', 'list_links', 'list_backlinks', '_note_links', '_links_contract', '_link_fields_for', 'links_state', '_insert_links', '_link_keys_for_paths', '_RESOLVE_SCOPED_MAX_PARAMS', 'resolve_links', 'links_backfill_needed', '_mark_links_current', 'backfill_links', '_FILES_LINK_KEY_SQL', '_FILES_LINK_COLUMNS', '_BACKLINKS_LINK_COLUMNS', '_ensure_link_columns', '_LINK_COLS', '_link_row', '_kinds_sql', '_links_sql', 'list_links_many', 'graph_snapshot', 'list_outlinks']
