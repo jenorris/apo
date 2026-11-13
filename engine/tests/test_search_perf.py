@@ -83,7 +83,9 @@ class SearchPerfTest(unittest.TestCase):
             with core._query_embed_lock:
                 core._query_embed_cache.clear()
             second = core.query_embed("cache me roundtrip")
-        self.assertEqual(first, second)
+        self.assertEqual(len(first), len(second))
+        for a, b in zip(first, second):
+            self.assertAlmostEqual(a, b, places=6)  # sidecar stores float32
         self.assertEqual(emb.call_count, 1)
 
     def test_prefetch_path_boost_data_warms_caches(self):

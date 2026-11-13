@@ -632,11 +632,14 @@ def _embed_and_store_pending(
         )
     dropped: set[str] = set()
     stored = 0
-    for i in range(0, total, batch):
-        part = pending[i : i + batch]
+
+    def _embed_part(part: list) -> list[list[float] | None]:
         part_texts = [_pending_index_text(t) for t in part]
-        part_vectors = embed(part_texts, verbose=False)
-        part_vectors = _retry_failed_embeds_degraded(part, part_texts, part_vectors)
+        return _retry_failed_embeds_degraded(part, part_texts, embed(part_texts, verbose=False))
+
+    parts = [pending[i : i + batch] for i in range(0, total, batch)]
+    for n, (part, part_vectors) in enumerate(iter_embedded_in_order(_embed_part, parts)):
+        i = n * batch
         if verbose:
             print(f"  … embedded {min(i + batch, total)}/{total}", flush=True)
         for row, vec in zip(part, part_vectors):

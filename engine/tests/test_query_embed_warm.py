@@ -63,23 +63,26 @@ class QueryEmbedWarmTests(unittest.TestCase):
 
     def test_hydrate_loads_recent_disk_entries(self):
         core.clear_query_embed_cache()
-        db = core.writer_connect()
-        payload = json.dumps(
-            {
-                "model": config.MODEL_NAME,
-                "vec": [0.5, 0.6],
-                "at": time.time(),
-                "q": "hydrated query",
-            }
-        )
-        key = core._query_embed_meta_key("hydrated query")
-        db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, payload))
-        db.commit()
+        core._save_query_embed_disk("hydrated query", [0.5, 0.25])
         n = core._hydrate_query_embed_from_disk()
         self.assertEqual(n, 1)
         with mock.patch.object(core, "_ollama_embed_request", side_effect=AssertionError("no ollama")):
             vec = core.query_embed("hydrated query")
-        self.assertEqual(vec, [0.5, 0.6])
+        self.assertEqual(vec, [0.5, 0.25])
+
+    def test_hydrate_ignores_legacy_meta_rows(self):
+        core.clear_query_embed_cache()
+        db = core.writer_connect()
+        payload = json.dumps(
+            {"model": config.MODEL_NAME, "vec": [0.5, 0.6], "at": time.time(), "q": "legacy query"}
+        )
+        key = core._query_embed_meta_key("legacy query")
+        db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, payload))
+        db.commit()
+        self.assertEqual(core._hydrate_query_embed_from_disk(), 0)
+        core.clear_query_embed_cache()
+        legacy = db.execute("SELECT COUNT(*) FROM meta WHERE key LIKE 'qemb:%'").fetchone()[0]
+        self.assertEqual(legacy, 0)
 
     def test_warm_query_embed_preloads_ollama(self):
         core.clear_query_embed_cache()
