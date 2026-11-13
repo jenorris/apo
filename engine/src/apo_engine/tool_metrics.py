@@ -5,10 +5,13 @@ Legacy ``tool-metrics-*.jsonl`` files are imported once on first open, then dele
 """
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import queue
 import re
 import threading
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +28,18 @@ except ImportError:
 
 _JSONL_NAME = re.compile(r"^tool-metrics-(.+)\.jsonl$")
 _write_lock = threading.Lock()
+# DB paths whose schema + JSONL import already ran in this process.
+_ready_paths: set[Path] = set()
+# record_call only enqueues; one daemon thread drains the queue in batches so no
+# DuckDB I/O happens on the request path. Each batch opens the DB once and closes
+# it, so other processes (apo-local, a second MCP server) can still write between
+# batches.
+_BATCH_MAX = 50
+_FLUSH_INTERVAL_S = 1.0
+_QUEUE_MAX = 10_000
+_queue: queue.Queue[Any] = queue.Queue(maxsize=_QUEUE_MAX)
+_worker_lock = threading.Lock()
+_worker: threading.Thread | None = None
 _FLAG_KEYS = (
     "folder_set",
     "fields_set",
@@ -291,30 +306,105 @@ def _insert_events(
 
 
 def _migrate_jsonl_once(db_path: Path) -> None:
+    """Create the schema and import legacy JSONL, once per process per db path."""
     try:
         with _write_lock:
+            if db_path in _ready_paths and db_path.is_file():
+                return
             conn = _connect(db_path)
             try:
                 _ensure_schema(conn)
-                if _meta_get(conn, "jsonl_migrated") == "1":
-                    return
-                jsonl_files = sorted(DEFERRED_DIR.glob("tool-metrics-*.jsonl"))
-                if not jsonl_files:
+                if _meta_get(conn, "jsonl_migrated") != "1":
+                    for jpath in sorted(DEFERRED_DIR.glob("tool-metrics-*.jsonl")):
+                        coll = _collection_from_jsonl_path(jpath)
+                        rows = _parse_jsonl_file(jpath)
+                        if rows:
+                            _insert_events(conn, coll, rows)
+                        jpath.unlink(missing_ok=False)
                     _meta_set(conn, "jsonl_migrated", "1")
-                    return
-                for jpath in jsonl_files:
-                    coll = _collection_from_jsonl_path(jpath)
-                    rows = _parse_jsonl_file(jpath)
-                    if rows:
-                        _insert_events(conn, coll, rows)
-                    jpath.unlink(missing_ok=False)
-                _meta_set(conn, "jsonl_migrated", "1")
+                _ready_paths.add(db_path)
             finally:
                 conn.close()
     except OSError:
         return
     except duckdb.Error:
         return
+
+
+def _write_batch(batch: list[tuple[Path, str, dict[str, Any]]]) -> None:
+    by_path: dict[Path, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+    for db_path, collection, event in batch:
+        by_path[db_path].append((collection, event))
+    for db_path, rows in by_path.items():
+        try:
+            _migrate_jsonl_once(db_path)
+            with _write_lock:
+                conn = _connect(db_path)
+                try:
+                    conn.begin()
+                    for collection, event in rows:
+                        _insert_events(conn, collection, [event])
+                    conn.commit()
+                finally:
+                    conn.close()
+        except (OSError, duckdb.Error):
+            continue
+
+
+def _drain_loop() -> None:
+    while True:
+        events: list[tuple[Path, str, dict[str, Any]]] = []
+        waiters: list[threading.Event] = []
+        try:
+            item = _queue.get()
+            deadline = time.monotonic() + _FLUSH_INTERVAL_S
+            while True:
+                if isinstance(item, threading.Event):
+                    waiters.append(item)
+                    break
+                events.append(item)
+                if len(events) >= _BATCH_MAX:
+                    break
+                try:
+                    item = _queue.get(timeout=max(deadline - time.monotonic(), 0))
+                except queue.Empty:
+                    break
+            if events:
+                _write_batch(events)
+        except Exception:
+            pass
+        finally:
+            for waiter in waiters:
+                waiter.set()
+
+
+def _enqueue(item: tuple[Path, str, dict[str, Any]]) -> None:
+    global _worker
+    try:
+        if _worker is None or not _worker.is_alive():
+            with _worker_lock:
+                if _worker is None or not _worker.is_alive():
+                    _worker = threading.Thread(
+                        target=_drain_loop, name="apo-tool-metrics", daemon=True
+                    )
+                    _worker.start()
+                    atexit.register(flush)
+        _queue.put_nowait(item)
+    except (queue.Full, RuntimeError):
+        return
+
+
+def flush(timeout: float = 5.0) -> None:
+    """Block until every event queued so far is written. Best-effort — never raises."""
+    worker = _worker
+    if worker is None or not worker.is_alive():
+        return
+    done = threading.Event()
+    try:
+        _queue.put(done, timeout=timeout)
+    except queue.Full:
+        return
+    done.wait(timeout)
 
 
 def _format_ts(value: Any) -> str:
@@ -372,19 +462,8 @@ def _row_to_event(row: tuple[Any, ...], columns: list[str]) -> dict[str, Any]:
 def _embedded_record(
     collection: str, event: dict[str, Any], path: Path | None = None
 ) -> None:
-    """Insert one event into embedded DuckDB. Best-effort — never raises."""
-    db_path = metrics_db_path(path)
-    try:
-        _migrate_jsonl_once(db_path)
-        with _write_lock:
-            conn = _connect(db_path)
-            try:
-                _ensure_schema(conn)
-                _insert_events(conn, collection, [event])
-            finally:
-                conn.close()
-    except (OSError, duckdb.Error):
-        return
+    """Queue one event for the background DuckDB writer. Best-effort — never raises."""
+    _enqueue((metrics_db_path(path), collection, event))
 
 
 def record_call(
@@ -476,6 +555,7 @@ def _embedded_read_events(
     cutoff: datetime | None = None
     if days is not None and days > 0:
         cutoff = datetime.now(timezone.utc).timestamp() - (days * 86400)
+    flush()
     try:
         _migrate_jsonl_once(db_path)
         if not db_path.is_file():
@@ -483,7 +563,6 @@ def _embedded_read_events(
         with _write_lock:
             conn = _connect(db_path)
             try:
-                _ensure_schema(conn)
                 sql = """
                     SELECT ts, tool, ok, error, duration_ms, req_bytes, resp_bytes,
                            folder_set, fields_set, expected_mtime_set, used_alias,
@@ -798,6 +877,7 @@ def remap_default_collections_by_vault_id(
     collection, so those rows were invisible until remapped.
     """
     db_path = metrics_db_path(path)
+    flush()
     if not db_path.is_file():
         return {"ok": True, "updated": 0, "path": str(db_path), "skipped": "missing_db"}
     ids = [v.strip() for v in (vault_ids or []) if isinstance(v, str) and v.strip()]
