@@ -88,6 +88,12 @@ class SearchFanoutParallelTests(unittest.TestCase):
         self.assertEqual(len(serial["results"]), 12)
         self.assertEqual(parallel, serial)
 
+    def test_fanout_hits_carry_vault_and_qualified_path(self):
+        out = self._search()
+        self.assertTrue(out["results"])
+        for row in out["results"]:
+            self.assertEqual(row["qualified_path"], f"{row['vault']}:{row['source']}")
+
     def test_workers_run_concurrently_inside_their_own_bind(self):
         real = ops._search_one_vault
         seen: list[tuple[int, str]] = []

@@ -1137,10 +1137,9 @@ def _search_one_vault(
     if stamp_vault:
         for row in results:
             row["vault"] = b.name
-    for row in results:
-        src = str(row.get("source") or "")
-        if src:
-            row["qualified_path"] = _qualified_path(b.name, src)
+            src = str(row.get("source") or "")
+            if src:
+                row["qualified_path"] = _qualified_path(b.name, src)
     reranked = False
     if rr is not None:
         if rr.get("applied"):

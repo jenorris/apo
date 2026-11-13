@@ -65,7 +65,8 @@ def shape_search_hits(
             ctx = layout.get(h.path.split("/", 1)[0])
             if ctx:
                 row["folder_context"] = ctx
-            row["path_context"] = vaults.build_path_context(h.path, layout)
+            if explain:
+                row["path_context"] = vaults.build_path_context(h.path, layout)
         if explain and getattr(h, "explain", None):
             row["explain"] = h.explain
         rows.append(row)
