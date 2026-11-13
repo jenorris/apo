@@ -66,6 +66,8 @@ class HermeticHomeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "vault"  # not a git repo -> hits the fallback id store
             root.mkdir()
+            # Temp roots are not persisted; force the store write this test guards.
+            fresh.is_ephemeral_root = lambda _root: False
             fresh.compute_collection_id(root)
             self.assertTrue(fresh._FALLBACK_ID_STORE.is_file())
             real_store = _REAL_APO / "vault-ids.json"
