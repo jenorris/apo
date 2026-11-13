@@ -283,7 +283,7 @@ def _index_vault_impl(
     elif link_sources or removed_paths:
         resolve_links(db, sources=link_sources, paths=link_sources + removed_paths)
     if stamped or dropped or work_done or mtime_refreshed or rebuild:
-        _finalize_index_writes(db)
+        _finalize_index_writes(db, optimize=rebuild)
 
     stats.seconds = time.time() - t0
     return stats
