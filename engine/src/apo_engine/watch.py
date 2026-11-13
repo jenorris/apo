@@ -541,7 +541,10 @@ def _watch_one(
                 index_path,
             )
 
-    last_scan = 0.0
+    # time.monotonic() is seconds since boot, so a last_scan of 0 means the
+    # startup scan already happened. -inf makes the first cycle scan, including
+    # on a freshly booted CI runner. A long-uptime laptop hides the difference.
+    last_scan = float("-inf")
     last_hook_trigger = float("-inf")
     lock_backoff = 0.0
     reconcile = (
