@@ -33,6 +33,7 @@ import os
 import secrets
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -103,9 +104,28 @@ def _git_root_id(root: Path) -> str | None:
     return hashes[0][:12] if hashes else None
 
 
+_ephemeral_ids: dict[str, str] = {}
+
+
+def is_ephemeral_root(root: Path | str) -> bool:
+    """True for roots under the system temp dir (test runs, ad-hoc scratch vaults)."""
+    p = Path(root)
+    return any(
+        p.is_relative_to(base)
+        for base in (Path(tempfile.gettempdir()).resolve(), Path("/private/var/folders"))
+    )
+
+
 def _fallback_id(root: Path) -> str:
-    """Random id for non-git vault roots, cached so it's stable across runs."""
+    """Random id for non-git vault roots, cached so it's stable across runs.
+
+    Temp-dir roots keep their id in-process only: persisting them grew
+    ``vault-ids.json`` by one entry per scratch vault, forever.
+    """
     key = str(root)
+    ephemeral = is_ephemeral_root(root)
+    if ephemeral and key in _ephemeral_ids:
+        return _ephemeral_ids[key]
     store = _FALLBACK_ID_STORE
     data: dict[str, str] = {}
     if store.exists():
@@ -117,6 +137,8 @@ def _fallback_id(root: Path) -> str:
     if existing:
         return str(existing)
     new_id = secrets.token_hex(6)
+    if ephemeral:
+        return _ephemeral_ids.setdefault(key, new_id)
     data[key] = new_id
     store.parent.mkdir(parents=True, exist_ok=True)
     store.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")

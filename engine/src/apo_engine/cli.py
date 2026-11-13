@@ -6,8 +6,10 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
-from . import __version__, core, ops as apo_ops, vaults
+from . import __version__, core, deferred, ops as apo_ops, vaults
+from .atomic_io import atomic_write_text
 from .watch import run_watch
 
 
@@ -188,7 +190,118 @@ def _fmt_hook_age(iso_ts: str | None) -> str:
     return f"{max(0.0, age):.0f}s ago"
 
 
+def _file_bytes(path: Path) -> int:
+    """Size of ``path`` plus its sqlite ``-wal``/``-shm``/``-journal`` companions."""
+    total = 0
+    for p in (path, *(path.with_name(path.name + sfx) for sfx in ("-wal", "-shm", "-journal"))):
+        try:
+            total += p.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _queue_is_empty(path: Path) -> bool:
+    try:
+        raw = path.read_text(encoding="utf-8")
+        return not raw.strip() or not json.loads(raw)
+    except (OSError, ValueError):
+        return False
+
+
+def gc_report(
+    *,
+    runtime_dir: Path,
+    queue_dir: Path,
+    id_store: Path,
+    bindings: dict[str, vaults.VaultBinding],
+    apply: bool = False,
+) -> dict:
+    """Unreferenced runtime artifacts. Read-only unless ``apply``.
+
+    ``apply`` removes only stale temp-root entries from ``id_store`` and unreferenced
+    *empty* queue files. Index DBs are never deleted.
+    """
+    index_keep: set[Path] = set()
+    for b in bindings.values():
+        idx = Path(b.index).expanduser().resolve()
+        index_keep.update((idx, idx.with_name(f"{idx.stem}-refs{idx.suffix}")))
+    collections = {b.collection for b in bindings.values()}
+
+    index_dbs = [
+        {"path": str(p), "bytes": _file_bytes(p)}
+        for p in sorted(runtime_dir.glob("index-*.db"))
+        if p.resolve() not in index_keep
+    ]
+    queues = []
+    for kind in ("deferred", "purge"):
+        for p in sorted(queue_dir.glob(f"{kind}-*.json")):
+            if p.name[len(kind) + 1 : -len(".json")] in collections:
+                continue
+            queues.append({"path": str(p), "bytes": _file_bytes(p), "empty": _queue_is_empty(p)})
+    try:
+        ids = json.loads(id_store.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ids = {}
+    stale_ids = sorted(k for k in ids if vaults.is_ephemeral_root(k)) if isinstance(ids, dict) else []
+
+    removed: dict[str, list[str]] = {"queues": [], "vault_ids": []}
+    if apply:
+        for q in queues:
+            if q["empty"]:
+                try:
+                    Path(q["path"]).unlink()
+                    removed["queues"].append(q["path"])
+                except OSError:
+                    pass
+        if stale_ids:
+            kept = {k: v for k, v in ids.items() if k not in set(stale_ids)}
+            atomic_write_text(id_store, json.dumps(kept, indent=2, sort_keys=True) + "\n")
+            removed["vault_ids"] = stale_ids
+    return {
+        "ok": True,
+        "index_dbs": index_dbs,
+        "queues": queues,
+        "stale_vault_ids": {"count": len(stale_ids), "paths": stale_ids},
+        "applied": apply,
+        "removed": removed,
+    }
+
+
+def _cmd_gc_report(args) -> int:
+    _default, bindings = vaults.load_bindings()
+    out = gc_report(
+        runtime_dir=vaults._FALLBACK_ID_STORE.parent,
+        queue_dir=deferred.DEFERRED_DIR,
+        id_store=vaults._FALLBACK_ID_STORE,
+        bindings=bindings,
+        apply=args.apply,
+    )
+    if args.json:
+        print(json.dumps(out, indent=2))
+        return 0
+    print("Unreferenced index DBs (report only — never deleted):")
+    for e in out["index_dbs"]:
+        print(f"  {_fmt_bytes(e['bytes']):>8}  {e['path']}")
+    print("Unreferenced queue files (--apply deletes the empty ones):")
+    for e in out["queues"]:
+        print(f"  {_fmt_bytes(e['bytes']):>8}  {'empty' if e['empty'] else 'non-empty':<9} {e['path']}")
+    stale = out["stale_vault_ids"]
+    print(f"Stale temp-root entries in {vaults._FALLBACK_ID_STORE}: {stale['count']}")
+    for k in stale["paths"]:
+        print(f"  {k}")
+    if args.apply:
+        r = out["removed"]
+        print(f"applied: removed {len(r['queues'])} queue file(s), {len(r['vault_ids'])} vault-id entr(ies)")
+    return 0
+
+
 def _cmd_doctor(args) -> int:
+    if args.apply and not args.gc_report:
+        print("error: --apply only applies to --gc-report", file=sys.stderr)
+        return 2
+    if args.gc_report:
+        return _cmd_gc_report(args)
     vault = (getattr(args, "vault", None) or "").strip()
     data = apo_ops.index_health(vault=vault)
     if not data.get("ok"):
@@ -440,6 +553,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     pdoc.add_argument("--vault", default="", help="usage-contract vault_id (empty = every registered vault)")
     pdoc.add_argument("--json", action="store_true")
+    pdoc.add_argument(
+        "--gc-report",
+        action="store_true",
+        help="list unreferenced index DBs / queue files and stale temp-root vault-ids entries (read-only)",
+    )
+    pdoc.add_argument(
+        "--apply",
+        action="store_true",
+        help="with --gc-report: delete stale vault-ids entries and unreferenced empty queue files (never index DBs)",
+    )
     pdoc.set_defaults(func=_cmd_doctor)
 
     pw = sub.add_parser("watch", help="watch vault + consume deferred queues (sole index writer)")
