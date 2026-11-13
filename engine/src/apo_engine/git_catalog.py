@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from apo_engine import core
+from apo_engine import content
 from apo_engine.note_format import is_note_path
+from apo_engine import ref_catalog
+from apo_engine import retrieval
 
 _GIT_TIMEOUT_S = 60.0
 _REF_CACHE_MAX = 8
@@ -333,7 +335,7 @@ def list_note_paths(vault_root: Path, tree_oid: str) -> list[str]:
         env=_scrubbed_git_env(),
     )
     threading.Thread(target=_watchdog_kill, args=(proc, deadline), daemon=True).start()
-    ignore_res = core._compile_ignore(_ignore_patterns(root))
+    ignore_res = content.compile_ignore(_ignore_patterns(root))
     out: list[str] = []
     err_b = b""
     try:
@@ -347,7 +349,7 @@ def list_note_paths(vault_root: Path, tree_oid: str) -> list[str]:
             rel = rel.strip().replace("\\", "/")
             if not rel or not is_note_path(rel):
                 continue
-            if core._is_ignored(rel, ignore_res):
+            if content.is_ignored(rel, ignore_res):
                 continue
             out.append(rel)
             if len(out) > _MAX_CATALOG_NOTES:
@@ -746,39 +748,11 @@ def last_touch_mtimes(
 
 def parse_catalog_row(rel: str, text: str) -> str | None:
     """JSON frontmatter for catalog, or None if not catalogable."""
-    return core.note_catalog_json(text, rel)
+    return content.note_catalog_json(text, rel)
 
 
 def ensure_ref_tables(db: Any) -> None:
-    db.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS ref_trees (
-            tree_oid TEXT PRIMARY KEY,
-            commit_oid TEXT NOT NULL,
-            built_at REAL NOT NULL,
-            catalog_version TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS ref_files (
-            tree_oid TEXT NOT NULL,
-            path TEXT NOT NULL,
-            mtime REAL NOT NULL,
-            frontmatter TEXT,
-            PRIMARY KEY (tree_oid, path)
-        );
-        CREATE INDEX IF NOT EXISTS ref_files_tree ON ref_files(tree_oid);
-        CREATE VIRTUAL TABLE IF NOT EXISTS ref_fts USING fts5(
-            tree_oid UNINDEXED,
-            path UNINDEXED,
-            mtime UNINDEXED,
-            text
-        );
-        """
-    )
-    cols = {row[1] for row in db.execute("PRAGMA table_info(ref_trees)").fetchall()}
-    if "catalog_version" not in cols:
-        db.execute(
-            "ALTER TABLE ref_trees ADD COLUMN catalog_version TEXT NOT NULL DEFAULT ''"
-        )
+    ref_catalog.ensure_schema(db)
 
 
 def _evict_old_trees(db: Any, *, keep: int = _REF_CACHE_MAX) -> None:
@@ -814,7 +788,6 @@ def build_catalog(
 
     Skips rebuild when already cached for the current catalog version unless ``force``.
     """
-    ensure_ref_tables(db)
     version = catalog_version(vault_root)
     if not force and catalog_cached(db, resolved.tree_oid, version):
         # Touch built_at so LRU prefers recently used trees.
@@ -853,8 +826,10 @@ def build_catalog(
                 "INSERT INTO ref_files(tree_oid, path, mtime, frontmatter) VALUES (?,?,?,?)",
                 (resolved.tree_oid, rel, mt, fm_json),
             )
-            body, _ = core._body_start_line(text)
-            fts_text = core._index_text_for_embedding(body or text, "section")
+            body, _ = content.body_start_line(text)
+            fts_text = retrieval._index_text_for_embedding(
+                body or text, "section"
+            )
             db.execute(
                 "INSERT INTO ref_fts(tree_oid, path, mtime, text) VALUES (?,?,?,?)",
                 (resolved.tree_oid, rel, mt, fts_text),
@@ -894,8 +869,18 @@ def ensure_catalog(
 ) -> ResolvedRef:
     """Resolve ref and ensure catalog rows exist. Returns resolved tip."""
     resolved = resolve_tree(vault_root, ref)
-    connect = writer_connect or core.writer_connect
-    # writer_connect is process-local — do not close it.
-    db = connect()
-    build_catalog(vault_root, resolved, db)
+    connect = writer_connect or ref_catalog.writer_connect
+    with ref_catalog.build_lock():
+        db = connect()
+        try:
+            ensure_ref_tables(db)
+            db.commit()
+            db.execute("BEGIN IMMEDIATE")
+            build_catalog(vault_root, resolved, db)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
     return resolved

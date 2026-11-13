@@ -8,13 +8,8 @@ catalog recall, and an eval-table demotion — before the final sort. Same logic
 same call signatures as before the split; this module does not change scoring
 behavior.
 
-References :mod:`apo_engine.core` (``reader_connect``, ``Hit``, ``list_backlinks``,
-``list_outlinks``, ``_escape_like``) via ``import core`` rather than
-``from .core import ...`` — core.py imports this module too (to call the boosts
-from ``search()``), and only the whole-module form survives that circular
-import; every ``core.<name>`` reference below is resolved at call time, once
-both modules have finished initializing, and stays mock-patchable via
-``mock.patch.object(core, "reader_connect", ...)`` in tests.
+Database, link, and model dependencies come from lower-level modules. Ranking
+does not import the ``core`` compatibility facade.
 
 Architecture/system vocabulary — vault-wide mermaid boost only when the query
 looks like a DFD/CDE/payment-flow question — used to be a single hardcoded
@@ -35,7 +30,10 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import core
+from . import index_db
+from .index_models import Hit
+from . import link_index
+from . import content
 from . import search_contract
 from . import vaults
 
@@ -137,7 +135,7 @@ def _frontmatter_boost_fields(path: str) -> dict[str, str]:
         cached = _frontmatter_boost_cache.get(key)
         if cached is not None and (now - cached[0]) < 30.0:
             return cached[1]
-    db = core.reader_connect()
+    db = index_db.reader_connect()
     row = db.execute("SELECT frontmatter FROM files WHERE path=?", (key,)).fetchone()
     fields: dict[str, str] = {}
     if row and row[0]:
@@ -274,7 +272,9 @@ def _backlink_count(path: str) -> int:
             return cached[1]
     stem = Path(rel).name.lower()
     targets = {key, stem}
-    rows = core.list_backlinks(targets, limit=500, target_path=path.replace("\\", "/"))
+    rows = link_index.list_backlinks(
+        targets, limit=500, target_path=path.replace("\\", "/")
+    )
     count = len({r[0] for r in rows})
     with _backlink_count_lock:
         _backlink_count_cache[key] = (now, count)
@@ -300,7 +300,7 @@ def _prefetch_path_boost_data(paths: Iterable[str]) -> None:
             uniq.append(p)
     if not uniq:
         return
-    db = core.reader_connect()
+    db = index_db.reader_connect()
     now = time.monotonic()
     fm_warm: dict[str, dict[str, str]] = {}
     batch_size = 400
@@ -327,7 +327,7 @@ def _prefetch_path_boost_data(paths: Iterable[str]) -> None:
         for path, fields in fm_warm.items():
             _frontmatter_boost_cache[path] = (now, fields)
 
-    if core.links_ready(db):
+    if link_index.links_ready(db):
         # Resolved links: count distinct sources per exact target path (no stem overcount).
         by_path: dict[str, set[str]] = {p: set() for p in uniq}
         for i in range(0, len(uniq), batch_size):
@@ -380,8 +380,8 @@ def _phrase_stem_paths_in_folder(query: str, folder_prefix: str, *, limit: int =
     words = re.findall(r"[a-z0-9]+", (query or "").lower())
     if len(words) < 2:
         return []
-    db = core.reader_connect()
-    prefix = core._escape_like(folder_clean) + "/%"
+    db = index_db.reader_connect()
+    prefix = content.escape_like(folder_clean) + "/%"
     rows = db.execute(
         "SELECT path FROM files WHERE path LIKE ? ESCAPE '\\' AND path LIKE '%.md'",
         (prefix,),
@@ -400,19 +400,19 @@ def _phrase_stem_paths_in_folder(query: str, folder_prefix: str, *, limit: int =
 
 
 def _inject_phrase_stem_hits(
-    hits: "list[core.Hit]",
+    hits: list[Hit],
     query: str,
     folder_prefix: str,
     *,
     explain: bool = False,
     full_texts: list[str] | None = None,
-) -> "tuple[list[core.Hit], list[str] | None]":
+) -> tuple[list[Hit], list[str] | None]:
     """Ensure phrase-stem filename matches enter the pool when hybrid search missed them."""
     existing = {h.path for h in hits}
     paths = _phrase_stem_paths_in_folder(query, folder_prefix)
     if not paths:
         return hits, full_texts
-    db = core.reader_connect()
+    db = index_db.reader_connect()
     top_score = hits[0].score if hits else 0.55
     added_texts: list[str] = []
     for path in paths:
@@ -456,7 +456,7 @@ def _inject_phrase_stem_hits(
         if explain:
             hit_explain = {"phrase_stem_inject": True, **path_detail, "final_score": score}
         hits.append(
-            core.Hit(
+            Hit(
                 path=path,
                 heading=heading or "",
                 text=text,
@@ -525,9 +525,11 @@ def _neighbor_paths_for(top_paths: list[str], *, limit: int = 80) -> set[str]:
             rel = f"{rel}.md"
         stem = Path(rel).stem.lower()
         keys = {rel.removesuffix(".md").lower(), stem}
-        for src, _, _ in core.list_backlinks(keys, limit=limit, target_path=rel):
+        for src, _, _ in link_index.list_backlinks(
+            keys, limit=limit, target_path=rel
+        ):
             neighbors.add(src.replace("\\", "/"))
-        for row in core.list_links(source=rel, limit=limit):
+        for row in link_index.list_links(source=rel, limit=limit):
             if row["target_path"]:
                 neighbors.add(row["target_path"])
             elif row["status"] == "unresolved":  # legacy row, not yet backfilled
@@ -537,11 +539,11 @@ def _neighbor_paths_for(top_paths: list[str], *, limit: int = 80) -> set[str]:
 
 
 def _neighbor_rank_boost(
-    hits: "list[core.Hit]",
+    hits: list[Hit],
     query: str,
     *,
     explain: bool = False,
-) -> "list[core.Hit]":
+) -> list[Hit]:
     """Promote 1-hop link neighbors of top hits (GBrain-style graph signal, lite)."""
     if len(hits) < 2:
         return hits
@@ -567,13 +569,13 @@ def _neighbor_rank_boost(
 
 
 def _apply_path_boosts_to_hits(
-    hits: "list[core.Hit]",
+    hits: list[Hit],
     query: str,
     *,
     explain: bool = False,
     neighbor: bool = True,
     folder: str = "",
-) -> "list[core.Hit]":
+) -> list[Hit]:
     if not hits:
         return hits
     _prefetch_path_boost_data([h.path for h in hits])
