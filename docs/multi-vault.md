@@ -8,15 +8,18 @@ Separate indexes are intentional: isolation (no cross-vault ranking bleed), inde
 
 | Mechanism | Role |
 |-----------|------|
-| `APO_COLLECTION_ROOT` / `--collection-root` | **Primary autoconfigure** — parent directory of vaults. Each immediate child with a usage-contract `vault_id` is registered. Non-vault siblings (e.g. `Wiki/`) are skipped. |
+| `APO_VAULTS_ROOT` / `--vaults-root` | **Primary autoconfigure** — parent directory of vaults. Each immediate child with a usage-contract `vault_id` is registered. Non-vault siblings (e.g. `Wiki/`) are skipped. |
 | `--vault-path PATH` (MCP; `--vault` is a back-compat alias — do not confuse with `apo-engine`/`apo-local`'s unrelated `--vault NAME`) / `APO_VAULT_PATHS` | Explicit roots (colon-separated). Workbench escape hatch for non-sibling trees (e.g. `compliance`). |
 | `APO_DEFAULT_VAULT` / `--default-vault` (`--default` back-compat alias) | Default `vault=` when empty (required when more than one vault and no unique `memory.default_vault` claim). |
-| `APO_VAULTS` | JSON file/object — **roots only**; object keys and `collection` are ignored. Names come from usage `vault_id`. Optional `index` still honored. Also the only way to register a **read-only** vault (`"read_only": true`) — how `apo-engine okf ingest` mounts a foreign OKF bundle. Prefer `APO_COLLECTION_ROOT` / `APO_VAULT_PATHS` for ordinary (writable) registration; using `APO_VAULTS` for that emits a one-shot stderr note. |
+| `APO_VAULTS` | JSON file/object — **roots only**; object keys and `collection` are ignored. Names come from usage `vault_id`. Optional `index` still honored. Also the only way to register a **read-only** vault (`"read_only": true`) — how `apo-engine okf ingest` mounts a foreign OKF bundle. Prefer `APO_VAULTS_ROOT` / `APO_VAULT_PATHS` for ordinary (writable) registration; using `APO_VAULTS` for that emits a one-shot stderr note. |
 | `APO_NOTES_ROOT` | Legacy single-root when nothing above is set. |
 
 A path is a vault iff it has a readable usage contract with non-empty `vault_id` and is not marked `system/contracts/.apo-disabled`. Duplicate `vault_id` across roots → hard fail.
 
-**Naming:** `APO_COLLECTION_ROOT` means “parent directory of vaults,” **not** a queue/telemetry id. The internal deferred/telemetry partition id is derived (`compute_collection_id`) from the vault’s git root commit (or a cached random id).
+**Migration:** `APO_COLLECTION_ROOT` / `--collection-root` remains a deprecated
+alias for one window. Matching dual values are accepted. Conflicts fail.
+The internal deferred/telemetry collection ID is derived
+(`compute_collection_id`) from the vault’s git root commit (or a cached random id).
 
 ### Default vault resolution
 
@@ -37,7 +40,7 @@ There is no per-vault-name alias table — the collection-id / vault-id-name fal
 **Personal (all Notes children that are vaults):**
 
 ```bash
-export APO_COLLECTION_ROOT="$HOME/Notes"
+export APO_VAULTS_ROOT="$HOME/Notes"
 export APO_DEFAULT_VAULT=atlas   # or rely on a unique memory.default_vault claim
 ```
 
@@ -82,7 +85,7 @@ Tool path / folder args accept an optional **`vault_id:relative/path`** prefix (
 | `areas/threads/x.md` | Vault from `vault=` or process default |
 | `work:areas/threads/x.md` | Vault `work`, path `areas/threads/x.md` |
 
-**Writability gate:** the prefix (and `vault=`) must name a vault in **this MCP/RPC/watch process registry** — the live bindings from `APO_COLLECTION_ROOT` / `APO_VAULT_PATHS` / `--vault` for that process — not every folder under `~/Notes` and not `desk.yaml`. Unknown prefix → `bad_vault` (no fall-through to the default vault). Prefix disagreeing with `vault=` → `bad_request`.
+**Writability gate:** the prefix (and `vault=`) must name a vault in **this MCP/watch process registry** — the live bindings from `APO_VAULTS_ROOT` / `APO_VAULT_PATHS` / `--vault` for that process — not every folder under `~/Notes` and not `desk.yaml`. Unknown prefix → `bad_vault` (no fall-through to the default vault). Prefix disagreeing with `vault=` → `bad_request`.
 
 Workbench example: registry = work, contracts, optima, compliance → `atlas:areas/…` is denied; `work:areas/threads/…` is allowed.
 

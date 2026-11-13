@@ -85,8 +85,11 @@ Usage:
                                               note doesn't exist unless --create is given)
 
 Global flags (any subcommand):
-  --server URL   apo-engine MCP endpoint (default $APO_SERVER_URL or ` + defaultServerURL + `)
-  --token TOK    bearer token for APO_MCP_AUTH=google instances (default $APO_TOKEN)
+  --server-url URL     apo-engine MCP endpoint (default $APO_MCP_URL or ` + defaultServerURL + `)
+  --bearer-token TOK   bearer token (default $APO_MCP_TOKEN)
+
+Deprecated for one migration window: --server / APO_SERVER_URL and
+--token / APO_TOKEN. Matching old/new values are accepted; conflicts fail.
 
 Every MCP tool the server exposes is reachable via 'call', regardless of
 whether this binary has a dedicated subcommand for it — e.g.:
@@ -102,36 +105,61 @@ type serverFlags struct {
 	token     string
 }
 
-// splitFlags pulls --server/--token out of args (in any position) and
+// splitFlags pulls endpoint/auth flags out of args (in any position) and
 // returns them plus the remaining args for the subcommand's own parsing.
-func splitFlags(args []string) (serverFlags, []string) {
-	sf := serverFlags{
-		serverURL: envOr("APO_SERVER_URL", defaultServerURL),
-		token:     os.Getenv("APO_TOKEN"),
+func splitFlags(args []string) (serverFlags, []string, error) {
+	serverURL, err := envAlias("APO_MCP_URL", "APO_SERVER_URL", defaultServerURL)
+	if err != nil {
+		return serverFlags{}, nil, err
 	}
+	token, err := envAlias("APO_MCP_TOKEN", "APO_TOKEN", "")
+	if err != nil {
+		return serverFlags{}, nil, err
+	}
+	sf := serverFlags{serverURL: serverURL, token: token}
+	var seenServer, seenToken string
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		head, val, hasEq := splitEq(args[i])
 		switch head {
-		case "--server":
-			if hasEq {
-				sf.serverURL = val
-			} else if i+1 < len(args) {
-				sf.serverURL = args[i+1]
-				i++
+		case "--server-url", "--server":
+			value, next, valueErr := flagValue(args, i, head, val, hasEq)
+			if valueErr != nil {
+				return serverFlags{}, nil, valueErr
 			}
-		case "--token":
-			if hasEq {
-				sf.token = val
-			} else if i+1 < len(args) {
-				sf.token = args[i+1]
-				i++
+			i = next
+			if seenServer != "" && seenServer != value {
+				return serverFlags{}, nil, fmt.Errorf("conflicting endpoint flags: --server-url and deprecated --server must match")
 			}
+			seenServer, sf.serverURL = value, value
+		case "--bearer-token", "--token":
+			value, next, valueErr := flagValue(args, i, head, val, hasEq)
+			if valueErr != nil {
+				return serverFlags{}, nil, valueErr
+			}
+			i = next
+			if seenToken != "" && seenToken != value {
+				return serverFlags{}, nil, fmt.Errorf("conflicting token flags: --bearer-token and deprecated --token must match")
+			}
+			seenToken, sf.token = value, value
 		default:
 			rest = append(rest, args[i])
 		}
 	}
-	return sf, rest
+	return sf, rest, nil
+}
+
+func flagValue(args []string, index int, name, equalValue string, hasEq bool) (string, int, error) {
+	if hasEq {
+		if equalValue == "" {
+			return "", index, fmt.Errorf("%s requires a non-empty value", name)
+		}
+		return equalValue, index, nil
+	}
+	if index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
+		return "", index, fmt.Errorf("%s requires a value", name)
+	}
+	return args[index+1], index + 1, nil
 }
 
 // splitEq splits a "--name=value" token into ("--name", "value", true); any
@@ -146,15 +174,26 @@ func splitEq(tok string) (head, value string, hasEq bool) {
 	return tok, "", false
 }
 
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+func envAlias(canonical, deprecated, fallback string) (string, error) {
+	newValue := strings.TrimSpace(os.Getenv(canonical))
+	oldValue := strings.TrimSpace(os.Getenv(deprecated))
+	if newValue != "" && oldValue != "" && newValue != oldValue {
+		return "", fmt.Errorf("conflicting configuration: %s and deprecated %s differ", canonical, deprecated)
 	}
-	return fallback
+	if newValue != "" {
+		return newValue, nil
+	}
+	if oldValue != "" {
+		return oldValue, nil
+	}
+	return fallback, nil
 }
 
 func cmdTools(args []string) error {
-	sf, _ := splitFlags(args)
+	sf, _, err := splitFlags(args)
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
 	sess, err := connect(ctx, sf.serverURL, sf.token)
 	if err != nil {
@@ -174,8 +213,14 @@ func cmdTools(args []string) error {
 }
 
 func cmdCall(args []string) error {
-	sf, rest := splitFlags(args)
-	positionals, flags := partition(rest, map[string]bool{"args": true})
+	sf, rest, err := splitFlags(args)
+	if err != nil {
+		return err
+	}
+	positionals, flags, err := partition(rest, map[string]bool{"args": true})
+	if err != nil {
+		return err
+	}
 	if len(positionals) < 1 {
 		return fmt.Errorf("usage: apo-remote call <tool> [--args '<json>']")
 	}
@@ -203,8 +248,14 @@ func cmdCall(args []string) error {
 }
 
 func cmdSearch(args []string) error {
-	sf, rest := splitFlags(args)
-	positionals, flags := partition(rest, map[string]bool{"folder": true, "vault": true, "limit": true})
+	sf, rest, err := splitFlags(args)
+	if err != nil {
+		return err
+	}
+	positionals, flags, err := partition(rest, map[string]bool{"folder": true, "vault": true, "limit": true})
+	if err != nil {
+		return err
+	}
 	if len(positionals) < 1 {
 		return fmt.Errorf("usage: apo-remote search <query> [--folder F] [--vault V] [--limit N]")
 	}
@@ -228,8 +279,14 @@ func cmdSearch(args []string) error {
 }
 
 func cmdRead(args []string) error {
-	sf, rest := splitFlags(args)
-	positionals, flags := partition(rest, map[string]bool{"heading": true})
+	sf, rest, err := splitFlags(args)
+	if err != nil {
+		return err
+	}
+	positionals, flags, err := partition(rest, map[string]bool{"heading": true})
+	if err != nil {
+		return err
+	}
 	if len(positionals) < 1 {
 		return fmt.Errorf("usage: apo-remote read <path> [--heading H]")
 	}
@@ -247,9 +304,15 @@ func cmdRead(args []string) error {
 // own default: this never conjures a new note out of a typo'd path unless
 // asked to.
 func cmdAppend(args []string) error {
-	sf, rest := splitFlags(args)
+	sf, rest, err := splitFlags(args)
+	if err != nil {
+		return err
+	}
 	create, rest := hasBoolFlag(rest, "create")
-	positionals, flags := partition(rest, map[string]bool{"heading": true, "chunk-hash": true, "vault": true, "position": true})
+	positionals, flags, err := partition(rest, map[string]bool{"heading": true, "chunk-hash": true, "vault": true, "position": true})
+	if err != nil {
+		return err
+	}
 	if len(positionals) < 1 {
 		return fmt.Errorf("usage: cmd | apo-remote append <path> [--heading H] [--chunk-hash C] [--vault V] [--position start|end] [--create]")
 	}
@@ -310,25 +373,29 @@ func hasBoolFlag(args []string, name string) (bool, []string) {
 // forms (see splitEq). valueFlags names which "--name" flags consume a
 // value; every other "--"-prefixed token or bare token is treated as
 // positional.
-func partition(args []string, valueFlags map[string]bool) (positionals []string, flags map[string]string) {
+func partition(args []string, valueFlags map[string]bool) (positionals []string, flags map[string]string, err error) {
 	flags = map[string]string{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		head, val, hasEq := splitEq(a)
 		if name, ok := strings.CutPrefix(head, "--"); ok && valueFlags[name] {
 			if hasEq {
+				if val == "" {
+					return nil, nil, fmt.Errorf("--%s requires a non-empty value", name)
+				}
 				flags[name] = val
 				continue
 			}
-			if i+1 < len(args) {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
 				flags[name] = args[i+1]
 				i++
 				continue
 			}
+			return nil, nil, fmt.Errorf("--%s requires a value", name)
 		}
 		positionals = append(positionals, a)
 	}
-	return positionals, flags
+	return positionals, flags, nil
 }
 
 func callAndPrint(sf serverFlags, tool string, toolArgs map[string]any) error {

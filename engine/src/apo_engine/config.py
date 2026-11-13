@@ -12,6 +12,18 @@ def _path(env: str, default: str) -> Path:
     return Path(os.environ.get(env, default)).expanduser().resolve()
 
 
+def env_alias(canonical: str, deprecated: str, default: str = "") -> str:
+    """Resolve one canonical/deprecated environment-name migration pair."""
+    new = (os.environ.get(canonical) or "").strip()
+    old = (os.environ.get(deprecated) or "").strip()
+    if new and old and new != old:
+        raise ValueError(
+            f"conflicting configuration: {canonical}={new!r} and deprecated "
+            f"{deprecated}={old!r}; set one value or make both identical"
+        )
+    return new or old or default
+
+
 ENV_TRUTHY = ("1", "true", "yes", "on")
 ENV_FALSY = ("0", "false", "no", "off")
 
@@ -110,7 +122,9 @@ EMBED_WINDOW_OVERLAP: int = int(os.environ.get("APO_EMBED_WINDOW_OVERLAP", "400"
 IGNORE_FILE: Path = _path("APO_IGNORE", str(_ENGINE_ROOT / ".indexignore"))
 
 # Deferred-queue namespace (MCP + watcher).
-COLLECTION: str = os.environ.get("APO_COLLECTION", "notes_global")
+COLLECTION: str = env_alias(
+    "APO_RUNTIME_COLLECTION", "APO_COLLECTION", "notes_global"
+)
 
 # Default wiki path convention for agents (defuddle → write_note); not an MCP tool knob.
 INGEST_DIR: str = os.environ.get("APO_INGEST_DIR", "resources/wiki")

@@ -94,7 +94,7 @@ def _runtime_config_path() -> Path:
         return Path(explicit).expanduser()
     # Per-collection override file so multiple server instances (one per vault
     # registration) never clobber each other through a shared runtime file.
-    coll = (os.environ.get("APO_COLLECTION") or "").strip()
+    coll = apo_config.env_alias("APO_RUNTIME_COLLECTION", "APO_COLLECTION")
     base = Path.home() / ".apo"
     return base / (f"mcp-runtime.{coll}.json" if coll else "mcp-runtime.json")
 
@@ -121,12 +121,30 @@ def _pick(overrides: dict, key: str, default: str | None = None) -> str | None:
     return default
 
 
+def _pick_alias(
+    overrides: dict,
+    canonical: str,
+    deprecated: str,
+    default: str | None = None,
+) -> str | None:
+    """Resolve a canonical/deprecated runtime override pair."""
+    new = str(overrides.get(canonical) or "").strip()
+    old = str(overrides.get(deprecated) or "").strip()
+    if new and old and new != old:
+        raise VaultError(
+            f"runtime config conflict: {canonical} and deprecated {deprecated} differ"
+        )
+    if new or old:
+        return new or old
+    return apo_config.env_alias(canonical, deprecated, default or "") or default
+
+
 def _load_deferred(collection: str) -> set[str]:
     return index_deferred.load_index_queue(collection)
 
 
 def _load_vaults() -> None:
-    """(Re)build the vault registry from the discovery env (APO_COLLECTION_ROOT /
+    """(Re)build the vault registry from the discovery env (APO_VAULTS_ROOT /
     APO_VAULT_PATHS, legacy APO_VAULTS, or single-root env).
 
     Each vault has its own NOTES_ROOT, INDEX_PATH, and deferred COLLECTION.
@@ -148,7 +166,12 @@ def _load_vaults() -> None:
     for name, b in bindings.items():
         coll = b.collection
         if name == default_name:
-            coll = _pick(overrides, "APO_COLLECTION", coll) or coll
+            coll = _pick_alias(
+                overrides,
+                "APO_RUNTIME_COLLECTION",
+                "APO_COLLECTION",
+                coll,
+            ) or coll
         VAULTS[name] = Vault(
             binding=dc_replace(b, collection=coll),
             ingest_dir=ingest,
@@ -248,7 +271,7 @@ def _metrics_vault_for_args(args: dict[str, Any]) -> tuple[str, Path | None, str
         if dv is not None:
             return dv.name, dv.root, dv.collection
     root_s = os.environ.get("APO_NOTES_ROOT", "").strip()
-    coll = (os.environ.get("APO_COLLECTION") or "").strip() or key or "default"
+    coll = apo_config.env_alias("APO_RUNTIME_COLLECTION", "APO_COLLECTION") or key or "default"
     return key, Path(root_s).expanduser() if root_s else None, coll
 
 

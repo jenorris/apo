@@ -5,7 +5,7 @@
 #   APO_RERANK=1 just search-eval --file ~/.apo/search-eval.yaml   # A/B the reranker
 #
 # Scoring: hit@k (any expected path in top k) and MRR@k, through the same
-# ops.search path MCP/RPC clients use. Aim for 20-30 queries you actually ask.
+# ops.search path MCP clients use. Aim for 20-30 queries you actually ask.
 
 vault: ""   # optional vault_id from the registry; empty = default vault
 k: 5

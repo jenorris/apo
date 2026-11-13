@@ -139,6 +139,16 @@ def _index_vault_impl(
             continue
         if _embed_retry_backoff_active(db, rel, h):
             continue
+        from apo_engine.note_format import is_json_catalog, parse_json_object
+
+        json_data = parse_json_object(text) if is_json_catalog(rel) else None
+        if is_json_catalog(rel) and json_data is None:
+            _delete_path(db, rel)
+            db.execute("DELETE FROM files WHERE path=?", (rel,))
+            if prev:
+                stats.removed += 1
+            continue
+
         # Unconditional: a file whose embed keeps failing never gets stamped into
         # `files` (by design, see below), so it looks "added" on every scan forever —
         # without this, its backlinks rows never get cleared and pile up unbounded.
@@ -150,9 +160,30 @@ def _index_vault_impl(
             stats.changed += 1
         else:
             stats.added += 1
-        from apo_engine.note_format import chunk_yaml_note, is_mmd_note, is_yaml_note, parse_yaml_document
+        from apo_engine.note_format import (
+            chunk_json_note,
+            chunk_yaml_note,
+            is_json_catalog,
+            is_mmd_note,
+            is_yaml_note,
+            parse_yaml_document,
+        )
 
-        if is_yaml_note(rel):
+        if is_json_catalog(rel):
+            assert json_data is not None
+            fm_json = json.dumps(json_data, ensure_ascii=False, default=str)
+            id_prefix = f"json:{rel}"
+            note_rows = []
+            for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
+                chunk_json_note(text, rel, json_data)
+            ):
+                chash = _content_hash(ctext)
+                chunk_id = compute_chunk_id(id_prefix, start_line, end_line, chash, config.MODEL_NAME)
+                note_rows.append(
+                    (rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id, chash,
+                     len(ctext.encode("utf-8")), None)
+                )
+        elif is_yaml_note(rel):
             fm = parse_yaml_document(text) or {}
             id_prefix = f"yaml:{rel}"
             fm_json = json.dumps(fm, default=str)
@@ -185,7 +216,8 @@ def _index_vault_impl(
                     config.SECTION_WARN_BYTES,
                 )
             pending.append(row)
-        _insert_links(db, rel, _note_links(rel, text, fm_json, known_vaults=known_vaults))
+        if not is_json_catalog(rel):
+            _insert_links(db, rel, _note_links(rel, text, fm_json, known_vaults=known_vaults))
         link_sources.append(rel)
         file_stamps.append((rel, st.st_mtime, h, fm_json, st.st_size))
 
@@ -353,9 +385,33 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
             file_bytes=file_bytes,
             text=text,
         )
-        from apo_engine.note_format import chunk_yaml_note, is_mmd_note, is_yaml_note, parse_yaml_document
+        from apo_engine.note_format import (
+            chunk_json_note,
+            chunk_yaml_note,
+            is_json_catalog,
+            is_mmd_note,
+            is_yaml_note,
+            parse_json_object,
+            parse_yaml_document,
+        )
 
-        if is_yaml_note(rel):
+        if is_json_catalog(rel):
+            data = parse_json_object(text)
+            if data is None:
+                purge_rels.append(rel)
+                continue
+            plan.frontmatter_json = json.dumps(data, ensure_ascii=False, default=str)
+            id_prefix = f"json:{plan.rel}"
+            for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
+                chunk_json_note(text, rel, data)
+            ):
+                body_hash = _content_hash(ctext)
+                chunk_id = compute_chunk_id(id_prefix, start_line, end_line, body_hash, config.MODEL_NAME)
+                plan.pending.append(
+                    (plan.rel, ordi, heading, ctext, start_line, end_line, hlevel, chunk_id,
+                     body_hash, len(ctext.encode("utf-8")), None)
+                )
+        elif is_yaml_note(rel):
             fm = parse_yaml_document(text) or {}
             id_prefix = f"yaml:{plan.rel}"
             plan.frontmatter_json = json.dumps(fm, default=str)
@@ -374,7 +430,8 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
         else:
             plan.frontmatter_json = note_catalog_json(text, rel)
             plan.pending.extend(_markdown_chunk_rows(text, rel))
-        plan.links = _note_links(rel, text, plan.frontmatter_json, known_vaults=known_vaults)
+        if not is_json_catalog(rel):
+            plan.links = _note_links(rel, text, plan.frontmatter_json, known_vaults=known_vaults)
         plans.append(plan)
 
     active = plans
@@ -486,7 +543,7 @@ def reembed_one(rel: str, *, verbose: bool = False) -> int:
     Named entry point for the sole index-writer (watch / CLI). Delegates to
     :func:`index_files`, which reuses per-chunk vectors by ``content_hash`` — so a
     one-cell table edit re-embeds only the changed ``table_row`` chunk, not the whole
-    table. MCP/RPC must never call this; they enqueue the path and let the watcher run.
+    table. MCP handlers must never call this; they enqueue the path and let the watcher run.
     """
     return index_files([vaults.notes_root() / rel], verbose=verbose)
 

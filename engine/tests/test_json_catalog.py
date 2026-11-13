@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-from apo_engine import okf, ops
+from apo_engine import config, core, deferred, okf, ops, vaults
 from apo_engine.json_patch import apply_json_patch
 from apo_engine.markdown_patch import PatchError
 
@@ -48,7 +51,6 @@ class JsonCatalogBase(unittest.TestCase):
             encoding="utf-8",
         )
         os.environ["APO_VAULTS"] = str(self.vaults_file)
-        # Pin the deliberate "JSON is not an index citizen" decision.
         self._enqueued: list[Path] = []
         self._orig_enqueue = ops._enqueue_index
         ops._enqueue_index = lambda b, full: self._enqueued.append(full)
@@ -81,7 +83,15 @@ class JsonWriteTests(JsonCatalogBase):
         self.assertNotIn("---", text)
         self.assertNotIn("okf_type", text)
         self.assertEqual(json.loads(text), {"title": "w", "n": 1})
-        self.assertEqual(self._enqueued, [])
+        self.assertEqual(self._enqueued, [(self.root / "inbox" / "widget.json").resolve()])
+
+    def test_non_object_is_preserved_and_enqueued_for_purge(self):
+        raw = '[1,  2]\n'
+        out = ops.write_note("inbox/list.json", raw, vault="meta")
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["index_status"], "unsupported_json_top_level")
+        self.assertEqual((self.root / "inbox/list.json").read_text(), raw)
+        self.assertEqual(self._enqueued, [(self.root / "inbox" / "list.json").resolve()])
 
     def test_write_rejects_invalid_json(self):
         out = ops.write_note("inbox/broken.json", '{"broken":', vault="meta")
@@ -151,7 +161,10 @@ class JsonPatchTests(JsonCatalogBase):
         self.assertEqual(data["meta"], {"owner": "jeremy", "code": "007", "count": 7})
         self.assertEqual(data["todos"][1]["status"], "done")
         self.assertNotIn("okf_type", data)
-        self.assertEqual(self._enqueued, [])
+        self.assertEqual(
+            self._enqueued,
+            [(self.root / "inbox" / "widget.json").resolve()] * 2,
+        )
 
     def test_patch_cas_guard(self):
         w = self._write()
@@ -228,6 +241,131 @@ class ApplyJsonPatchUnitTests(unittest.TestCase):
         with self.assertRaises(PatchError) as ctx:
             apply_json_patch('{"broken":', [{"op": "set_field", "field": "a", "value": 1}])
         self.assertEqual(ctx.exception.code, "invalid_json")
+
+
+class JsonIndexLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="apo-json-index-")).resolve()
+        self.vault = self.tmp / "vault"
+        self.vault.mkdir()
+        self._saved = {
+            k: getattr(config, k)
+            for k in ("NOTES_ROOT", "INDEX_PATH", "IGNORE_FILE")
+        }
+        config.NOTES_ROOT = self.vault
+        config.INDEX_PATH = self.tmp / "index.db"
+        config.IGNORE_FILE = self.tmp / "missing-ignore-file"
+        self._saved_embed = core.embed
+        self._saved_deferred_dir = deferred.DEFERRED_DIR
+        deferred.DEFERRED_DIR = self.tmp / "deferred"
+        self._env = {}
+        for key in (
+            "APO_VAULTS",
+            "APO_VAULT_PATHS",
+            "APO_VAULTS_ROOT",
+            "APO_COLLECTION_ROOT",
+        ):
+            self._env[key] = os.environ.pop(key, None)
+        vaults.invalidate_bindings_cache()
+
+        def fake_embed(texts, **_kwargs):
+            out = []
+            for text in texts:
+                vec = [0.0] * 16
+                for token in re.findall(r"\w+", text.lower()):
+                    vec[hash(token) % len(vec)] += 1.0
+                norm = sum(v * v for v in vec) ** 0.5 or 1.0
+                out.append([v / norm for v in vec])
+            return out
+
+        core.embed = fake_embed
+
+    def tearDown(self):
+        core.writer_close()
+        core.reader_close()
+        core.embed = self._saved_embed
+        deferred.DEFERRED_DIR = self._saved_deferred_dir
+        for key, value in self._saved.items():
+            setattr(config, key, value)
+        for key, value in self._env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        vaults.invalidate_bindings_cache()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def write(self, rel: str, raw: str) -> Path:
+        path = self.vault / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(raw, encoding="utf-8")
+        return path
+
+    def test_object_rebuild_filter_search_update_and_purge(self):
+        path = self.write(
+            "records/widget.json",
+            '{"title":"Widget","status":"open","description":"scarlet turbine","nested":{"owner":"Ada"}}',
+        )
+        stats = core.index_vault(rebuild=True, verbose=False)
+        self.assertEqual(stats.added, 1)
+        total, rows = core.filter_notes({"status": "open"}, folder="records")
+        self.assertEqual((total, rows[0][1]), (1, "records/widget.json"))
+        self.assertEqual(rows[0][2]["nested"]["owner"], "Ada")
+        self.assertEqual(core.search("scarlet turbine", folder="records", k=5)[0].path, "records/widget.json")
+
+        path.write_text('{"title":"Widget","status":"closed","description":"violet turbine"}')
+        core.index_file(path)
+        self.assertEqual(core.filter_notes({"status": "closed"})[0], 1)
+
+        path.unlink()
+        core.index_file(path)
+        with sqlite3.connect(config.INDEX_PATH) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM files WHERE path=?", ("records/widget.json",)).fetchone()[0], 0)
+
+    def test_non_object_and_invalid_json_are_omitted_stably(self):
+        array = self.write("records/array.json", "[1,2]\n")
+        invalid = self.write("records/broken.json", '{"a":')
+        core.index_files([array, invalid], verbose=False)
+        with sqlite3.connect(config.INDEX_PATH) as db:
+            paths = {row[0] for row in db.execute("SELECT path FROM files")}
+        self.assertNotIn("records/array.json", paths)
+        self.assertNotIn("records/broken.json", paths)
+
+    def test_object_overwritten_by_array_is_purged_through_queue(self):
+        rel = "records/transition.json"
+        original = '{"title":"Transition","status":"open","description":"copper signal"}'
+        created = ops.write_note(rel, original)
+        self.assertTrue(created["ok"], created)
+        core.process_queues(config.COLLECTION, scan_vault=False, verbose=False)
+        self.assertEqual(core.filter_notes({"status": "open"})[0], 1)
+        self.assertEqual(core.search("copper signal", k=5)[0].path, rel)
+
+        raw_array = '[1,  2]\n'
+        overwritten = ops.write_note(rel, raw_array)
+        self.assertTrue(overwritten["ok"], overwritten)
+        self.assertEqual(overwritten["index_status"], "unsupported_json_top_level")
+        self.assertEqual((self.vault / rel).read_text(encoding="utf-8"), raw_array)
+
+        queued = deferred.load_index_queue(config.COLLECTION)
+        self.assertIn(str((self.vault / rel).resolve()), queued)
+        core.process_queues(config.COLLECTION, scan_vault=False, verbose=False)
+        self.assertEqual(core.filter_notes({"status": "open"})[0], 0)
+        self.assertEqual(core.search("copper signal", k=5), [])
+
+    def test_invalid_overwrite_preserves_object_and_index(self):
+        rel = "records/invalid-transition.json"
+        original = '{"title":"Stable","status":"open","description":"indigo signal"}'
+        created = ops.write_note(rel, original)
+        self.assertTrue(created["ok"], created)
+        core.process_queues(config.COLLECTION, scan_vault=False, verbose=False)
+
+        invalid = ops.write_note(rel, '{"title":')
+        self.assertFalse(invalid["ok"])
+        self.assertEqual(invalid["error"], "validation_failed")
+        self.assertEqual((self.vault / rel).read_text(encoding="utf-8"), original)
+        self.assertEqual(deferred.load_index_queue(config.COLLECTION), set())
+        self.assertEqual(core.filter_notes({"status": "open"})[0], 1)
+        self.assertEqual(core.search("indigo signal", k=5)[0].path, rel)
 
 
 if __name__ == "__main__":

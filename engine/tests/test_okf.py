@@ -391,7 +391,7 @@ class OkfStampTests(unittest.TestCase):
 
 
 class OkfWriteNoteIntegration(unittest.TestCase):
-    """Exercise the shared ops.write_note path (MCP + RPC façade) with a temp vault + contract."""
+    """Exercise the shared ops.write_note path with a temp vault and contract."""
 
     def setUp(self):
         okf.clear_contract_cache()

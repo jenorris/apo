@@ -164,7 +164,7 @@ class _VaultRepoCase(unittest.TestCase):
 
 class GitSyncRepoTest(_VaultRepoCase):
     def test_status_reports_sync_enabled(self):
-        # Ported from the deleted RPC-transport test — enabled-contract case
+        # Enabled-contract regression case.
         # (test_sync_disabled_status below covers the disabled case).
         out = ops.git_sync_op("status")
         self.assertTrue(out["ok"], msg=out)

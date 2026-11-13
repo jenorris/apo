@@ -949,7 +949,7 @@ def run_action(
     *,
     message: str | None = None,
 ) -> dict[str, Any]:
-    """MCP/RPC entry: status | run | pull | rebase | clear_block."""
+    """MCP entry: status | run | pull | rebase | clear_block."""
     with _lock_for(vault_root):
         if action == "status":
             st = read_status(vault_root)

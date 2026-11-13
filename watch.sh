@@ -17,18 +17,22 @@ ENV_FILE="${SCRIPT_DIR}/.env"
 # watch.sh start`) must win over whatever .env also sets.
 _SAVED_APO_VAULTS="${APO_VAULTS-}"
 _SAVED_APO_VAULT_PATHS="${APO_VAULT_PATHS-}"
+_SAVED_APO_VAULTS_ROOT="${APO_VAULTS_ROOT-}"
 _SAVED_APO_COLLECTION_ROOT="${APO_COLLECTION_ROOT-}"
 _SAVED_APO_DEFAULT_VAULT="${APO_DEFAULT_VAULT-}"
 _SAVED_APO_NOTES_ROOT="${APO_NOTES_ROOT-}"
 _SAVED_APO_INDEX="${APO_INDEX-}"
 _SAVED_APO_COLLECTION="${APO_COLLECTION-}"
+_SAVED_APO_RUNTIME_COLLECTION="${APO_RUNTIME_COLLECTION-}"
 _HAD_APO_VAULTS=0; [[ -n "${APO_VAULTS+x}" ]] && _HAD_APO_VAULTS=1
 _HAD_APO_VAULT_PATHS=0; [[ -n "${APO_VAULT_PATHS+x}" ]] && _HAD_APO_VAULT_PATHS=1
+_HAD_APO_VAULTS_ROOT=0; [[ -n "${APO_VAULTS_ROOT+x}" ]] && _HAD_APO_VAULTS_ROOT=1
 _HAD_APO_COLLECTION_ROOT=0; [[ -n "${APO_COLLECTION_ROOT+x}" ]] && _HAD_APO_COLLECTION_ROOT=1
 _HAD_APO_DEFAULT_VAULT=0; [[ -n "${APO_DEFAULT_VAULT+x}" ]] && _HAD_APO_DEFAULT_VAULT=1
 _HAD_APO_NOTES_ROOT=0; [[ -n "${APO_NOTES_ROOT+x}" ]] && _HAD_APO_NOTES_ROOT=1
 _HAD_APO_INDEX=0; [[ -n "${APO_INDEX+x}" ]] && _HAD_APO_INDEX=1
 _HAD_APO_COLLECTION=0; [[ -n "${APO_COLLECTION+x}" ]] && _HAD_APO_COLLECTION=1
+_HAD_APO_RUNTIME_COLLECTION=0; [[ -n "${APO_RUNTIME_COLLECTION+x}" ]] && _HAD_APO_RUNTIME_COLLECTION=1
 
 set -a
 # shellcheck source=.env.example
@@ -37,15 +41,27 @@ set +a
 
 (( _HAD_APO_VAULTS )) && export APO_VAULTS="$_SAVED_APO_VAULTS"
 (( _HAD_APO_VAULT_PATHS )) && export APO_VAULT_PATHS="$_SAVED_APO_VAULT_PATHS"
+(( _HAD_APO_VAULTS_ROOT )) && export APO_VAULTS_ROOT="$_SAVED_APO_VAULTS_ROOT"
 (( _HAD_APO_COLLECTION_ROOT )) && export APO_COLLECTION_ROOT="$_SAVED_APO_COLLECTION_ROOT"
 (( _HAD_APO_DEFAULT_VAULT )) && export APO_DEFAULT_VAULT="$_SAVED_APO_DEFAULT_VAULT"
 (( _HAD_APO_NOTES_ROOT )) && export APO_NOTES_ROOT="$_SAVED_APO_NOTES_ROOT"
 (( _HAD_APO_INDEX )) && export APO_INDEX="$_SAVED_APO_INDEX"
 (( _HAD_APO_COLLECTION )) && export APO_COLLECTION="$_SAVED_APO_COLLECTION"
-unset _SAVED_APO_VAULTS _SAVED_APO_VAULT_PATHS _SAVED_APO_COLLECTION_ROOT _SAVED_APO_DEFAULT_VAULT
-unset _SAVED_APO_NOTES_ROOT _SAVED_APO_INDEX _SAVED_APO_COLLECTION
-unset _HAD_APO_VAULTS _HAD_APO_VAULT_PATHS _HAD_APO_COLLECTION_ROOT _HAD_APO_DEFAULT_VAULT
-unset _HAD_APO_NOTES_ROOT _HAD_APO_INDEX _HAD_APO_COLLECTION
+(( _HAD_APO_RUNTIME_COLLECTION )) && export APO_RUNTIME_COLLECTION="$_SAVED_APO_RUNTIME_COLLECTION"
+unset _SAVED_APO_VAULTS _SAVED_APO_VAULT_PATHS _SAVED_APO_VAULTS_ROOT _SAVED_APO_COLLECTION_ROOT _SAVED_APO_DEFAULT_VAULT
+unset _SAVED_APO_NOTES_ROOT _SAVED_APO_INDEX _SAVED_APO_COLLECTION _SAVED_APO_RUNTIME_COLLECTION
+unset _HAD_APO_VAULTS _HAD_APO_VAULT_PATHS _HAD_APO_VAULTS_ROOT _HAD_APO_COLLECTION_ROOT _HAD_APO_DEFAULT_VAULT
+unset _HAD_APO_NOTES_ROOT _HAD_APO_INDEX _HAD_APO_COLLECTION _HAD_APO_RUNTIME_COLLECTION
+
+if [[ -n "${APO_VAULTS_ROOT:-}" && -n "${APO_COLLECTION_ROOT:-}" && "${APO_VAULTS_ROOT}" != "${APO_COLLECTION_ROOT}" ]]; then
+  echo "error: APO_VAULTS_ROOT conflicts with deprecated APO_COLLECTION_ROOT; make both identical" >&2
+  exit 1
+fi
+export APO_VAULTS_ROOT="${APO_VAULTS_ROOT:-${APO_COLLECTION_ROOT:-}}"
+if [[ -n "${APO_RUNTIME_COLLECTION:-}" && -n "${APO_COLLECTION:-}" && "${APO_RUNTIME_COLLECTION}" != "${APO_COLLECTION}" ]]; then
+  echo "error: APO_RUNTIME_COLLECTION conflicts with deprecated APO_COLLECTION; make both identical" >&2
+  exit 1
+fi
 
 APO_ENGINE_BIN="${APO_ENGINE_BIN:-${HOME}/.local/bin/apo-engine}"
 WATCH_PID_DIR="${WATCH_PID_DIR:-${HOME}/.apo}"
@@ -75,11 +91,11 @@ cmd_start() {
     return
   fi
 
-  # Discovery: COLLECTION_ROOT / VAULT_PATHS / compat APO_VAULTS supersede
+  # Discovery: VAULTS_ROOT / VAULT_PATHS / compat APO_VAULTS supersede
   # single-root APO_NOTES_ROOT. MCP and watch must share the same discovery env.
-  if [[ -n "${APO_COLLECTION_ROOT:-}" ]]; then
-    if [[ ! -d "${APO_COLLECTION_ROOT}" ]]; then
-      warn "APO_COLLECTION_ROOT is not a directory: ${APO_COLLECTION_ROOT}"
+  if [[ -n "${APO_VAULTS_ROOT:-}" ]]; then
+    if [[ ! -d "${APO_VAULTS_ROOT}" ]]; then
+      warn "APO_VAULTS_ROOT is not a directory: ${APO_VAULTS_ROOT}"
       return 1
     fi
   elif [[ -n "${APO_VAULT_PATHS:-}" ]]; then
@@ -94,7 +110,7 @@ cmd_start() {
     return 1
   fi
 
-  local label="${APO_COLLECTION_ROOT:-${APO_VAULT_PATHS:-${APO_VAULTS:-${APO_NOTES_ROOT}}}}"
+  local label="${APO_VAULTS_ROOT:-${APO_VAULT_PATHS:-${APO_VAULTS:-${APO_NOTES_ROOT}}}}"
   info "Starting watcher for ${label} (interval ${WATCH_INTERVAL}s)..."
 
   # Double-fork into a new session so Cursor/agent shell teardown cannot
@@ -154,7 +170,7 @@ cmd_status() {
     success "Watcher RUNNING (PID $(cat "$PID_FILE"))"
     info "  log: ${WATCH_PID_DIR}/watch.log (startup/crash-only: $LOG_FILE)"
     info "  vault: ${APO_NOTES_ROOT:-unset}"
-    [[ -n "${APO_COLLECTION_ROOT:-}" ]] && info "  APO_COLLECTION_ROOT: ${APO_COLLECTION_ROOT}"
+    [[ -n "${APO_VAULTS_ROOT:-}" ]] && info "  APO_VAULTS_ROOT: ${APO_VAULTS_ROOT}"
     [[ -n "${APO_VAULT_PATHS:-}" ]] && info "  APO_VAULT_PATHS: ${APO_VAULT_PATHS}"
     [[ -n "${APO_DEFAULT_VAULT:-}" ]] && info "  APO_DEFAULT_VAULT: ${APO_DEFAULT_VAULT}"
     [[ -n "${APO_VAULTS:-}" ]] && info "  APO_VAULTS (read-only vaults): ${APO_VAULTS}"

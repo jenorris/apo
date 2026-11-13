@@ -1,4 +1,4 @@
-"""Agent-facing arg aliases and note slicing — shared by MCP + local RPC ops."""
+"""Agent-facing argument aliases and note slicing shared by public operations."""
 
 from __future__ import annotations
 

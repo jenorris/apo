@@ -187,7 +187,7 @@ def telemetry(
     tool: str | None = None,
     conversation_id: str | None = None,
 ) -> dict[str, Any]:
-    """Deprecated RPC shim — use vault_stats for efficiency habits."""
+    """Deprecated compatibility shim — use vault_stats for efficiency habits."""
     del surface, tool, conversation_id
     act = (action or "efficiency").strip().lower()
     if act in ("efficiency", "stats"):

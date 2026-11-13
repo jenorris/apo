@@ -1,7 +1,7 @@
 # patch_note ops (agent UX)
 
 Discriminated union on `op`. Files are source of truth; this document is the
-wire contract for MCP / RPC clients.
+wire contract for MCP clients.
 
 **Alias freeze:** keep existing aliases (`target`≡`heading`, top-level
 `heading`≡`scope.heading`, `limit`≡`top_k`, `filters`≡`where`,

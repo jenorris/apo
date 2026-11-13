@@ -33,7 +33,7 @@ Cross-compile for another platform by setting `GOOS`/`GOARCH` (e.g.
 ## Usage
 
 ```bash
-export APO_SERVER_URL=http://127.0.0.1:8878/mcp   # or --server, per-invocation
+export APO_MCP_URL=http://127.0.0.1:8878/mcp   # or --server-url, per invocation
 
 apo-remote tools                                          # list what the server exposes
 apo-remote search "kitchen lights" --folder areas --limit 5
@@ -74,18 +74,22 @@ that note.
 
 ## Auth
 
-`--token` / `APO_TOKEN` sets a bearer token on every request — for an
+`--bearer-token` / `APO_MCP_TOKEN` sets a bearer token on every request — for an
 `APO_MCP_AUTH=google`-gated instance (see
 `../engine/docs/systemd/apo-desma-mcp.service.example`), pass whatever OIDC
 ID token that deployment's flow produces. Unset for the common case: a
 loopback or tailnet-only server with no auth configured.
+
+For one migration window, `--server` / `APO_SERVER_URL` and
+`--token` / `APO_TOKEN` remain deprecated aliases. Matching old/new values
+are accepted. Conflicting values fail with an actionable error.
 
 ## Design notes
 
 - **Official SDK, not hand-rolled protocol.** Uses
   `github.com/modelcontextprotocol/go-sdk`, maintained in collaboration with
   Google — reduces the risk of protocol drift as the MCP spec evolves,
-  versus reimplementing streamable-HTTP JSON-RPC framing by hand.
+  versus reimplementing streamable-HTTP protocol framing by hand.
 - **No CLI framework.** Flag parsing is a small hand-rolled partitioner (see
   `partition` in `main.go`) rather than a dependency like cobra — stdlib's
   own `flag` package can't handle a flag placed after a positional argument

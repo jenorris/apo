@@ -37,7 +37,7 @@ class PathDebouncerTest(unittest.TestCase):
 
 
 class EventPathNoiseTest(unittest.TestCase):
-    def test_skips_obsidian_and_non_md(self):
+    def test_skips_noise_and_accepts_catalog_json(self):
         root = Path("/vault")
         ignore = core._compile_ignore([".obsidian/*", "templates/*"])
         self.assertTrue(
@@ -45,6 +45,7 @@ class EventPathNoiseTest(unittest.TestCase):
         )
         self.assertTrue(_event_path_noise("/vault/note.txt", root, ignore))
         self.assertFalse(_event_path_noise("/vault/inbox/a.md", root, ignore))
+        self.assertFalse(_event_path_noise("/vault/records/a.json", root, ignore))
         self.assertTrue(_event_path_noise("/vault/templates/x.md", root, ignore))
 
 

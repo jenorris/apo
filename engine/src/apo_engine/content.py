@@ -129,7 +129,13 @@ def note_frontmatter(text: str, path: str | Path | None = None) -> dict | None:
 
 def note_catalog_json(text: str, rel: str, mtime: float | None = None) -> str | None:
     """JSON for ``files.frontmatter``. Empty mapping stores ``{}`` (not NULL)."""
-    from apo_engine.note_format import is_mmd_note, is_yaml_note, parse_yaml_document
+    from apo_engine.note_format import (
+        is_json_catalog,
+        is_mmd_note,
+        is_yaml_note,
+        parse_json_object,
+        parse_yaml_document,
+    )
 
     if is_mmd_note(rel):
         from apo_engine.mermaid_index import merge_frontmatter_for_mmd
@@ -140,6 +146,11 @@ def note_catalog_json(text: str, rel: str, mtime: float | None = None) -> str | 
         if fm is None:
             return None
         return json.dumps(fm, default=str)
+    if is_json_catalog(rel):
+        data = parse_json_object(text)
+        if data is None:
+            return None
+        return json.dumps(data, ensure_ascii=False, default=str)
     if not _FRONTMATTER_YAML.match(text):
         return None
     fm = _parse_frontmatter(text)

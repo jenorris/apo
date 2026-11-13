@@ -124,11 +124,11 @@ class TocReadTest(unittest.TestCase):
         self.assertEqual(len(out["table"]["rows"]), 2)
 
     def test_unquoted_date_frontmatter_is_native_and_json_serializable_with_default_str(self):
-        """Ported from the deleted rpc.py HTTP regression test.
+        """Preserve structured payloads through the current tool backend.
 
         An unquoted `timestamp: 2026-08-12` in frontmatter loads via PyYAML as a
         native `datetime.date`/`datetime.datetime` — ops.read_note() does not
-        coerce it to a string (that was rpc.py's own `_json_default` job, done
+        coerce it to a string (wire serialization handles that
         only at its HTTP JSON-encoding boundary). Any caller serializing this
         result to JSON — `apo-local`/`apo`'s `_print_json` (cli_ops.py), the
         optima-merge JSON path (cli.py) — already passes `default=str`, which

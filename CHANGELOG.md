@@ -4,6 +4,28 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- Top-level JSON objects are first-class catalog records. The watcher, direct
+  index path, rebuild, search, filter, update, purge, and Git-ref catalog use
+  the same object-only rule. Raw JSON writes remain byte-for-byte unchanged
+  and never receive frontmatter or OKF stamps. Arrays and scalars remain valid
+  stored payloads but report `unsupported_json_top_level` and are not indexed.
+- Canonical configuration names: `APO_VAULTS_ROOT` / `--vaults-root`,
+  `APO_RUNTIME_COLLECTION`, and Go client `APO_MCP_URL` / `--server-url` plus
+  `APO_MCP_TOKEN` / `--bearer-token`.
+- A Go 1.25 CI job runs `go test ./...` in `client/`.
+- `docs/glossary.md` defines the current vault and catalog vocabulary.
+
+### Migration
+
+- `APO_COLLECTION_ROOT` / `--collection-root`, `APO_COLLECTION`,
+  `APO_SERVER_URL` / `--server`, and `APO_TOKEN` / `--token` remain deprecated
+  aliases for one migration window. Matching canonical and deprecated values
+  are accepted. Conflicts fail instead of choosing one silently.
+- Active documentation and code comments now use MCP vocabulary. Historical
+  transport details remain in this changelog and `docs/local-rpc.md`.
+
 ## [0.36.0] — 2026-11-05
 
 Apo now speaks the 2026-07-28 MCP protocol, can confine a token client to a

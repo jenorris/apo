@@ -225,7 +225,7 @@ def run_watch(
 ) -> None:
     """Watch one or more vaults; consume deferred/purge queues; index incrementally.
 
-    Multi-vault discovery (``APO_COLLECTION_ROOT`` / ``APO_VAULT_PATHS`` /
+    Multi-vault discovery (``APO_VAULTS_ROOT`` / ``APO_VAULT_PATHS`` /
     ``APO_VAULTS`` shim): one watcher thread per vault. The supervisor re-reads
     the registry on ``wake-registry``, registry/collection-root mtime, and
     **hot-adds** / **soft-removes** vaults without a full process restart.

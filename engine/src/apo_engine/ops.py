@@ -214,7 +214,7 @@ def _resolve_binding_and_rel(
     """Peel optional ``vault_id:rel`` prefix; gate vault_id to process registry.
 
     Mutating and path-bearing ops use this so writes cannot target vaults outside
-    the MCP/RPC process bindings. ``write=True`` additionally rejects a vault
+    the MCP process bindings. ``write=True`` additionally rejects a vault
     mounted read-only, same gate as ``_binding(..., write=True)``.
     """
     default, bindings = vaults.load_bindings()
@@ -2978,12 +2978,11 @@ def write_note(
                 flaws=mflaws,
             )
 
-    # ``.json`` is a raw catalog: whole-file CAS, no OKF stamp / frontmatter
-    # wrapper, and no index enqueue (the indexer's walk never yields .json, so
-    # enqueuing would leave rows a full reindex would not reproduce).
+    # ``.json`` is always written exactly as supplied: whole-file CAS and no
+    # OKF/frontmatter wrapper. Only top-level objects are catalog records.
     if is_json_catalog(path):
         try:
-            json.loads(content)
+            json_value = json.loads(content)
         except json.JSONDecodeError as e:
             return _err(
                 path=path,
@@ -3008,6 +3007,9 @@ def write_note(
         existed = full.exists()
         full.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(full, content)
+        # Enqueue every valid JSON change. The indexer catalogs objects and
+        # purges a formerly indexed object when it becomes an array or scalar.
+        _enqueue_index(b, full)
         out = {
             "ok": True,
             "path": path,
@@ -3018,6 +3020,9 @@ def write_note(
             "catalog_format": "json",
             "tip": "raw catalog write (no OKF frontmatter wrapper)",
         }
+        if not isinstance(json_value, dict):
+            out["index_status"] = "unsupported_json_top_level"
+            out["index_reason"] = "only top-level JSON objects are catalog records"
         attach_region_hashes(out, content)
         out = _finalize_write(
             out,
@@ -3866,9 +3871,10 @@ def patch_note(
     okf_meta: dict[str, Any] = {}
     write_flaws: list[dict[str, Any]] = []
     if is_json_catalog(path):
-        # Raw catalog: no OKF stamp, no lint auto-fix, no index enqueue (same
-        # treatment as the write_note .json branch).
+        # Raw catalog: no OKF stamp or lint auto-fix. JSON patching only accepts
+        # objects, so every successful mutation remains an indexable record.
         atomic_write_text(full, to_write)
+        _enqueue_index(b, full)
     else:
         okf = apo_okf.process_concept(
             vault_root=root,

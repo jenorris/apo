@@ -7,6 +7,18 @@ on:
   pull_request:
 
 jobs:
+  go-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache-dependency-path: client/go.sum
+      - name: Test Go client
+        working-directory: client
+        run: go test ./...
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -57,3 +69,6 @@ jobs:
 
       - name: Check public facts
         run: engine/.venv/bin/python scripts/check_public_facts.py
+
+      - name: Check stale vocabulary
+        run: engine/.venv/bin/python scripts/check_stale_vocabulary.py

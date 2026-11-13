@@ -20,7 +20,7 @@ def shape_search_hits(
     layout: dict[str, str] | None = None,
     explain: bool = False,
 ) -> list[dict]:
-    """Vault-relative rows for MCP / RPC — no Path.resolve() on the event loop."""
+    """Vault-relative rows for MCP — no Path.resolve() on the event loop."""
     rows: list[dict] = []
     layout = layout or {}
     for h in hits:

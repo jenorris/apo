@@ -156,3 +156,7 @@ tool-list:
 # Verify README and Just MCP counts against the live server registry.
 check-public-facts:
     {{mcp_py}} scripts/check_public_facts.py
+
+# Reject retired transport and command vocabulary outside historical docs.
+check-stale-vocabulary:
+    {{mcp_py}} scripts/check_stale_vocabulary.py

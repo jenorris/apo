@@ -66,6 +66,10 @@ class GitCatalogOpsTest(unittest.TestCase):
             "title: Catalog\nokf_type: concept\nstatus: active\n",
             encoding="utf-8",
         )
+        (self.vault / "catalog.json").write_text(
+            '{"title":"JSON Catalog","okf_type":"concept","status":"active","description":"amber relay"}',
+            encoding="utf-8",
+        )
         schemas = self.vault / "system" / "contracts"
         schemas.mkdir(parents=True)
         (schemas / "git-contract.schema.yaml").write_text(
@@ -246,6 +250,14 @@ class GitCatalogOpsTest(unittest.TestCase):
                 )
             }
         self.assertTrue({"ref_trees", "ref_files", "ref_fts"} <= names)
+
+    def test_ref_catalog_includes_json_objects(self):
+        filtered = ops.filter_notes({"title": "JSON Catalog"}, ref="feature/demo")
+        self.assertTrue(filtered["ok"], filtered)
+        self.assertEqual(filtered["notes"][0]["path"], "catalog.json")
+        searched = ops.search("amber relay", ref="feature/demo")
+        self.assertTrue(searched["ok"], searched)
+        self.assertEqual(searched["results"][0]["source"], "catalog.json")
 
     def test_ref_catalog_does_not_use_core_writer_connection(self):
         with mock.patch.object(

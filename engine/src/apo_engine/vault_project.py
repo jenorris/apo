@@ -174,7 +174,7 @@ def scope_desk_overlay(desk: dict[str, Any], vaults: dict[str, Any]) -> dict[str
     """Trim desk ``role_notes`` / ``pointers`` to vaults present in the active registry.
 
     Active vaults come from the merge ``vaults`` dict (the discovery
-    registry — APO_COLLECTION_ROOT / APO_VAULT_PATHS, or legacy APO_VAULTS — filtered
+    registry — APO_VAULTS_ROOT / APO_VAULT_PATHS, or legacy APO_VAULTS — filtered
     by ``vaults=``).
     Each binding carries a ``collection``; scoping is by vault name and assigned role.
     """
@@ -415,7 +415,7 @@ def compile_write_grammar(
     ``write`` carries ``target``/``okf-type`` (it's creating a note under a
     known vault taxonomy); ``append``/``patch``/``replace`` address an
     *existing* note by ``path`` alone, matching the real write/append/patch
-    RPC endpoints — a folder slot there would be redundant with, and could
+    retired endpoints — a folder slot there would be redundant with, and could
     disagree with, ``path``. Deliberately has no ``tags`` or ``vault`` slot:
     Apo has no authoritative controlled tag vocabulary to enumerate, and a
     grammar is compiled for one already-chosen vault at a time — mixing

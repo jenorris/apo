@@ -45,13 +45,13 @@ class IntegrationsFormatTest(unittest.TestCase):
 class WriteHabitsProjectTest(unittest.TestCase):
     def test_normalize_note_types_empty_uses_floor(self):
         listed, warnings = vault_project.normalize_note_types(None)
-        self.assertEqual(listed, [".md", ".mmd", ".yaml", ".yml"])
+        self.assertEqual(listed, [".json", ".md", ".mmd", ".yaml", ".yml"])
         self.assertEqual(warnings, [])
 
     def test_normalize_note_types_clamps_superset(self):
         listed, warnings = vault_project.normalize_note_types([".md", ".json", ".py"])
-        self.assertEqual(listed, [".md"])
-        self.assertTrue(any(".json" in w for w in warnings))
+        self.assertEqual(listed, [".json", ".md"])
+        self.assertFalse(any(".json" in w for w in warnings))
         self.assertTrue(any(".py" in w for w in warnings))
 
     def test_format_contribution_line_includes_note_types(self):
