@@ -39,6 +39,8 @@ from . import content, chunking, embeddings, index_db, link_index, retrieval
 from . import ranking
 
 _OWNED_MODULES = (content, chunking, embeddings, index_db, link_index, retrieval)
+# Full-vault scans embed + stamp in groups of about this many chunks (bounds peak memory).
+_VAULT_FLUSH_CHUNKS = 2000
 
 def _embed_commit_batch() -> int:
     try:
@@ -107,6 +109,44 @@ def _index_vault_impl(
     known_vaults = _known_vault_ids()
     link_sources: list[str] = []
     removed_paths: list[str] = []
+    dropped: set[str] = set()
+    stamped = 0
+    any_pending = False
+
+    def _flush(db: sqlite3.Connection) -> None:
+        nonlocal stamped
+        # A file's chunks never straddle two flushes, so per-group drop handling matches
+        # the old whole-vault pass.
+        db.commit()
+        group_dropped: set[str] = set()
+        if pending:
+            chunks, group_dropped = _embed_and_store_pending(db, pending, verbose=verbose)
+            stats.chunks += chunks
+            dropped.update(group_dropped)
+        plans_by_rel = {
+            rel: _EmbedDropPlan(mtime, h, fm_json, file_bytes)
+            for rel, mtime, h, fm_json, file_bytes in file_stamps
+        }
+        quarantined = (
+            _record_embed_drops(db, group_dropped, plans_by_rel, verbose=verbose)
+            if group_dropped
+            else set()
+        )
+        for rel, mtime, h, fm_json, file_bytes in file_stamps:
+            if rel in group_dropped:
+                if rel not in quarantined:
+                    if rel in known:
+                        stats.changed = max(0, stats.changed - 1)
+                    else:
+                        stats.added = max(0, stats.added - 1)
+                continue
+            db.execute(
+                "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter, bytes) VALUES (?,?,?,?,?)",
+                (rel, mtime, h, fm_json, file_bytes),
+            )
+            stamped += 1
+        pending.clear()
+        file_stamps.clear()
 
     # Stream paths — avoid materializing the full vault path list in memory.
     notes_iter = _iter_notes(root, ignore)
@@ -220,6 +260,9 @@ def _index_vault_impl(
             _insert_links(db, rel, _note_links(rel, text, fm_json, known_vaults=known_vaults))
         link_sources.append(rel)
         file_stamps.append((rel, st.st_mtime, h, fm_json, st.st_size))
+        any_pending = any_pending or bool(note_rows)
+        if len(pending) >= _VAULT_FLUSH_CHUNKS:
+            _flush(db)
 
     if limit is None:
         for rel in list(known):
@@ -229,39 +272,18 @@ def _index_vault_impl(
                 removed_paths.append(rel)
                 stats.removed += 1
 
-    work_done = bool(pending) or stats.removed > 0 or stats.added > 0 or stats.changed > 0
+    work_done = any_pending or stats.removed > 0 or stats.added > 0 or stats.changed > 0
     if work_done or mtime_refreshed:
         db.commit()
 
-    dropped: set[str] = set()
-    if pending:
-        stats.chunks, dropped = _embed_and_store_pending(db, pending, verbose=verbose)
-    plans_by_rel = {
-        rel: _EmbedDropPlan(mtime, h, fm_json, file_bytes)
-        for rel, mtime, h, fm_json, file_bytes in file_stamps
-    }
-    quarantined = _record_embed_drops(db, dropped, plans_by_rel, verbose=verbose) if dropped else set()
-    stamped = 0
-    for rel, mtime, h, fm_json, file_bytes in file_stamps:
-        if rel in dropped:
-            if rel not in quarantined:
-                if rel in known:
-                    stats.changed = max(0, stats.changed - 1)
-                else:
-                    stats.added = max(0, stats.added - 1)
-            continue
-        db.execute(
-            "INSERT OR REPLACE INTO files(path, mtime, hash, frontmatter, bytes) VALUES (?,?,?,?,?)",
-            (rel, mtime, h, fm_json, file_bytes),
-        )
-        stamped += 1
+    _flush(db)
     if rebuild:
         resolve_links(db)
         _mark_links_current(db)
     elif link_sources or removed_paths:
         resolve_links(db, sources=link_sources, paths=link_sources + removed_paths)
     if stamped or dropped or work_done or mtime_refreshed or rebuild:
-        _finalize_index_writes(db)
+        _finalize_index_writes(db, optimize=rebuild)
 
     stats.seconds = time.time() - t0
     return stats

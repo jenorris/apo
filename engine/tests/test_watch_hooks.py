@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import inspect
+import queue
 import tempfile
 import threading
 import time
-import inspect
+from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
-from apo_engine import optima_merge, watch, watch_health
+from apo_engine import config, core, deferred, optima_merge, vaults, watch, watch_health
+from apo_engine.index_models import QueueStats
 from apo_engine.watch_hooks import WatchHooks
 
 
@@ -178,3 +181,75 @@ def test_health_exposes_running_and_start_state():
 
 def test_generic_watch_module_has_no_optima_dependency():
     assert "optima" not in inspect.getsource(watch).lower()
+
+
+def _run_idle_watch_cycles(
+    cycles: int, *, wake_on_cycle: int | None = None
+) -> list[tuple[float, int]]:
+    """Drive `_watch_one` on a fake 1 s clock; return (time, cycle) per trigger_all."""
+    pytest.importorskip("watchdog")
+    root = Path(tempfile.mkdtemp(prefix="apo-watch-idle-"))
+    binding = vaults.VaultBinding("idle", root, root / "idle.db", "idle")
+    stop = threading.Event()
+    clock = [10_000.0]
+    cycle = [0]
+    triggers: list[tuple[float, int]] = []
+
+    class FakeQueue(queue.Queue):
+        def get(self, block=True, timeout=None):
+            if block and timeout is not None:  # the loop's idle wait
+                clock[0] += timeout
+                cycle[0] += 1
+                if cycle[0] >= cycles:
+                    stop.set()
+                raise queue.Empty
+            return super().get(block, timeout)
+
+    class FakeHooks:
+        def __init__(self, *a, **k) -> None: ...
+        def register(self, *a) -> None: ...
+        def shutdown(self, timeout=5.0) -> list[str]:
+            return []
+
+        def trigger_all(self, **kw) -> None:
+            triggers.append((clock[0], cycle[0]))
+
+    def wake_pending(_collection) -> bool:
+        return wake_on_cycle is not None and cycle[0] == wake_on_cycle
+
+    with (
+        mock.patch.object(watch, "time", SimpleNamespace(monotonic=lambda: clock[0])),
+        mock.patch.object(watch, "queue", SimpleNamespace(Queue=FakeQueue, Empty=queue.Empty)),
+        mock.patch.object(watch.watch_hooks, "WatchHooks", FakeHooks),
+        mock.patch("watchdog.observers.Observer"),
+        mock.patch.object(config, "WATCH_RECONCILE_INTERVAL", 3600.0),
+        mock.patch.object(deferred, "wake_pending", wake_pending),
+        mock.patch.object(core, "process_queues", return_value=QueueStats()),
+        mock.patch.object(core, "_compile_ignore", return_value=[]),
+        mock.patch.object(core, "_load_ignore", return_value=[]),
+        mock.patch.object(core, "clear_index_lock_health"),
+        mock.patch.object(core, "checkpoint_wal_if_over_limit"),
+        mock.patch.object(core, "writer_close"),
+    ):
+        watch._watch_one(binding, use_events=True, verbose=False, stop=stop)
+    return triggers
+
+
+def test_idle_watch_loop_triggers_hooks_at_most_once_per_heartbeat():
+    seconds = 60
+    triggers = _run_idle_watch_cycles(seconds)
+    times = [t for t, _ in triggers]
+    # First cycle (startup scan) triggers; every later idle trigger is >= one heartbeat apart.
+    assert len(times) >= 2
+    assert all(b - a >= watch.HOOK_HEARTBEAT_S for a, b in zip(times, times[1:]))
+    assert len(times) <= seconds / watch.HOOK_HEARTBEAT_S + 1
+    # ...and a heartbeat still lands, so a due commit or desk poll cannot starve.
+    assert times[-1] - times[0] >= seconds - watch.HOOK_HEARTBEAT_S - 1
+
+
+def test_watch_work_cycle_triggers_hooks_immediately():
+    triggers = _run_idle_watch_cycles(20, wake_on_cycle=7)
+    # A woken cycle is a work cycle: the trigger fires even though the previous one was <5 s ago.
+    cycles = [c for _, c in triggers]
+    assert 7 in cycles
+    assert cycles[0] == 0

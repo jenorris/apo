@@ -172,6 +172,47 @@ class TestIndexAndSearch(VaultTestCase):
         self.assertNotIn("private/secret.md", self.chunk_paths())
 
 
+class TestScopedVectorRanges(VaultTestCase):
+    """_scoped_vector_hits seeks path ranges but must match ``path LIKE 'folder/%'``."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("Projects/zoo.md", "# Zoo\n\nthe zebra sleeps\n")
+        self.write("projects0/x.md", "# X\n\nzebra next door\n")
+        self.write("a_b/one.md", "# One\n\nzebra underscore\n")
+        self.write("axb/two.md", "# Two\n\nzebra wildcard bait\n")
+        core.index_vault(verbose=False)
+        self.db = core.reader_connect()
+        self.qvec = _fake_embed(["zebra"])[0]
+
+    def _like_ids(self, folder: str) -> set[int]:
+        return {
+            r[0]
+            for r in self.db.execute(
+                "SELECT id FROM chunks WHERE path LIKE ? ESCAPE '\\'",
+                (core._escape_like(folder) + "/%",),
+            )
+        }
+
+    def test_matches_like_semantics(self):
+        for folder in ("Projects", "projects", "PROJECTS", "a_b", "axb", "proj", "missing"):
+            hits = core._scoped_vector_hits(self.db, self.qvec, folder, 50)
+            self.assertEqual({rid for rid, _ in hits}, self._like_ids(folder), folder)
+        self.assertTrue(self._like_ids("projects"))
+        self.assertEqual(self._like_ids("a_b") & self._like_ids("axb"), set())
+
+    def test_range_predicate_uses_path_index(self):
+        sql, params = core._folder_path_ranges(self.db, "projects")
+        plan = " ".join(
+            r[3]
+            for r in self.db.execute(
+                f"EXPLAIN QUERY PLAN SELECT id, embedding FROM chunks WHERE {sql}", params
+            )
+        )
+        self.assertIn("chunks_path", plan)
+        self.assertEqual(params, ["Projects/", "Projects0"])
+
+
 class TestIndexLifecycle(VaultTestCase):
     def test_index_vault_survives_invalid_date_frontmatter(self):
         self.write(
@@ -451,6 +492,77 @@ class TestIndexLifecycle(VaultTestCase):
         health = core.index_health()
         self.assertGreater(health["fts_orphans"], 0)
         self.assertIn("fts_orphans", health["flags"])
+
+    def test_index_health_counts_orphan_when_row_counts_match(self):
+        """A chunk missing its vector plus an orphan vector keeps the counts equal;
+        the id fingerprint must still route to the exact orphan count."""
+        self.write("a.md", "# A\n\nalpha content\n\n## Two\n\nmore alpha\n")
+        core.index_vault(verbose=False)
+
+        db = sqlite3.connect(config.INDEX_PATH)
+        db.enable_load_extension(True)
+        sqlite_vec.load(db)
+        db.enable_load_extension(False)
+        try:
+            min_id, max_id = db.execute("SELECT MIN(id), MAX(id) FROM chunks").fetchone()
+            db.execute("DELETE FROM vec_chunks WHERE rowid=?", (min_id,))
+            db.execute(
+                "INSERT INTO vec_chunks(rowid, embedding) VALUES (?, ?)",
+                (max_id + 1, sqlite_vec.serialize_float32([0.0] * _DIM)),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        health = core.index_health()
+        self.assertEqual(health["chunks"], health["vec_chunks"])
+        self.assertEqual(health["vec_chunks_orphans"], 1)
+        self.assertIn("vec_orphans", health["flags"])
+        self.assertEqual(health["fts_orphans"], 0)
+
+    def test_connection_pragmas_and_files_mtime_index(self):
+        self.write("a.md", "# A\n\nalpha content\n")
+        core.index_vault(verbose=False)
+        w = core.writer_connect()
+        self.assertEqual(w.execute("PRAGMA synchronous").fetchone()[0], 1)
+        self.assertEqual(w.execute("PRAGMA mmap_size").fetchone()[0], core._MMAP_BYTES)
+        names = {r[0] for r in w.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        self.assertIn("files_mtime", names)
+        r = core.reader_connect()
+        self.assertEqual(r.execute("PRAGMA mmap_size").fetchone()[0], core._MMAP_BYTES)
+
+    def test_reader_does_not_need_files_mtime_index(self):
+        """Indexes built before files_mtime existed stay readable (reader is mode=ro)."""
+        self.write("a.md", "# A\n\nalpha content\n")
+        core.index_vault(verbose=False)
+        core.writer_close()
+        core.reader_close()
+        db = sqlite3.connect(config.INDEX_PATH)
+        db.execute("DROP INDEX files_mtime")
+        db.commit()
+        db.close()
+        core._schema_ready.discard(f"{config.INDEX_PATH.resolve()}#ro")
+        self.assertEqual(core.recent_notes(limit=5)[0][0], "a.md")
+
+    def test_full_rebuild_analyzes_but_incremental_does_not(self):
+        self.write("a.md", "# A\n\nalpha content\n")
+        core.index_vault(verbose=False)
+
+        def has_stats() -> bool:
+            db = sqlite3.connect(config.INDEX_PATH)
+            try:
+                return bool(
+                    db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='sqlite_stat1'"
+                    ).fetchone()
+                )
+            finally:
+                db.close()
+
+        self.assertFalse(has_stats())
+        core.index_vault(rebuild=True, verbose=False)
+        self.assertTrue(has_stats())
+        self.assertTrue(core.search("alpha", k=1, hybrid=False))
 
     def test_filter_notes_equality_and_contains(self):
         self.write("a.md", "---\nstatus: active\ntags: [x]\n---\n\n# A\n\nbody a\n")

@@ -17,6 +17,16 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
   `--server-url` plus `APO_MCP_TOKEN` / `--bearer-token`.
 - A Go 1.25 CI job runs `go test ./...` in `client/`.
 - `docs/glossary.md` defines the current vault and catalog vocabulary.
+- **`APO_EMBED_CONCURRENCY`** (default 2) — embed batches in flight at once
+  against Ollama / llama-server. Output order and per-batch commits are
+  unchanged; SQLite writes stay on the writer thread. `1` restores serial
+  embedding; fastembed is always serial.
+- Full-vault scans embed and stamp files in groups of about 2,000 chunks
+  instead of holding every pending chunk in memory.
+- The persistent query-embed cache moved from `index.db` `meta` rows to a
+  sidecar `<index>.qcache.db` (float32 blobs, TTL-pruned), so MCP readers no
+  longer write `index.db`. Legacy `qemb:*` meta rows are ignored and cleared
+  by `clear_query_embed_cache()`.
 
 ### Migration
 

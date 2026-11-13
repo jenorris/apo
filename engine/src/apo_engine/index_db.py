@@ -81,9 +81,11 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
         ("content_hash", "TEXT"),
         # Redundant copy of the vector also stored in vec_chunks: vec0 point/batch lookups
         # by rowid are ~200x slower than a plain table (measured: 87ms vs 0.4ms for 185
-        # rows) — it's built for KNN search, not this access pattern. Existing rows backfill
-        # lazily (NULL until next touch); _vectors_by_content_hash treats a miss as "not
-        # reusable" and falls back to re-embedding, so this is safe without a forced rebuild.
+        # rows; re-measured on sqlite-vec 0.1.9: 150x for a 185-id IN batch, 245x for
+        # per-note reuse, 15x for a 15k-chunk folder fetch) — it's built for KNN search,
+        # not this access pattern. Existing rows backfill lazily (NULL until next touch);
+        # _vectors_by_content_hash treats a miss as "not reusable" and falls back to
+        # re-embedding, so this is safe without a forced rebuild.
         ("embedding", "BLOB"),
         ("section_bytes", "INTEGER"),
         # Table-awareness (0.6): section | table_header | table_row. NULL = section
@@ -152,6 +154,9 @@ def is_wal_over_limit(*, index: Path | None = None) -> bool:
     return wal_bytes(index=index) > config.WAL_LIMIT_BYTES
 
 
+_MMAP_BYTES = 256 * 1024 * 1024
+
+
 def _open_sqlite(index: Path, *, timeout: float, read_only: bool = False) -> sqlite3.Connection:
     if read_only:
         db = sqlite3.connect(
@@ -172,6 +177,8 @@ def _open_sqlite(index: Path, *, timeout: float, read_only: bool = False) -> sql
     db.enable_load_extension(False)
     busy_ms = int(timeout * 1000)
     db.execute(f"PRAGMA busy_timeout={busy_ms}")
+    # vec0 KNN and folder scans read most of the file; mmap cut them ~3x on a 200MB index.
+    db.execute(f"PRAGMA mmap_size={_MMAP_BYTES}")
     return db
 
 
@@ -184,6 +191,9 @@ def connect(path: Path | None = None, *, read_only: bool = False) -> sqlite3.Con
         bootstrap.close()
     timeout = config.DB_READ_TIMEOUT if read_only else config.DB_TIMEOUT
     db = _open_sqlite(index, timeout=timeout, read_only=read_only)
+    if not read_only:
+        # Per-connection; durable under WAL except for the last commits on power loss.
+        db.execute("PRAGMA synchronous=NORMAL")
     if not read_only and key not in _schema_ready:
         db.execute("PRAGMA journal_mode=WAL")
         db.execute(f"PRAGMA journal_size_limit={config.WAL_LIMIT_BYTES}")
@@ -214,6 +224,7 @@ def connect(path: Path | None = None, *, read_only: bool = False) -> sqlite3.Con
             CREATE INDEX IF NOT EXISTS backlinks_target ON backlinks(target_key);
             CREATE INDEX IF NOT EXISTS backlinks_stem ON backlinks(target_stem);
             CREATE INDEX IF NOT EXISTS backlinks_source ON backlinks(source);
+            CREATE INDEX IF NOT EXISTS files_mtime ON files(mtime);
             """
         )
         _ensure_chunk_columns(db)
@@ -462,10 +473,19 @@ def _insert_pending_chunks(
     return len(valid)
 
 
-def _finalize_index_writes(db: sqlite3.Connection) -> None:
+def _finalize_index_writes(db: sqlite3.Connection, *, optimize: bool = False) -> None:
+    """Commit index writes. ``optimize`` (full rebuild only): planner stats + FTS merge.
+
+    Not for incremental writes — the FTS merge rewrites the whole FTS index (~80ms and
+    a WAL the size of the FTS b-tree on a 25k-chunk vault).
+    """
     ensure_fts(db)
     db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_ready','1')")
     db.commit()
+    if optimize:
+        db.execute("ANALYZE")
+        db.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')")
+        db.commit()
     try:
         db.execute("PRAGMA wal_checkpoint(PASSIVE)")
     except sqlite3.Error:
@@ -632,11 +652,14 @@ def _embed_and_store_pending(
         )
     dropped: set[str] = set()
     stored = 0
-    for i in range(0, total, batch):
-        part = pending[i : i + batch]
+
+    def _embed_part(part: list) -> list[list[float] | None]:
         part_texts = [_pending_index_text(t) for t in part]
-        part_vectors = embed(part_texts, verbose=False)
-        part_vectors = _retry_failed_embeds_degraded(part, part_texts, part_vectors)
+        return _retry_failed_embeds_degraded(part, part_texts, embed(part_texts, verbose=False))
+
+    parts = [pending[i : i + batch] for i in range(0, total, batch)]
+    for n, (part, part_vectors) in enumerate(iter_embedded_in_order(_embed_part, parts)):
+        i = n * batch
         if verbose:
             print(f"  … embedded {min(i + batch, total)}/{total}", flush=True)
         for row, vec in zip(part, part_vectors):
@@ -1030,6 +1053,30 @@ def _collapse_part_hits(db: sqlite3.Connection, vrows: list[tuple]) -> list[tupl
     return out
 
 
+def _folder_path_ranges(db: sqlite3.Connection, folder_prefix: str) -> tuple[str, list[str]]:
+    """SQL predicate + params matching ``path LIKE '<folder>/%'`` that can use ``chunks_path``.
+
+    LIKE is ASCII case-insensitive, so it cannot seek the BINARY index and scans every
+    chunk row (blobs included). Resolve the stored spellings of the folder from the
+    covering index first, then seek one ``[folder/, folder0)`` range per spelling
+    ('0' is the byte after '/').
+    """
+    n = len(folder_prefix) + 1
+    spellings = [
+        row[0]
+        for row in db.execute(
+            "SELECT DISTINCT substr(path, 1, ?) FROM chunks WHERE path LIKE ? ESCAPE '\\'",
+            (n, _escape_like(folder_prefix) + "/%"),
+        )
+    ]
+    if not spellings:
+        return "0", []
+    params: list[str] = []
+    for s in spellings:
+        params.extend((s, s[:-1] + "0"))
+    return " OR ".join(["(path >= ? AND path < ?)"] * len(spellings)), params
+
+
 def _scoped_vector_hits(
     db: sqlite3.Connection,
     qvec: list[float],
@@ -1057,24 +1104,21 @@ def _scoped_vector_hits(
         scored.extend(_l2_sq_batch(qvec, rows))
 
     max_full = int(getattr(config, "SCOPED_VECTOR_FULL_SCAN_MAX", 500))
-    folder_like = _escape_like(folder_prefix) + "/%"
     skip_full = bool(prefer_ids) and len(prefer_ids) >= n
-    folder_cnt = 0
+    range_sql, range_params = "", []
     if not skip_full:
-        # Cheap count: if folder is huge and we already have FTS prefs, stay prefiltered.
-        if prefer_ids:
-            folder_cnt = db.execute(
-                "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL AND path LIKE ? ESCAPE '\\'",
-                (folder_like,),
-            ).fetchone()[0]
-            if folder_cnt > max_full:
+        range_sql, range_params = _folder_path_ranges(db, folder_prefix)
+        # Cheap count, capped at max_full + 1: only the threshold matters.
+        folder_cnt = db.execute(
+            f"SELECT COUNT(*) FROM (SELECT 1 FROM chunks WHERE embedding IS NOT NULL "
+            f"AND ({range_sql}) LIMIT ?)",
+            (*range_params, max_full + 1),
+        ).fetchone()[0]
+        if folder_cnt > max_full:
+            if prefer_ids:
+                # Huge folder and we already have FTS prefs: stay prefiltered.
                 skip_full = True
-        elif not prefer_ids:
-            folder_cnt = db.execute(
-                "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL AND path LIKE ? ESCAPE '\\'",
-                (folder_like,),
-            ).fetchone()[0]
-            if folder_cnt > max_full:
+            else:
                 approx = _folder_vector_via_global_knn(db, qvec, folder_prefix, n)
                 if approx:
                     return approx
@@ -1082,9 +1126,8 @@ def _scoped_vector_hits(
     if not skip_full:
         seen = {rid for _, rid in scored}
         cur = db.execute(
-            """SELECT id, embedding FROM chunks
-               WHERE embedding IS NOT NULL AND path LIKE ? ESCAPE '\\'""",
-            (_escape_like(folder_prefix) + "/%",),
+            f"SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL AND ({range_sql})",
+            range_params,
         )
         heap: list[tuple[float, int]] = []
 
@@ -1193,10 +1236,13 @@ def index_health() -> dict[str, Any]:
         db_bytes = 0
         last_index_ts = None
 
+    def _id_fingerprint(sql: str) -> tuple | None:
+        try:
+            return tuple(db.execute(sql).fetchone())
+        except sqlite3.OperationalError:
+            return None
+
     files = _count("SELECT COUNT(*) FROM files")
-    chunks = _count("SELECT COUNT(*) FROM chunks")
-    vec_chunks = _count("SELECT COUNT(*) FROM vec_chunks")
-    fts_rows = _count("SELECT COUNT(*) FROM chunks_fts")
     backlinks_rows = _count("SELECT COUNT(*) FROM backlinks")
     backlinks_per_file_max = _count(
         "SELECT COALESCE(MAX(c), 0) FROM (SELECT COUNT(*) AS c FROM backlinks GROUP BY source)"
@@ -1213,11 +1259,27 @@ def index_health() -> dict[str, Any]:
     # answer before relying on this). Going through the vtab materializes every
     # vector (a full scan of the whole embedding blob column) just to check
     # rowid membership — seconds on a large index vs. near-instant here.
-    vec_chunks_orphans = _count(
-        "SELECT COUNT(*) FROM vec_chunks_rowids WHERE rowid NOT IN (SELECT id FROM chunks)"
+    #
+    # The anti-join still costs ~15ms per table on a 25k-chunk index, so it only runs
+    # when the id-set fingerprints (count, sum, sum of squares) differ. Equal
+    # fingerprints with unequal sets need several missing and extra ids that cancel
+    # in both sums at once.
+    fp_sql = "SELECT COUNT(*), COALESCE(SUM({c}), 0), TOTAL({c} * {c}) FROM {t}"
+    chunk_fp = _id_fingerprint(fp_sql.format(c="id", t="chunks"))
+    vec_fp = _id_fingerprint(fp_sql.format(c="rowid", t="vec_chunks_rowids"))
+    fts_fp = _id_fingerprint(fp_sql.format(c="id", t="chunks_fts_docsize"))
+    chunks = int(chunk_fp[0]) if chunk_fp else 0
+    vec_chunks = int(vec_fp[0]) if vec_fp else 0
+    fts_rows = int(fts_fp[0]) if fts_fp else 0
+    vec_chunks_orphans = (
+        _count("SELECT COUNT(*) FROM vec_chunks_rowids WHERE rowid NOT IN (SELECT id FROM chunks)")
+        if vec_fp and vec_fp != chunk_fp
+        else 0
     )
-    fts_orphans = _count(
-        "SELECT COUNT(*) FROM chunks_fts_docsize WHERE id NOT IN (SELECT id FROM chunks)"
+    fts_orphans = (
+        _count("SELECT COUNT(*) FROM chunks_fts_docsize WHERE id NOT IN (SELECT id FROM chunks)")
+        if fts_fp and fts_fp != chunk_fp
+        else 0
     )
     quarantined = _count("SELECT COUNT(*) FROM files WHERE embed_quarantined=1")
 
@@ -1261,4 +1323,4 @@ def index_health() -> dict[str, Any]:
         "flags": flags,
     }
 
-__owned__ = ['reader_connect', '_schema_ready', '_hash_algo_ready', '_writer_local', '_reader_local', '_index_health_lock', '_index_health', 'IndexBusyError', 'HASH_ALGO', '_ensure_files_columns', '_ensure_chunk_columns', '_health_key', 'index_lock_backoff_active', 'note_index_lock_error', 'clear_index_lock_health', 'wal_bytes', 'is_wal_over_limit', '_open_sqlite', 'connect', '_tls_map', 'writer_connect', 'writer_reset', 'writer_close', 'reader_close', '_index_key', 'RRF_K', 'ensure_fts', '_insert_pending_chunks', '_finalize_index_writes', 'checkpoint_wal_if_over_limit', '_files_embed_state', '_is_embed_quarantined', '_embed_retry_backoff_active', '_record_embed_drops', '_retry_failed_embeds_degraded', '_embed_and_store_pending', '_ensure_vec_table', '_load_ignore', '_prune_dir_names', '_iter_notes', '_stamp_hash_algo', '_migrate_hash_algo', '_ensure_hash_algo', 'PendingChunk', 'count_chunks', 'lookup_chunk', 'note_chunk_order', '_deserialize_vec', '_l2_sq_blob', '_L2_BATCH_SIZE', '_l2_sq_batch', '_folder_vector_via_global_knn', '_collapse_part_hits', '_scoped_vector_hits', '_vectors_by_content_hash', 'stats', 'BACKLINKS_PER_FILE_WARN', 'index_health']
+__owned__ = ['reader_connect', '_schema_ready', '_hash_algo_ready', '_writer_local', '_reader_local', '_index_health_lock', '_index_health', 'IndexBusyError', 'HASH_ALGO', '_ensure_files_columns', '_ensure_chunk_columns', '_health_key', 'index_lock_backoff_active', 'note_index_lock_error', 'clear_index_lock_health', 'wal_bytes', 'is_wal_over_limit', '_MMAP_BYTES', '_open_sqlite', 'connect', '_tls_map', 'writer_connect', 'writer_reset', 'writer_close', 'reader_close', '_index_key', 'RRF_K', 'ensure_fts', '_insert_pending_chunks', '_finalize_index_writes', 'checkpoint_wal_if_over_limit', '_files_embed_state', '_is_embed_quarantined', '_embed_retry_backoff_active', '_record_embed_drops', '_retry_failed_embeds_degraded', '_embed_and_store_pending', '_ensure_vec_table', '_load_ignore', '_prune_dir_names', '_iter_notes', '_stamp_hash_algo', '_migrate_hash_algo', '_ensure_hash_algo', 'PendingChunk', 'count_chunks', 'lookup_chunk', 'note_chunk_order', '_deserialize_vec', '_l2_sq_blob', '_L2_BATCH_SIZE', '_l2_sq_batch', '_folder_vector_via_global_knn', '_collapse_part_hits', '_folder_path_ranges', '_scoped_vector_hits', '_vectors_by_content_hash', 'stats', 'BACKLINKS_PER_FILE_WARN', 'index_health']

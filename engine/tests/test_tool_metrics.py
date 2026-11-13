@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import duckdb
 
@@ -86,6 +87,27 @@ class ToolMetricsTest(unittest.TestCase):
                 by_tool["patch_note"]["by_error_shape"]["union_tag_not_found:ops.0"],
                 1,
             )
+
+    def test_schema_ddl_runs_once_and_all_events_land_after_flush(self):
+        n = 120  # spans more than one drain batch
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "metrics.duckdb"
+            with mock.patch.object(
+                tool_metrics, "_ensure_schema", wraps=tool_metrics._ensure_schema
+            ) as ensure:
+                for i in range(n):
+                    tool_metrics.record_call(
+                        collection="bulk",
+                        tool="search_notes",
+                        ok=True,
+                        duration_ms=float(i),
+                        path=db_path,
+                    )
+                tool_metrics.flush()
+                self.assertEqual(ensure.call_count, 1)
+                events = tool_metrics.read_events("bulk", path=db_path)
+                self.assertEqual(ensure.call_count, 1)
+            self.assertEqual(len(events), n)
 
     def test_extract_arg_flags(self):
         flags = tool_metrics.extract_arg_flags(

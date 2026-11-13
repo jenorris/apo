@@ -22,6 +22,11 @@ def _vec(text: str) -> list[float]:
     return [base + i for i in range(_NATIVE_DIM)]
 
 
+def _serve(server: HTTPServer) -> None:
+    # serve_forever's default 0.5s poll interval makes every shutdown() block up to 0.5s.
+    threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True).start()
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -50,7 +55,7 @@ class LlamaCppCase(VaultTestCase):
         core.embed = self._saved_embed  # exercise the real embed()
         self.server = HTTPServer(("127.0.0.1", 0), _Handler)
         self.server.seen = []
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        _serve(self.server)
         self._cfg = {
             k: getattr(config, k)
             for k in ("EMBED_BACKEND", "LLAMACPP_URL", "DOC_PREFIX", "QUERY_PREFIX", "EMBED_DIM", "MODEL_NAME")
@@ -150,7 +155,7 @@ class TestFailureIsolation(LlamaCppCase):
         # restart so tearDown's shutdown() is safe
         self.server = HTTPServer(("127.0.0.1", 0), _Handler)
         self.server.seen = []
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        _serve(self.server)
 
 
 if __name__ == "__main__":

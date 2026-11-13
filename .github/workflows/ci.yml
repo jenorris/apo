@@ -65,7 +65,9 @@ jobs:
 
       - name: Run tests
         working-directory: engine
-        run: .venv/bin/python -m pytest tests -q
+        # -n auto: pytest-xdist (dev extra). The suite is hermetic (conftest.py gives each
+        # worker its own HOME and per-test runtime dirs). --durations keeps slow tests visible.
+        run: .venv/bin/python -m pytest tests -q -n auto --durations=20
 
       - name: Check public facts
         run: engine/.venv/bin/python scripts/check_public_facts.py

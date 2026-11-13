@@ -17,10 +17,11 @@ import urllib.error
 import urllib.request
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass, field
 from functools import cmp_to_key
 from itertools import islice
+from operator import itemgetter
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -304,6 +305,53 @@ def _fts_snippet_excerpt(db: sqlite3.Connection, match: str, rid: int) -> str | 
     return row[0] if row and row[0] else None
 
 
+# Chunk kinds whose text is already dense — _build_snippet never asks FTS for them.
+_SNIPPET_PASSTHROUGH_KINDS = frozenset(
+    {"table_row", "table_header", "mermaid_file", "mermaid_header", "mermaid_node", "mermaid_edge"}
+)
+
+
+def _fts_snippet_excerpts(db: sqlite3.Connection, match: str, rids: list[int]) -> dict[int, str]:
+    """:func:`_fts_snippet_excerpt` for many rowids in one query (rowids with no excerpt omitted)."""
+    out: dict[int, str] = {}
+    for i in range(0, len(rids), 400):
+        batch = rids[i : i + 400]
+        try:
+            rows = db.execute(
+                "SELECT rowid, snippet(chunks_fts, 0, '', '', ' … ', ?) "
+                f"FROM chunks_fts WHERE chunks_fts MATCH ? AND rowid IN ({','.join('?' * len(batch))})",
+                (_FTS_SNIPPET_MAX_TOKENS, match, *batch),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        out.update((rid, snip) for rid, snip in rows if snip)
+    return out
+
+
+def _batched_excerpts(
+    db: sqlite3.Connection,
+    match: str | None,
+    ids: list[int],
+    by_id: dict[int, tuple],
+    fts_rowids: set[int],
+    snippet_chars: int,
+    folder_prefix: str,
+) -> dict[int, str] | None:
+    """One FTS ``snippet()`` query for the hits ``_build_snippet`` would excerpt (``by_id`` rows
+    are ``chunks`` columns after the id: path first, chunk_kind at index 11)."""
+    if snippet_chars <= 0 or not match or not fts_rowids:
+        return None
+    wanted = [
+        rid
+        for rid in ids
+        if rid in fts_rowids
+        and rid in by_id
+        and (by_id[rid][11] or "section") not in _SNIPPET_PASSTHROUGH_KINDS
+        and (not folder_prefix or by_id[rid][0].startswith(folder_prefix + "/"))
+    ]
+    return _fts_snippet_excerpts(db, match, wanted) if wanted else {}
+
+
 def _index_text_for_embedding(ctext: str, chunk_kind: str) -> str:
     """Cleaned text fed to the embedder and chunks_fts — never chunks.text itself.
 
@@ -351,13 +399,17 @@ def _build_snippet(
     match: str | None = None,
     rid: int | None = None,
     fts_rowids: set[int] | None = None,
+    excerpts: dict[int, str] | None = None,
 ) -> str:
+    """``excerpts`` = rowid → FTS excerpt from :func:`_fts_snippet_excerpts` (skips the per-hit query)."""
     if snippet_chars <= 0:
         return text
-    if chunk_kind in ("table_row", "table_header", "mermaid_file", "mermaid_header", "mermaid_node", "mermaid_edge"):
+    if chunk_kind in _SNIPPET_PASSTHROUGH_KINDS:
         return text
     excerpt = None
-    if db is not None and match and fts_rowids and rid in fts_rowids:
+    if excerpts is not None:
+        excerpt = excerpts.get(rid)
+    elif db is not None and match and fts_rowids and rid in fts_rowids:
         excerpt = _fts_snippet_excerpt(db, match, rid)
     source = excerpt if excerpt else _collapse_full_tables(text)
     cleaned = _SEP_ROW_RE.sub("", source)
@@ -398,6 +450,7 @@ def _hits_for_ids(
         ids,
     ):
         by_id[row[0]] = row[1:]
+    excerpts = _batched_excerpts(db, match, ids, by_id, fts_rowid_set, snippet_chars, folder_prefix)
     root = vaults.notes_root()
     hits: list[Hit] = []
     for rid in ids:
@@ -430,6 +483,7 @@ def _hits_for_ids(
             match=match,
             rid=rid,
             fts_rowids=fts_rowid_set,
+            excerpts=excerpts,
         )
         hits.append(
             Hit(
@@ -697,6 +751,18 @@ def search_expanded(
     best_rank: dict[str, int] = {}
     hit_by_hash: dict[str, Hit] = {}
     full_texts: dict[str, str] = {}
+    # Embedding is the slow step: start every vec/hyde embed up front on the shared pool.
+    # The per-sub-query SQL below stays on this thread (reader connections are thread-local).
+    embed_futs: dict[str, Any] = {}
+    for sq in queries[:10]:
+        qtext = str(sq.get("query") or "").strip()
+        if (
+            qtext
+            and str(sq.get("type") or "lex").strip().lower() != "lex"
+            and qtext not in embed_futs
+        ):
+            # Own context copy per task: the active-vault binding is a ContextVar.
+            embed_futs[qtext] = _search_pool.submit(copy_context().run, query_embed, qtext)
     for sq in queries[:10]:
         qtype = str(sq.get("type") or "lex").strip().lower()
         qtext = str(sq.get("query") or "").strip()
@@ -712,7 +778,7 @@ def search_expanded(
                 exclude=exclude,
             )
         else:
-            qvec = query_embed(qtext)
+            qvec = embed_futs[qtext].result()
             if qvec is None:
                 continue
             sub_hits = search_vector_only(
@@ -981,6 +1047,7 @@ def search(
             by_id[row[0]] = row[1:]
 
     ranking._prefetch_path_boost_data(row[0] for row in by_id.values())
+    excerpts = _batched_excerpts(db, match, ids, by_id, fts_rowid_set, snippet_chars, folder_prefix)
 
     hits: list[Hit] = []
     full_texts: list[str] = []  # non-snippet bodies for the reranker
@@ -1045,6 +1112,7 @@ def search(
             match=match,
             rid=rid,
             fts_rowids=fts_rowid_set,
+            excerpts=excerpts,
         )
         hit = Hit(
             path=path,
@@ -1211,6 +1279,120 @@ def _filter_notes_cmp(
     return c if order == "asc" else -c
 
 
+# Characters that ``str(x).strip().lower()`` can contain for a JSON number or boolean
+# (digits, sign, '.', exponent 'e', 'inf', 'nan', 'true', 'false').
+_NUMERIC_STR_CHARS = frozenset("0123456789+-.einfatrusl")
+_PREFILTER_IN_MAX = 200
+
+
+def _fm_str_eq_prefilter(typ: str, jp: str, values: list[str]) -> tuple[str, list[Any]]:
+    """Rows where ``_match_condition(fm[key], c)`` can hold for some string ``c`` in ``values``.
+
+    Mirrors ``_loose_eq``: same-type strings compare exactly; lists match on any element;
+    numbers/booleans/objects compare through ``str()`` — admitted unless ``str()`` of such a
+    value can never equal the normalised candidate.
+    """
+    norm = [v.strip().lower() for v in values]
+    ph = ",".join("?" * len(values))
+    alts = [f"({typ} = 'text' AND json_extract(frontmatter, {jp}) IN ({ph}))"]
+    params: list[Any] = list(values)
+    if any(set(n) <= _NUMERIC_STR_CHARS for n in norm):
+        alts.append(f"{typ} IN ('integer', 'real', 'true', 'false')")
+    alts.append(
+        f"({typ} = 'array' AND EXISTS (SELECT 1 FROM json_each(frontmatter, {jp}) AS je "
+        f"WHERE je.type != 'text' OR je.value IN ({ph})))"
+    )
+    params.extend(values)
+    if any(n.startswith("{") for n in norm):
+        alts.append(f"{typ} = 'object'")
+    return "(" + " OR ".join(alts) + ")", params
+
+
+def _fm_op_prefilter(typ: str, jp: str, op: str, rhs: Any) -> tuple[str, list[Any]] | None:
+    if op in ("$eq", "$contains"):
+        if isinstance(rhs, str):
+            eq_sql, eq_params = _fm_str_eq_prefilter(typ, jp, [rhs])
+            if op == "$contains":  # string values match by substring: no cheap exact test
+                return f"({typ} = 'text' OR {eq_sql})", eq_params
+            return eq_sql, eq_params
+        return (f"{typ} IN ('text', 'array')", []) if op == "$contains" else None
+    if op == "$in":
+        if (
+            isinstance(rhs, (list, tuple))
+            and 0 < len(rhs) <= _PREFILTER_IN_MAX
+            and all(isinstance(y, str) for y in rhs)
+        ):
+            return _fm_str_eq_prefilter(typ, jp, list(rhs))
+        return None
+    if op == "$elemMatch":
+        return (
+            f"({typ} = 'array' AND EXISTS (SELECT 1 FROM json_each(frontmatter, {jp}) AS je "
+            "WHERE je.type = 'object'))",
+            [],
+        )
+    if op in ("$lt", "$lte", "$gt", "$gte"):
+        if not isinstance(rhs, str):
+            return None
+        try:
+            float(rhs)
+        except ValueError:
+            # Non-numeric rhs: _loose_cmp is a plain str() comparison, which SQLite reproduces
+            # exactly for text values (UTF-8 byte order == code point order).
+            sql_op = {"$lt": "<", "$lte": "<=", "$gt": ">", "$gte": ">="}[op]
+            return f"({typ} != 'text' OR json_extract(frontmatter, {jp}) {sql_op} ?)", [rhs]
+    return None
+
+
+def _fm_prefilter_predicates(where: dict) -> tuple[list[str], list[Any]]:
+    """SQL conjuncts that only drop rows the Python matcher would reject anyway.
+
+    Superset-safe by construction: any row ``_match_where_clause`` accepts satisfies every
+    fragment, so ``_filter_notes_from_table`` can run the exact matcher on the narrowed set.
+    Only plain top-level keys are considered (dotted / selector paths and ``$exists``-only
+    clauses are left to Python / the pushdown path). Rows whose JSON is not valid SQLite
+    JSON always pass, so they still reach the Python matcher.
+    """
+    from apo_engine.fm_path import path_needs_python_match
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    for key, cond in where.items():
+        if not _FM_KEY_SAFE.match(key) or path_needs_python_match(key):
+            continue
+        jp = f"'$.{key}'"  # key matched _FM_KEY_SAFE: safe to inline
+        typ = f"json_type(frontmatter, {jp})"
+        parts: list[str] = []
+        p: list[Any] = []
+        if isinstance(cond, dict):
+            ops = [op for op in cond if op != "$exists"]
+            if not ops:
+                continue  # empty or $exists-only: nothing to narrow
+            for op in ops:
+                frag = _fm_op_prefilter(typ, jp, op, cond[op])
+                if frag:
+                    parts.append(frag[0])
+                    p.extend(frag[1])
+        elif isinstance(cond, str):
+            frag = _fm_str_eq_prefilter(typ, jp, [cond])
+            parts.append(frag[0])
+            p.extend(frag[1])
+        # A missing/null value never matches a bare value or any operator except $exists.
+        clauses.append(
+            f"CASE WHEN json_valid(frontmatter) THEN (COALESCE({typ}, 'null') != 'null'"
+            + "".join(f" AND {part}" for part in parts)
+            + ") ELSE 1 END"
+        )
+        params.extend(p)
+    return clauses, params
+
+
+def _loads_frontmatter(fm_json: str | None) -> dict:
+    try:
+        return json.loads(fm_json) if fm_json else {}
+    except json.JSONDecodeError:
+        return {}
+
+
 def _filter_notes_from_table(
     db: sqlite3.Connection,
     table: str,
@@ -1283,17 +1465,39 @@ def _filter_notes_from_table(
             matches.append((mtime, path, fm))
         return total, matches
 
+    # Python matcher is the source of truth; SQL only narrows the rows it has to parse.
+    pre_sql, pre_params = _fm_prefilter_predicates(where)
+    where_parts.extend(f"({clause})" for clause in pre_sql)
+    params.extend(pre_params)
     scope_sql = " AND ".join(where_parts)
-    rows = db.execute(
+    cursor = db.execute(
         f"SELECT path, mtime, frontmatter FROM {table} WHERE {scope_sql}",
         params,
-    ).fetchall()
-    matches = []
-    for path, mtime, fm_json in rows:
+    )
+    if sort_key == "mtime":
+        # Matching only needs the parsed frontmatter transiently: keep (mtime, path, raw json)
+        # per match, sort that, and parse just the returned page again.
+        kept: list[tuple[float, str, str | None]] = []
+        for path, mtime, fm_json in cursor:
+            fm = _loads_frontmatter(fm_json)
+            if all(_match_where_clause(fm, k, cond) for k, cond in where.items()):
+                kept.append((mtime, path, fm_json))
         try:
-            fm = json.loads(fm_json) if fm_json else {}
-        except json.JSONDecodeError:
-            fm = {}
+            kept = sorted(kept, key=itemgetter(0), reverse=order_key == "desc")
+        except TypeError:  # NULL mtime: defer to the loose comparator
+            kept = sorted(
+                kept,
+                key=cmp_to_key(
+                    lambda a, b: _filter_notes_cmp(a, b, sort=sort_key, order=order_key)
+                ),
+            )
+        return len(kept), [
+            (mtime, path, _loads_frontmatter(fm_json))
+            for mtime, path, fm_json in kept[offset : offset + limit]
+        ]
+    matches = []
+    for path, mtime, fm_json in cursor:
+        fm = _loads_frontmatter(fm_json)
         if all(_match_where_clause(fm, k, cond) for k, cond in where.items()):
             matches.append((mtime, path, fm))
     matches.sort(
@@ -1322,7 +1526,7 @@ def filter_notes(
     walk — reads the index only. ``$exists`` (and empty ``where``) push into SQL via
     ``json_extract``; equality, ``$elemMatch``, dotted paths, and richer operators use
     the Python matcher (correct for list-valued fields, list-of-dicts, and loose type
-    coercion).
+    coercion), over rows narrowed by a superset-safe SQL prefilter on plain top-level keys.
 
     When ``sort=mtime`` and predicates are SQL-pushable, uses ``COUNT(*)`` plus
     ``ORDER BY mtime … LIMIT/OFFSET`` — never materializes every matching frontmatter
@@ -1392,32 +1596,45 @@ def search_at_ref(
     if folder_prefix:
         where.append("path LIKE ? ESCAPE '\\'")
         params.append(_escape_like(folder_prefix) + "/%")
+    # Prefix excludes in SQL. substr() keeps startswith()'s case sensitivity (LIKE would not).
+    for pref in prefixes:
+        where.append("substr(COALESCE(path, ''), 1, ?) != ?")
+        params.extend([len(pref), pref])
     where_sql = " AND ".join(where)
     tokens = max(1, min(int(snippet_chars) // 6, 64)) if snippet_chars else 64
-    rows = db.execute(
+    select_sql = (
         f"SELECT path, mtime, snippet(ref_fts, 3, '', '', ' … ', ?), rank "
-        f"FROM ref_fts WHERE {where_sql} ORDER BY rank",
-        [tokens, *params],
-    ).fetchall()
-    hits: list[dict[str, Any]] = []
-    for path, mtime, snip, rank in rows:
-        rel = str(path or "")
-        if _path_excluded(rel, prefixes, globs):
-            continue
-        score = 1.0 / (1.0 + abs(float(rank or 0.0)))
+        f"FROM ref_fts WHERE {where_sql} ORDER BY rank"
+    )
+
+    def _hit(path: Any, mtime: Any, snip: Any, rank: Any) -> dict[str, Any]:
         text = str(snip or "")
         if snippet_chars and len(text) > snippet_chars:
             text = text[:snippet_chars].rstrip() + "…"
-        hits.append(
-            {
-                "path": rel,
-                "content": text,
-                "score": score,
-                "mtime": float(mtime or 0.0),
-            }
+        return {
+            "path": str(path or ""),
+            "content": text,
+            "score": 1.0 / (1.0 + abs(float(rank or 0.0))),
+            "mtime": float(mtime or 0.0),
+        }
+
+    if not globs:
+        total = int(
+            db.execute(f"SELECT COUNT(*) FROM ref_fts WHERE {where_sql}", params).fetchone()[0]
         )
-    total = len(hits)
-    page = hits[offset : offset + k]
+        rows = db.execute(f"{select_sql} LIMIT ? OFFSET ?", [tokens, *params, k, offset])
+        return [_hit(*row) for row in rows], total
+
+    # Glob excludes need the Python matcher: stream the cursor, count every survivor,
+    # materialize only the requested page.
+    page: list[dict[str, Any]] = []
+    total = 0
+    for path, mtime, snip, rank in db.execute(select_sql, [tokens, *params]):
+        if any(g.fullmatch(str(path or "")) is not None for g in globs):
+            continue
+        if offset <= total < offset + k:
+            page.append(_hit(path, mtime, snip, rank))
+        total += 1
     return page, total
 
 
@@ -1583,4 +1800,4 @@ def frontmatter_field(rel_path: str, field: str) -> Any:
         return None
     return fm.get(field) if isinstance(fm, dict) else None
 
-__owned__ = ['fts_query', 'escape_like', '_search_pool', '_hybrid_candidate_pools', '_search_degraded', '_search_rerank', 'last_search_degraded', 'last_search_rerank', '_loose_eq', '_loose_cmp', '_match_condition', '_match_where_clause', '_compile_excludes', '_path_excluded', '_sql_path_prefix_excludes', '_SEP_ROW_RE', '_MD_LINK_RE', '_MD_BOLD_RE', '_MD_ITALIC_RE', '_MD_HEADING_RE', '_MD_LIST_RE', '_MD_QUOTE_RE', '_BLANK_RUN_RE', '_WS_RE', '_FTS_SNIPPET_MAX_TOKENS', '_collapse_full_tables', '_strip_markdown_decoration', '_truncate_word_boundary', '_fts_snippet_excerpt', '_index_text_for_embedding', '_pending_chunk_kind', '_pending_index_text', '_build_snippet', '_hits_for_ids', 'search_lex_only', 'search_vector_only', '_EXPAND_LINE_RE', '_parse_qmd_expansion', 'expand_query', 'search_expanded', '_search_lex_boosted', 'search', '_sql_pushdown_predicates', '_sql_json_scalar', '_normalize_filter_sort', '_filter_notes_cmp', '_filter_notes_from_table', 'filter_notes', 'filter_notes_at_ref', 'search_at_ref', 'recent_notes', 'recent_notes_preview', 'frontmatter_field']
+__owned__ = ['fts_query', 'escape_like', '_search_pool', '_hybrid_candidate_pools', '_search_degraded', '_search_rerank', 'last_search_degraded', 'last_search_rerank', '_loose_eq', '_loose_cmp', '_match_condition', '_match_where_clause', '_compile_excludes', '_path_excluded', '_sql_path_prefix_excludes', '_SEP_ROW_RE', '_MD_LINK_RE', '_MD_BOLD_RE', '_MD_ITALIC_RE', '_MD_HEADING_RE', '_MD_LIST_RE', '_MD_QUOTE_RE', '_BLANK_RUN_RE', '_WS_RE', '_FTS_SNIPPET_MAX_TOKENS', '_collapse_full_tables', '_strip_markdown_decoration', '_truncate_word_boundary', '_fts_snippet_excerpt', '_SNIPPET_PASSTHROUGH_KINDS', '_fts_snippet_excerpts', '_batched_excerpts', '_index_text_for_embedding', '_pending_chunk_kind', '_pending_index_text', '_build_snippet', '_hits_for_ids', 'search_lex_only', 'search_vector_only', '_EXPAND_LINE_RE', '_parse_qmd_expansion', 'expand_query', 'search_expanded', '_search_lex_boosted', 'search', '_sql_pushdown_predicates', '_NUMERIC_STR_CHARS', '_PREFILTER_IN_MAX', '_fm_str_eq_prefilter', '_fm_op_prefilter', '_fm_prefilter_predicates', '_loads_frontmatter', '_sql_json_scalar', '_normalize_filter_sort', '_filter_notes_cmp', '_filter_notes_from_table', 'filter_notes', 'filter_notes_at_ref', 'search_at_ref', 'recent_notes', 'recent_notes_preview', 'frontmatter_field']

@@ -216,7 +216,7 @@ SCOPED_VECTOR_FULL_SCAN_MAX: int = int(os.environ.get("APO_SCOPED_VECTOR_FULL_SC
 # Cache identical query embeddings (seconds TTL; 0 disables in-memory LRU).
 QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "600"))
 QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "128"))
-# Persist query embeddings in index meta across MCP process restarts (0 disables).
+# Persist query embeddings in a sidecar ``<index>.qcache.db`` across MCP process restarts (0 disables).
 QUERY_EMBED_DISK_CACHE: bool = env_bool("APO_QUERY_EMBED_DISK_CACHE", True)
 # Disk meta TTL — longer than in-memory so MCP restarts hit cache without Ollama (default 24h).
 QUERY_EMBED_DISK_TTL: float = float(os.environ.get("APO_QUERY_EMBED_DISK_TTL", "86400"))
@@ -228,6 +228,8 @@ QUERY_EMBED_WARM_DISK_LIMIT: int = int(os.environ.get("APO_QUERY_EMBED_WARM_DISK
 
 # Index embed batch size (Ollama input array length per request).
 EMBED_COMMIT_BATCH: int = int(os.environ.get("APO_EMBED_COMMIT_BATCH", "64"))
+# Embed batches in flight at once against Ollama / llama-server (1 = serial; fastembed is always serial).
+EMBED_CONCURRENCY: int = int(os.environ.get("APO_EMBED_CONCURRENCY", "2"))
 
 # Cache vault registry discovery (dir walk + per-vault usage-contract YAML parse +
 # index-file resolution) for this many seconds; 0 disables. Invalidated immediately
