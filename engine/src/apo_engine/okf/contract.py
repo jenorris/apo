@@ -16,6 +16,8 @@ from typing import Any
 
 import yaml
 
+from apo_engine.config import env_alias
+
 # Compiled glob patterns for path_rules (``**`` support on Py < 3.13).
 _GLOB_RE_CACHE: dict[str, re.Pattern[str]] = {}
 
@@ -159,10 +161,7 @@ def utc_now() -> str:
 
 def resolve_contract_path(vault_root: Path, explicit: str | None = None) -> Path | None:
     if explicit is None:
-        explicit = (
-            os.environ.get("APO_OKF_CONTRACT", "").strip()
-            or os.environ.get("APO_OKF_PROFILE", "").strip()  # legacy alias
-        )
+        explicit = env_alias("APO_OKF_CONTRACT", "APO_OKF_PROFILE")
     if explicit:
         p = Path(explicit).expanduser()
         return p if p.is_file() else None

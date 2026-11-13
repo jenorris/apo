@@ -306,7 +306,8 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | `APO_EMBED_BACKEND` | `ollama` | `ollama` or `fastembed` (ONNX) |
 | `APO_MODEL` | `bge-m3` | Ollama model, or a FastEmbed id when backend is `fastembed` |
 | `OLLAMA_KEEP_ALIVE` | `5m` | Keep embed model warm; `0` = unload when idle |
-| `WATCH_INTERVAL` | `30` | Periodic mtime scan (seconds) |
+| `APO_WATCH_INTERVAL` | `30` | Periodic mtime scan (seconds); deprecated alias: `WATCH_INTERVAL` |
+| `APO_WATCH_RECONCILE_INTERVAL` | `300` | Full-vault reconcile interval with filesystem events; deprecated alias: `WATCH_RECONCILE_INTERVAL` |
 | `APO_WATCH_DEBOUNCE` | `2` | Quiet seconds before re-embedding a path |
 
 Optional ONNX: `APO_EMBED_BACKEND=fastembed`, `APO_MODEL=BAAI/bge-large-en-v1.5`, then `just reindex`. Vectors are not interchangeable across models.

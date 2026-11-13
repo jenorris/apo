@@ -191,6 +191,19 @@ class DiscoveryRegistryTests(unittest.TestCase):
         self.assertEqual(remaining, ["server.py", "--other"])
         self.assertEqual(os.environ.get("APO_DEFAULT_VAULT"), "alpha")
 
+    def test_apply_discovery_argv_rejects_conflicting_default_aliases(self):
+        with self.assertRaisesRegex(ValueError, "--default-vault.*--default"):
+            vaults.apply_discovery_argv(
+                ["server.py", "--default-vault", "alpha", "--default", "beta"]
+            )
+
+    def test_apply_discovery_argv_accepts_matching_default_aliases(self):
+        remaining = vaults.apply_discovery_argv(
+            ["server.py", "--default-vault", "alpha", "--default", "alpha", "--other"]
+        )
+        self.assertEqual(remaining, ["server.py", "--other"])
+        self.assertEqual(os.environ["APO_DEFAULT_VAULT"], "alpha")
+
     def test_apply_discovery_argv_vaults_root_alias_conflict(self):
         with self.assertRaisesRegex(ValueError, "--vaults-root.*--collection-root"):
             vaults.apply_discovery_argv(

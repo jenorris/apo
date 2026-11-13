@@ -5,8 +5,11 @@ import threading
 import time
 import inspect
 from pathlib import Path
+from unittest import mock
 
-from apo_engine import watch, watch_health
+import pytest
+
+from apo_engine import optima_merge, watch, watch_health
 from apo_engine.watch_hooks import WatchHooks
 
 
@@ -75,6 +78,63 @@ def test_exception_does_not_kill_worker():
     _wait_for(lambda: calls == 1)
     hooks.trigger("job")
     assert recovered.wait(1)
+    assert hooks.shutdown() == []
+
+
+@pytest.mark.parametrize(
+    ("merge_effect", "message"),
+    [
+        (RuntimeError("source exploded"), "source exploded"),
+        ({"ok": False, "message": "source contract invalid"}, "source contract invalid"),
+    ],
+)
+def test_optima_merge_failures_persist_and_noop_does_not_clear(
+    merge_effect: object, message: str
+) -> None:
+    root = Path(tempfile.mkdtemp(prefix="apo-watch-hooks-optima-"))
+    health = watch_health.HookHealthTracker(root)
+    hooks = WatchHooks(health, verbose=False)
+    controller = optima_merge.VaultMergeController(root, verbose=False)
+    controller._last_merge_at = time.monotonic() - 10
+
+    with (
+        mock.patch.object(optima_merge.optima_contract, "merge_enabled", return_value=True),
+        mock.patch.object(
+            optima_merge.optima_contract,
+            "merge_settings",
+            return_value=mock.Mock(interval_seconds=1),
+        ),
+        mock.patch.object(
+            optima_merge,
+            "run_merge",
+            side_effect=merge_effect if isinstance(merge_effect, Exception) else None,
+            return_value=merge_effect if isinstance(merge_effect, dict) else None,
+        ),
+    ):
+        hooks.register(
+            watch_health.OPTIMA_MERGE,
+            lambda: controller.tick(index_busy=False),
+        )
+        assert hooks.trigger(watch_health.OPTIMA_MERGE)
+        _wait_for(
+            lambda: f"hook_error:{watch_health.OPTIMA_MERGE}"
+            in watch_health.hook_health_flags(watch_health.read_hook_health(root))
+        )
+        failed = watch_health.read_hook_health(root)[watch_health.OPTIMA_MERGE]
+        assert failed["error"] == message
+
+        # The merge interval now makes this trigger a no-op. It must clear
+        # running state without replacing the persisted failed completion.
+        assert hooks.trigger(watch_health.OPTIMA_MERGE)
+        _wait_for(
+            lambda: not watch_health.read_hook_health(root)[
+                watch_health.OPTIMA_MERGE
+            ].get("running", False)
+        )
+        later = watch_health.read_hook_health(root)[watch_health.OPTIMA_MERGE]
+        assert later["ok"] is False
+        assert later["error"] == message
+
     assert hooks.shutdown() == []
 
 

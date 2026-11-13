@@ -62,10 +62,18 @@ if [[ -n "${APO_RUNTIME_COLLECTION:-}" && -n "${APO_COLLECTION:-}" && "${APO_RUN
   echo "error: APO_RUNTIME_COLLECTION conflicts with deprecated APO_COLLECTION; make both identical" >&2
   exit 1
 fi
+if [[ -n "${APO_WATCH_INTERVAL:-}" && -n "${WATCH_INTERVAL:-}" && "${APO_WATCH_INTERVAL}" != "${WATCH_INTERVAL}" ]]; then
+  echo "error: APO_WATCH_INTERVAL conflicts with deprecated WATCH_INTERVAL; make both identical" >&2
+  exit 1
+fi
+if [[ -n "${APO_WATCH_RECONCILE_INTERVAL:-}" && -n "${WATCH_RECONCILE_INTERVAL:-}" && "${APO_WATCH_RECONCILE_INTERVAL}" != "${WATCH_RECONCILE_INTERVAL}" ]]; then
+  echo "error: APO_WATCH_RECONCILE_INTERVAL conflicts with deprecated WATCH_RECONCILE_INTERVAL; make both identical" >&2
+  exit 1
+fi
 
 APO_ENGINE_BIN="${APO_ENGINE_BIN:-${HOME}/.local/bin/apo-engine}"
 WATCH_PID_DIR="${WATCH_PID_DIR:-${HOME}/.apo}"
-WATCH_INTERVAL="${WATCH_INTERVAL:-30}"
+WATCH_INTERVAL_VALUE="${APO_WATCH_INTERVAL:-${WATCH_INTERVAL:-30}}"
 
 mkdir -p "${WATCH_PID_DIR}"
 
@@ -111,13 +119,13 @@ cmd_start() {
   fi
 
   local label="${APO_VAULTS_ROOT:-${APO_VAULT_PATHS:-${APO_VAULTS:-${APO_NOTES_ROOT}}}}"
-  info "Starting watcher for ${label} (interval ${WATCH_INTERVAL}s)..."
+  info "Starting watcher for ${label} (interval ${WATCH_INTERVAL_VALUE}s)..."
 
   # Double-fork into a new session so Cursor/agent shell teardown cannot
   # reap the watcher with the parent process group.
   local py="${APO_ENGINE_BIN%apo-engine}python"
   [[ -x "$py" ]] || py="python3"
-  "$py" - "$APO_ENGINE_BIN" "$WATCH_INTERVAL" "$PID_FILE" "$LOG_FILE" <<'PY'
+  "$py" - "$APO_ENGINE_BIN" "$WATCH_INTERVAL_VALUE" "$PID_FILE" "$LOG_FILE" <<'PY'
 import os, sys, time
 from pathlib import Path
 

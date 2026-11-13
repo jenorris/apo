@@ -1,13 +1,13 @@
 # Sandbox image for Hermes Agent's Docker code-execution backend
 # (terminal.backend: docker — e.g. profiles/lyra/config.yaml): python:3.12-slim
-# (matches Lyra's actual base) plus jq and the apo MCP client, so
-# execute_code/terminal sessions can run `apo <cmd> | jq ...` pipelines
+# (matches Lyra's actual base) plus jq and the apo-remote MCP client, so
+# execute_code/terminal sessions can run `apo-remote <cmd> | jq ...` pipelines
 # directly inside the sandbox.
 #
 # Build (from repo root):  docker build -t apo-sandbox:latest -f client/Dockerfile .
 # Point a profile's terminal.docker_image at apo-sandbox:latest to use it.
-# apo reaches a bare-metal apo-engine via
-# APO_SERVER_URL=http://host.docker.internal:<port>/mcp — the Hermes Agent
+# apo-remote reaches a bare-metal apo-engine via
+# APO_MCP_URL=http://host.docker.internal:<port>/mcp — the Hermes Agent
 # docker backend already adds host.docker.internal on Linux for every
 # container it launches.
 
@@ -16,9 +16,9 @@ WORKDIR /build
 COPY client/go.mod client/go.sum ./
 RUN go mod download
 COPY client/*.go ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /apo .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /apo-remote .
 
 FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends jq \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=apobuild /apo /usr/local/bin/apo
+COPY --from=apobuild /apo-remote /usr/local/bin/apo-remote

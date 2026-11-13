@@ -561,7 +561,7 @@ class VaultMergeController:
         self._last_merge_at: float = 0.0
         self._lock = threading.Lock()
 
-    def tick(self, *, index_busy: bool = False) -> None:
+    def tick(self, *, index_busy: bool = False) -> dict[str, Any] | None:
         if not optima_contract.merge_enabled(self.root):
             return
         if index_busy:
@@ -582,7 +582,11 @@ class VaultMergeController:
         except Exception as exc:
             if self.verbose:
                 logger.warning("[%s] optima-merge error: %s", self.root.name, exc)
-            return
+            return {
+                "ok": False,
+                "message": str(exc),
+                "error": type(exc).__name__,
+            }
         if self.verbose and result.get("ok") and result.get("wrote"):
             logger.info(
                 "[%s] optima-merge: %s — %s",
@@ -594,3 +598,4 @@ class VaultMergeController:
             logger.warning(
                 "[%s] optima-merge failed: %s", self.root.name, result.get("message")
             )
+        return result

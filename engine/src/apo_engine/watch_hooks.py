@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from .watch_health import HookHealthTracker
@@ -73,7 +73,7 @@ class HookWorker:
             started = time.monotonic()
             self._health.record_started(self.name)
             try:
-                self._hook(*args, **kwargs)
+                result = self._hook(*args, **kwargs)
             except Exception as exc:
                 self._health.record(
                     self.name,
@@ -84,6 +84,27 @@ class HookWorker:
                 if self._verbose:
                     logger.warning("[%s] hook error: %s", self.name, exc)
             else:
+                if result is None:
+                    self._health.record_noop(
+                        self.name,
+                        seconds=time.monotonic() - started,
+                    )
+                    continue
+                if isinstance(result, Mapping) and result.get("ok") is False:
+                    error = str(
+                        result.get("message")
+                        or result.get("error")
+                        or "hook returned ok=false"
+                    )
+                    self._health.record(
+                        self.name,
+                        seconds=time.monotonic() - started,
+                        ok=False,
+                        error=error,
+                    )
+                    if self._verbose:
+                        logger.warning("[%s] hook failed: %s", self.name, error)
+                    continue
                 self._health.record(
                     self.name,
                     seconds=time.monotonic() - started,

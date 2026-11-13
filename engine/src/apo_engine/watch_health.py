@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .atomic_io import atomic_write_text
+
 # Known hook names — informational only, not enforced (callers may record
 # any string key).
 GIT_SYNC = "git_sync"
@@ -93,6 +95,29 @@ class HookHealthTracker:
             snapshot = dict(self._state)
         self._maybe_write(snapshot, force=True)
 
+    def record_noop(self, hook: str, *, seconds: float) -> None:
+        """Record a healthy no-op unless it follows an unresolved failure."""
+        with self._lock:
+            previous = self._state.get(hook, {})
+            if previous.get("ok") is False:
+                self._state[hook] = {
+                    **previous,
+                    "running": False,
+                }
+            else:
+                self._state[hook] = {
+                    "last_tick_at": datetime.now(timezone.utc).isoformat(
+                        timespec="seconds"
+                    ),
+                    "last_tick_seconds": round(max(0.0, seconds), 3),
+                    "ok": True,
+                    "error": None,
+                    "running": False,
+                    "started_at": previous.get("started_at"),
+                }
+            snapshot = dict(self._state)
+        self._maybe_write(snapshot, force=previous.get("ok") is False)
+
     def _maybe_write(self, snapshot: dict[str, Any], *, force: bool) -> None:
         with self._write_lock:
             now = time.monotonic()
@@ -101,8 +126,9 @@ class HookHealthTracker:
             self._last_write = now
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                self.path.write_text(
-                    json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                atomic_write_text(
+                    self.path,
+                    json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
                 )
             except OSError:
                 pass

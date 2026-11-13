@@ -41,9 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-import yaml
-
-from apo_engine import config
+from apo_engine import config, vault_contracts
 from apo_engine.config import env_alias
 
 _APO_DISABLED = Path("system") / "contracts" / ".apo-disabled"
@@ -193,11 +191,7 @@ def _read_usage_data(root: Path) -> dict[str, Any] | None:
         path = root / rel
         if not path.is_file():
             continue
-        try:
-            raw = path.read_text(encoding="utf-8")
-            data = yaml.safe_load(raw)
-        except (OSError, yaml.YAMLError):
-            return None
+        data = vault_contracts.load_yaml_cached(path)
         if isinstance(data, dict):
             return data
         return None
@@ -714,14 +708,17 @@ def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
     )
     p.add_argument(
         "--default-vault",
-        "--default",
         dest="default_vault",
         default="",
         metavar="NAME",
-        help=(
-            "Default usage-contract vault_id when vault= is empty. --default is "
-            "a back-compat alias (matches add_discovery_arguments' --default-vault)."
-        ),
+        help="Default usage-contract vault_id when vault= is empty.",
+    )
+    p.add_argument(
+        "--default",
+        dest="default_legacy",
+        default="",
+        metavar="NAME",
+        help="Deprecated alias for --default-vault.",
     )
     p.add_argument(
         "--vaults-root",
@@ -742,11 +739,21 @@ def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
             "conflicting configuration: --vaults-root and deprecated "
             "--collection-root differ; pass one value or make both identical"
         )
+    if (
+        ns.default_vault
+        and ns.default_legacy
+        and ns.default_vault != ns.default_legacy
+    ):
+        raise ValueError(
+            "conflicting configuration: --default-vault and deprecated "
+            "--default differ; pass one value or make both identical"
+        )
     root_arg = ns.vaults_root or ns.collection_root
     if root_arg:
         os.environ["APO_VAULTS_ROOT"] = str(Path(root_arg).expanduser())
-    if ns.default_vault:
-        os.environ["APO_DEFAULT_VAULT"] = str(ns.default_vault).strip()
+    default_arg = ns.default_vault or ns.default_legacy
+    if default_arg:
+        os.environ["APO_DEFAULT_VAULT"] = str(default_arg).strip()
     if ns.vault_path:
         # Merge with any existing APO_VAULT_PATHS
         existing = (os.environ.get("APO_VAULT_PATHS") or "").strip()
@@ -785,6 +792,13 @@ def add_discovery_arguments(parser: Any) -> None:
         help="Default usage-contract vault_id (APO_DEFAULT_VAULT).",
     )
     parser.add_argument(
+        "--default",
+        dest="default_legacy",
+        default="",
+        metavar="NAME",
+        help="Deprecated alias for --default-vault.",
+    )
+    parser.add_argument(
         "--vaults-root",
         default="",
         metavar="DIR",
@@ -809,6 +823,13 @@ def apply_discovery_namespace(ns: Any) -> None:
         )
     coll = canonical or deprecated
     default = getattr(ns, "default_vault", "") or ""
+    default_legacy = getattr(ns, "default_legacy", "") or ""
+    if default and default_legacy and default != default_legacy:
+        raise ValueError(
+            "conflicting configuration: --default-vault and deprecated "
+            "--default differ; pass one value or make both identical"
+        )
+    default = default or default_legacy
     paths = getattr(ns, "vault_paths", None) or []
     if coll:
         os.environ["APO_VAULTS_ROOT"] = str(Path(coll).expanduser())

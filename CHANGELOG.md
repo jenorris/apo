@@ -12,17 +12,19 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
   and never receive frontmatter or OKF stamps. Arrays and scalars remain valid
   stored payloads but report `unsupported_json_top_level` and are not indexed.
 - Canonical configuration names: `APO_VAULTS_ROOT` / `--vaults-root`,
-  `APO_RUNTIME_COLLECTION`, and Go client `APO_MCP_URL` / `--server-url` plus
-  `APO_MCP_TOKEN` / `--bearer-token`.
+  `APO_RUNTIME_COLLECTION`, `APO_WATCH_INTERVAL`,
+  `APO_WATCH_RECONCILE_INTERVAL`, and Go client `APO_MCP_URL` /
+  `--server-url` plus `APO_MCP_TOKEN` / `--bearer-token`.
 - A Go 1.25 CI job runs `go test ./...` in `client/`.
 - `docs/glossary.md` defines the current vault and catalog vocabulary.
 
 ### Migration
 
 - `APO_COLLECTION_ROOT` / `--collection-root`, `APO_COLLECTION`,
-  `APO_SERVER_URL` / `--server`, and `APO_TOKEN` / `--token` remain deprecated
-  aliases for one migration window. Matching canonical and deprecated values
-  are accepted. Conflicts fail instead of choosing one silently.
+  `WATCH_INTERVAL`, `WATCH_RECONCILE_INTERVAL`, `APO_SERVER_URL` / `--server`,
+  and `APO_TOKEN` / `--token` remain deprecated aliases for one migration
+  window. Matching canonical and deprecated values are accepted. Conflicts
+  fail instead of choosing one silently.
 - Active documentation and code comments now use MCP vocabulary. Historical
   transport details remain in this changelog and `docs/local-rpc.md`.
 

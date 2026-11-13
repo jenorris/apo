@@ -253,6 +253,9 @@ func cmdCall(args []string) error {
 	if err := json.Unmarshal([]byte(raw), &toolArgs); err != nil {
 		return fmt.Errorf("--args is not a JSON object: %w", err)
 	}
+	if toolArgs == nil {
+		return fmt.Errorf("--args is not a JSON object")
+	}
 
 	return callAndPrint(sf, tool, toolArgs)
 }

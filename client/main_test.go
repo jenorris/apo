@@ -130,3 +130,14 @@ func TestCommandsRejectIgnoredArgumentsBeforeConnecting(t *testing.T) {
 		})
 	}
 }
+
+func TestCallRejectsNonObjectJSON(t *testing.T) {
+	for _, raw := range []string{"null", "[]", `"text"`} {
+		t.Run(raw, func(t *testing.T) {
+			err := cmdCall([]string{"read_note", "--args", raw})
+			if err == nil || !strings.Contains(err.Error(), "--args is not a JSON object") {
+				t.Fatalf("error = %v, want non-object error", err)
+			}
+		})
+	}
+}

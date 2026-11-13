@@ -415,11 +415,11 @@ def _watch_one(
     hook_health = watch_health.HookHealthTracker(root)
     hooks = watch_hooks.WatchHooks(hook_health, verbose=verbose)
 
-    def desk_reproject(*, index_busy: bool) -> None:
+    def desk_reproject(*, index_busy: bool):
         del index_busy
         from . import vault_project
 
-        vault_project.maybe_reproject(reason="desk-poll", verbose=verbose)
+        return vault_project.maybe_reproject(reason="desk-poll", verbose=verbose)
 
     hooks.register(watch_health.DESK_REPROJECT, desk_reproject)
     hooks.register(
