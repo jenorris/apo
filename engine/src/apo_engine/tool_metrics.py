@@ -520,9 +520,9 @@ def record_call(
     # Additive OTLP forwarding (Jaeger via otlp-mcp) — DuckDB stays the queryable
     # store. Best-effort; gated by env/contract; never affects the DuckDB write.
     try:
-        from apo_engine.otel_forwarder import forward_event
+        from apo_engine.otel_forwarder import enqueue_event
 
-        forward_event(collection, event, vault_root=vault_root)
+        enqueue_event(collection, event, vault_root=vault_root)
     except Exception:
         pass
 

@@ -18,8 +18,11 @@ Design:
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import os
+import queue
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -32,6 +35,14 @@ DEFAULT_ENDPOINT = "http://127.0.0.1:4318"
 
 # Cache SDK availability so a missing dependency costs one import attempt, not one per call.
 _sdk_available: bool | None = None
+
+# forward_event does a synchronous HTTP export (up to 2 s flush), so record_call
+# only enqueues and one daemon thread sends spans. A slow or down collector fills
+# the bounded queue and drops spans instead of stalling tool calls.
+_QUEUE_MAX = 1_000
+_queue: queue.Queue[Any] = queue.Queue(maxsize=_QUEUE_MAX)
+_worker_lock = threading.Lock()
+_worker: threading.Thread | None = None
 
 _OFF_VALUES = {"0", "false", "no", "off"}
 
@@ -216,3 +227,50 @@ def forward_event(
         return True
     except Exception:
         return False
+
+
+def _drain_loop() -> None:
+    while True:
+        item = _queue.get()
+        if isinstance(item, threading.Event):
+            item.set()
+            continue
+        collection, event, vault_root = item
+        try:
+            forward_event(collection, event, vault_root=vault_root)
+        except Exception:
+            pass
+
+
+def enqueue_event(
+    collection: str, event: dict[str, Any], *, vault_root: Path | None = None
+) -> None:
+    """Queue ``event`` for the background exporter. Never blocks, never raises."""
+    global _worker
+    try:
+        if not otel_export_enabled(vault_root) or not _sdk_ready():
+            return
+        if _worker is None or not _worker.is_alive():
+            with _worker_lock:
+                if _worker is None or not _worker.is_alive():
+                    _worker = threading.Thread(
+                        target=_drain_loop, name="apo-otel-forwarder", daemon=True
+                    )
+                    _worker.start()
+                    atexit.register(flush)
+        _queue.put_nowait((collection, dict(event), vault_root))
+    except Exception:
+        return
+
+
+def flush(timeout: float = 5.0) -> None:
+    """Block until every span queued so far is sent or dropped. Never raises."""
+    worker = _worker
+    if worker is None or not worker.is_alive():
+        return
+    done = threading.Event()
+    try:
+        _queue.put(done, timeout=timeout)
+    except queue.Full:
+        return
+    done.wait(timeout)
