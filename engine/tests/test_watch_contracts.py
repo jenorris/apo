@@ -197,6 +197,54 @@ class ContractTriggerTest(unittest.TestCase):
             "SELECT kind FROM backlinks WHERE source='svc.md'")}
         self.assertEqual(kinds, {"depends-on"})
 
+    def test_startup_scan_runs_when_monotonic_clock_is_young(self):
+        """The first cycle scans even when uptime is below the reconcile interval.
+
+        ``time.monotonic()`` is seconds since boot. With ``last_scan`` at 0 the
+        first cycle looks already done on a freshly booted machine, so the links
+        state is never stamped and this file's other test times out in CI.
+        """
+        try:
+            import watchdog  # noqa: F401
+        except ImportError:
+            self.skipTest("watchdog not installed")
+        if not _fs_events_available():
+            self.skipTest(
+                "filesystem event delivery (FSEvents/inotify) unavailable in this environment"
+            )
+        binding = vaults.VaultBinding(
+            name="watch_contracts_test",
+            root=self.vault,
+            index=self.index,
+            collection="watch_contracts_test",
+        )
+        stop = threading.Event()
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                with vaults.bind(binding), mock.patch.object(
+                    watch.time, "monotonic", return_value=5.0
+                ):
+                    watch._watch_one(
+                        binding, interval=0.2, use_events=True, verbose=False, stop=stop
+                    )
+            except BaseException as e:  # surfaced below
+                errors.append(e)
+
+        with mock.patch.object(config, "WATCH_RECONCILE_INTERVAL", 3600.0):
+            t = threading.Thread(target=run, daemon=True)
+            t.start()
+            try:
+                self.assertTrue(
+                    self.wait_for(lambda: self.stored_state() is not None, 15),
+                    errors,
+                )
+            finally:
+                stop.set()
+                t.join(timeout=10)
+        self.assertFalse(errors, errors)
+
 
 if __name__ == "__main__":
     unittest.main()
