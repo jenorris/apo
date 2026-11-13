@@ -116,7 +116,7 @@ just okf validate --vault-root ~/Notes/Yours --profile okf   # SPEC §11 exactly
 | **Vault contracts** | Optional OKF / search / git / usage contracts — stamp and validate on write; OKF CLI for lint/export/ingest |
 | **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown (+ YAML title/description fields) |
 | **Typed query expansion** | Opt-in `expand=true` — lex/vec/hyde sub-queries RRF-fused with a top-rank bonus and position-aware rerank blend (adapted from [tobi/qmd](https://github.com/tobi/qmd)) |
-| **MCP surface** | 11 top-level tools + 6 admin capabilities via `apo_admin` |
+| **MCP surface** | 12 top-level tools + 7 admin capabilities via `apo_admin` |
 | **Index-backed graphs** | `backlinks` + `history` (mtime browse; file git log when git contract active) hit sqlite / git — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
 | **Measurable quality** | Labeled search eval (`just search-eval`, hit@k / MRR) + optional local cross-encoder reranker |
@@ -233,9 +233,10 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 | Surface | Count | Notes |
 |---------|------:|-------|
 | Top-level | **12** | Core search/write + `vault` + `apo_admin` |
-| Via `apo_admin` | **6** | `memory_status`, `reindex`, `reload_config`, `delete_note`, `git_sync`, `list_refs` |
+| Via `apo_admin` | **7** | `memory_status`, `index_health`, `reindex`, `reload_config`, `delete_note`, `git_sync`, `list_refs` |
 
-Counts are contract-tested (`engine/tests/test_apo_admin.py`) — if this table drifts from the code, CI fails.
+Counts are checked against the live tool registry and admin handlers by
+`scripts/check_public_facts.py` — if this table drifts from the code, CI fails.
 
 Habit KPIs (optional): **`vault(request={action: "stats"})`**. Operator traces: OTel → Jaeger (Workbench `harness/observability/`).
 

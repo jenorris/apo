@@ -51,3 +51,6 @@ jobs:
       - name: Run tests
         working-directory: engine
         run: .venv/bin/python -m pytest tests -q
+
+      - name: Check public facts
+        run: engine/.venv/bin/python scripts/check_public_facts.py
