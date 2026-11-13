@@ -6,6 +6,7 @@ Vault: APO_NOTES_ROOT. Deferred queue: ~/.apo/deferred-<collection>.json
 """
 
 import asyncio
+import ipaddress
 import json
 import os
 from dataclasses import dataclass, field as dc_field, replace as dc_replace
@@ -195,7 +196,8 @@ def _top_level_dirs(v: Vault) -> list[str]:
 # and this is byte-identical to no auth= kwarg at all. Only a dedicated
 # instance with APO_MCP_AUTH=google (the public desma endpoint) pays for or
 # is gated by auth.
-mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS, auth=build_auth_provider_from_env())
+_AUTH_PROVIDER = build_auth_provider_from_env()
+mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS, auth=_AUTH_PROVIDER)
 
 # FastMCP wraps middleware with reversed(list): first added = outermost.
 # Metrics must sit *outside* validation rewrite so schema rejects are recorded as
@@ -1141,6 +1143,28 @@ def _csv_env(name: str) -> list[str] | None:
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 
+def _require_safe_http_bind(host: str, *, auth_provider: object | None) -> None:
+    """Reject unauthenticated HTTP unless the bind host is explicit loopback."""
+    if auth_provider is not None:
+        return
+    value = (host or "").strip().lower()
+    if value == "localhost":
+        return
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise RuntimeError(
+            "unauthenticated HTTP requires an explicit loopback bind host"
+        ) from exc
+    if address == ipaddress.ip_address("::1"):
+        return
+    if isinstance(address, ipaddress.IPv4Address) and address in ipaddress.ip_network(
+        "127.0.0.0/8"
+    ):
+        return
+    raise RuntimeError("unauthenticated HTTP requires an explicit loopback bind host")
+
+
 def main() -> None:
     _maybe_warm_query_embed()
     # Default: stdio, one subprocess per client (Claude Code, Cursor, each Hermes
@@ -1165,9 +1189,11 @@ def main() -> None:
     # client, never replace the loopback defaults.
     transport = (os.environ.get("APO_MCP_TRANSPORT") or "stdio").strip().lower()
     if transport in ("http", "streamable-http"):
+        host = os.environ.get("APO_MCP_HOST", "127.0.0.1")
+        _require_safe_http_bind(host, auth_provider=_AUTH_PROVIDER)
         mcp.run(
             transport="http",
-            host=os.environ.get("APO_MCP_HOST", "127.0.0.1"),
+            host=host,
             port=int(os.environ.get("APO_MCP_PORT", "8878")),
             allowed_hosts=_csv_env("APO_MCP_ALLOWED_HOSTS"),
             allowed_origins=_csv_env("APO_MCP_ALLOWED_ORIGINS"),

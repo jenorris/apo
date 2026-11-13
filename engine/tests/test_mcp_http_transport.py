@@ -11,7 +11,9 @@ verifies stays true.
 
 from __future__ import annotations
 
+import os
 import unittest
+from unittest.mock import patch
 
 from starlette.testclient import TestClient
 
@@ -102,6 +104,31 @@ class CsvEnvHelperTest(unittest.TestCase):
             mod._csv_env("APO_TEST_CSV_ENV"),
             ["a.example.com", "b.example.com", "c.example.com"],
         )
+
+
+class HttpBindAuthGateTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.mod, _ = _list_tools_lean(collection="mcp_http_bind_gate_test")
+
+    def test_unauthenticated_http_allows_only_loopback(self):
+        for host in ("localhost", "127.0.0.1", "127.42.0.9", "::1"):
+            with self.subTest(host=host):
+                self.mod._require_safe_http_bind(host, auth_provider=None)
+
+    def test_unauthenticated_http_rejects_non_loopback(self):
+        for host in ("0.0.0.0", "::", "192.168.1.20", "apo.local", "bad host", ""):
+            with self.subTest(host=host), self.assertRaises(RuntimeError):
+                self.mod._require_safe_http_bind(host, auth_provider=None)
+
+    def test_authenticated_http_allows_non_loopback(self):
+        self.mod._require_safe_http_bind("0.0.0.0", auth_provider=object())
+
+    def test_stdio_does_not_apply_http_bind_gate(self):
+        with patch.dict(os.environ, {"APO_MCP_TRANSPORT": "stdio", "APO_MCP_HOST": "0.0.0.0"}):
+            with patch.object(self.mod.mcp, "run") as run:
+                self.mod.main()
+        run.assert_called_once_with()
 
 
 if __name__ == "__main__":

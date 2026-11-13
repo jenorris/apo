@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from apo_engine import okf, ops
@@ -158,6 +159,41 @@ class NotePathGateTests(NotePathGateBase):
         text = (self.root / "areas" / "threads" / "new.md").read_text(encoding="utf-8")
         self.assertIn("okf_type:", text)
         self.assertIn("type:", text)
+
+    def test_all_mutators_reject_contract_schema(self):
+        rel = "system/contracts/okf-contract.schema.yaml"
+        original = (self.root / rel).read_text(encoding="utf-8")
+        calls = (
+            lambda: ops.write_note(rel, "changed\n", vault="meta"),
+            lambda: ops.append_note(rel, text="changed", vault="meta"),
+            lambda: ops.patch_note(
+                rel, [{"op": "replace_text", "find": "okf_version", "replace": "changed"}], vault="meta"
+            ),
+            lambda: ops.delete_note(rel, vault="meta"),
+            lambda: ops.move_note(rel, "areas/threads/moved.yaml", vault="meta"),
+        )
+        for call in calls:
+            with self.subTest(call=call):
+                out = call()
+                self.assertFalse(out["ok"], out)
+                self.assertEqual(out["error"], "protected_control_plane")
+        self.assertEqual((self.root / rel).read_text(encoding="utf-8"), original)
+
+    def test_legacy_contract_schema_is_protected(self):
+        legacy = self.root / "system" / "config" / "git-contract.schema.yaml"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("git_contract_version: '0.1'\n", encoding="utf-8")
+        out = ops.write_note(
+            "system/config/git-contract.schema.yaml", "changed\n", vault="meta"
+        )
+        self.assertEqual(out.get("error"), "protected_control_plane")
+
+    def test_failed_delete_does_not_enqueue_purge(self):
+        with unittest.mock.patch.object(Path, "unlink", side_effect=OSError("denied")):
+            with unittest.mock.patch.object(ops, "_enqueue_purge") as enqueue:
+                with self.assertRaisesRegex(OSError, "denied"):
+                    ops.delete_note("areas/threads/good.md", vault="meta")
+        enqueue.assert_not_called()
 
 
 if __name__ == "__main__":

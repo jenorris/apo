@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Literal
 
 from . import vaults as vault_reg
+from .atomic_io import atomic_write_text
 
 Remediation = Literal["auto", "llm", "human"]
 Severity = Literal["info", "warn", "error"]
@@ -1006,7 +1007,7 @@ def lint_folder(
         )
         if fix and new_content != content:
             try:
-                p.write_text(new_content, encoding="utf-8")
+                atomic_write_text(p, new_content)
             except OSError:
                 pass
         all_flaws.extend(note_flaws)

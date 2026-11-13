@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from . import domain_projection, optima_contract, vaults
+from .atomic_io import atomic_write_text
 from .optima_contract import MergeSettings, SourceSpec
 
 TZ = ZoneInfo("America/New_York")
@@ -532,7 +533,7 @@ def run_merge(
         prev_text = out_path.read_text(encoding="utf-8") if out_path.is_file() else None
         if _payload_changed(prev_text, merged):
             content = yaml.safe_dump(merged, sort_keys=False, allow_unicode=True)
-            out_path.write_text(content, encoding="utf-8")
+            atomic_write_text(out_path, content)
             wrote = True
 
     result: dict[str, Any] = {

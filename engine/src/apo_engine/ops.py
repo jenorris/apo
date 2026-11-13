@@ -41,6 +41,7 @@ from apo_engine.agent_args import (
     resolve_where,
     shape_note_read,
 )
+from apo_engine.atomic_io import atomic_write_bytes, atomic_write_text
 from apo_engine.markdown_patch import (
     PatchError,
     apply_append,
@@ -53,6 +54,7 @@ from apo_engine.markdown_patch import (
 from apo_engine.note_format import (
     MUTATOR_SUFFIXES,
     ensure_indexed_path,
+    is_contract_schema_path,
     is_json_catalog,
     is_mmd_note,
     is_markdown_note,
@@ -250,6 +252,11 @@ def _require_note_path(path: str) -> None:
     ``.json`` catalogs pass here (raw write / set_field patch targets) even
     though the indexer never treats them as notes — see ``MUTATOR_SUFFIXES``.
     """
+    if is_contract_schema_path(path):
+        raise OpsError(
+            "protected_control_plane",
+            "contract schema files are host-controlled; use filesystem or CLI administration",
+        )
     if is_mutator_path(path):
         return
     allowed = ", ".join(sorted(MUTATOR_SUFFIXES))
@@ -2998,7 +3005,7 @@ def write_note(
             return guard
         existed = full.exists()
         full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(content, encoding="utf-8")
+        atomic_write_text(full, content)
         out = {
             "ok": True,
             "path": path,
@@ -3055,7 +3062,7 @@ def write_note(
     )
 
     full.parent.mkdir(parents=True, exist_ok=True)
-    full.write_text(to_write, encoding="utf-8")
+    atomic_write_text(full, to_write)
     _enqueue_index(b, full)
 
     out: dict[str, Any] = {
@@ -3230,7 +3237,7 @@ def append_note(
                 message="note not found (pass create=true to create)",
             )
         full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(minimal_note_stub(path), encoding="utf-8")
+        atomic_write_text(full, minimal_note_stub(path))
         prior_text = full.read_text(encoding="utf-8")
 
     content = prior_text if prior_text is not None else full.read_text(encoding="utf-8")
@@ -3260,7 +3267,7 @@ def append_note(
     new_content, write_flaws = _prepare_write_content(
         new_content, path=path, vault=b.name, format_only=True
     )
-    full.write_text(new_content, encoding="utf-8")
+    atomic_write_text(full, new_content)
     _enqueue_index(b, full)
 
     out: dict[str, Any] = {
@@ -3681,7 +3688,7 @@ def _apply_table_ops(
     if dry_run:
         return {"ok": True, "path": rel, "dry_run": True, "applied": applied, "results": results, "vault": b.name}
 
-    full.write_text(new_content, encoding="utf-8")
+    atomic_write_text(full, new_content)
     _enqueue_index(b, full)
 
     # New content_hash per touched row — keyed by (table_id, row_key) so multi-table
@@ -3859,7 +3866,7 @@ def patch_note(
     if is_json_catalog(path):
         # Raw catalog: no OKF stamp, no lint auto-fix, no index enqueue (same
         # treatment as the write_note .json branch).
-        full.write_text(to_write, encoding="utf-8")
+        atomic_write_text(full, to_write)
     else:
         okf = apo_okf.process_concept(
             vault_root=root,
@@ -3883,7 +3890,7 @@ def patch_note(
             to_write, path=path, vault=b.name, okf_result=okf
         )
 
-        full.write_text(to_write, encoding="utf-8")
+        atomic_write_text(full, to_write)
         _enqueue_index(b, full)
 
     failed = sum(1 for r in result.results if r.get("status") == "error")
@@ -4575,7 +4582,7 @@ def _copy_into_vault(
     )
 
     dst_full.parent.mkdir(parents=True, exist_ok=True)
-    dst_full.write_text(to_write, encoding="utf-8")
+    atomic_write_text(dst_full, to_write)
     _enqueue_index(b, dst_full)
 
     out: dict[str, Any] = {
@@ -4651,8 +4658,8 @@ def delete_note(path: str, *, vault: str = "", ref: str = "") -> dict[str, Any]:
     if not full.exists():
         return _err(path=path, error="not_found", message="note not found")
     abs_path = str(full.resolve())
-    purged = _enqueue_purge(b, full)
     full.unlink()
+    purged = _enqueue_purge(b, full)
     index_deferred.dequeue_paths(b.collection, [abs_path])
     out: dict[str, Any] = {
         "ok": True,
@@ -4759,6 +4766,7 @@ def vault_op(
     include_unresolved: bool = False,
     max_nodes: int | None = 500,
     op: str = "",
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Vault management: list | contracts | describe | merge | project | stats | lint | okf_dry_run | clone | export | grammar.
 
@@ -4968,6 +4976,11 @@ def vault_op(
             return _err(error=e.code, message=e.message)
         if src_b.name == dst_b.name:
             return _err(error="bad_request", message="clone requires two different vaults")
+        if not dry_run and not confirm:
+            return _err(
+                error="confirm_required",
+                message="clone copies system/ control files; pass confirm=true",
+            )
         src_root = src_b.resolved().root
         dst_root = dst_b.resolved().root
         src_system = src_root / "system"
@@ -4989,7 +5002,7 @@ def vault_op(
             copied.append(rel)
             if not dry_run:
                 dst_file.parent.mkdir(parents=True, exist_ok=True)
-                dst_file.write_bytes(f.read_bytes())
+                atomic_write_bytes(dst_file, f.read_bytes())
         if not dry_run:
             for rel in copied:
                 _enqueue_index(dst_b, dst_root / rel)

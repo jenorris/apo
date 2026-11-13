@@ -29,6 +29,7 @@ import os
 import subprocess
 import threading
 import time
+import warnings
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -89,6 +90,7 @@ _BLOCKING_MARKERS = (
 _STATUS_REL = Path(".apo") / "git-sync-status.json"
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
+_LEGACY_COMMAND_WARNED_ROOTS: set[str] = set()
 
 Action = Literal["status", "run", "pull", "rebase", "clear_block"]
 
@@ -105,7 +107,6 @@ class SyncSettings:
     default_branch: str = "main"
     never_commit: tuple[str, ...] = ()
     remote: str = ""
-    on_block_command: str = ""
 
 
 def _lock_for(root: Path) -> threading.Lock:
@@ -182,6 +183,16 @@ def sync_settings(vault_root: Path) -> SyncSettings:
         pull_iv = 900.0
     _default_tmpl = "apo: sync {iso_local} · {path_count} paths · {top_folders}"
     tmpl = str(sync.get("commit_message_template") or _default_tmpl).strip()
+    legacy_command = str(sync.get("on_block_command") or "").strip()
+    warning_key = str(vault_root.expanduser().resolve())
+    if legacy_command and warning_key not in _LEGACY_COMMAND_WARNED_ROOTS:
+        _LEGACY_COMMAND_WARNED_ROOTS.add(warning_key)
+        warnings.warn(
+            "sync.on_block_command is deprecated and ignored; configure "
+            "APO_GIT_SYNC_ON_BLOCK_ARGV in the host environment",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     return SyncSettings(
         enabled=bool(sync.get("enabled", False)),
         debounce_seconds=max(1.0, debounce),
@@ -191,7 +202,6 @@ def sync_settings(vault_root: Path) -> SyncSettings:
         default_branch=branch,
         never_commit=tuple(str(p) for p in never if str(p).strip()),
         remote=remote,
-        on_block_command=str(sync.get("on_block_command") or "").strip(),
     )
 
 
@@ -200,8 +210,8 @@ def _is_read_only_vault(vault_root: Path) -> bool:
 
     A read-only mount (e.g. an ingested foreign OKF bundle) promises every
     *write* op fails — that promise must also cover the automation this
-    module runs unattended (commit/push, and shelling out to
-    ``on_block_command``), not just the MCP write-tool boundary.
+    module runs unattended (commit/push and host-owned block notification),
+    not just the MCP write-tool boundary.
     """
     try:
         resolved = vault_root.expanduser().resolve()
@@ -322,7 +332,7 @@ def _defer_offline(
 ) -> dict[str, Any]:
     """Record a transient network failure as ``offline`` and schedule a retry.
 
-    Unlike ``_block`` this never fires ``on_block_command``: an outage is
+    Unlike ``_block`` this never fires the block notification argv: an outage is
     expected to heal on its own, and sync keeps committing locally meanwhile.
     """
     status = dict(st or read_status(vault_root))
@@ -378,19 +388,37 @@ def _settle_local_ok(status: dict[str, Any]) -> None:
 
 
 def _notify_blocked(vault_root: Path, error: str) -> None:
-    """Run the contract's ``sync.on_block_command`` hook, if configured.
+    """Run the host-owned block notification argv, if configured.
 
     Blocked state otherwise lives only in ``.apo/git-sync-status.json`` and is
     surfaced nowhere, so a stuck vault looks healthy while backups are off.
     A failing hook must never mask the block it is reporting.
     """
-    command = sync_settings(vault_root).on_block_command
-    if not command:
+    # Load settings to emit the one-window deprecation warning for a legacy
+    # vault-controlled command. Its value is never executed.
+    sync_settings(vault_root)
+    raw = (os.environ.get("APO_GIT_SYNC_ON_BLOCK_ARGV") or "").strip()
+    if not raw:
+        return
+    try:
+        argv = json.loads(raw)
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or any(not isinstance(arg, str) or not arg or "\0" in arg for arg in argv)
+        ):
+            raise ValueError("expected a non-empty JSON array of non-empty strings")
+    except (json.JSONDecodeError, ValueError) as exc:
+        warnings.warn(
+            f"ignoring malformed APO_GIT_SYNC_ON_BLOCK_ARGV: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return
     try:
         subprocess.run(
-            command,
-            shell=True,
+            argv,
+            shell=False,
             cwd=str(vault_root),
             capture_output=True,
             text=True,

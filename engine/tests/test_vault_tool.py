@@ -859,7 +859,7 @@ class VaultOpTest(unittest.TestCase):
         (self.a / "areas").mkdir(exist_ok=True)
         (self.a / "areas" / "secret.md").write_text("do not clone\n", encoding="utf-8")
 
-        out = ops.vault_op("clone", vault="alpha", to="beta")
+        out = ops.vault_op("clone", vault="alpha", to="beta", confirm=True)
         self.assertTrue(out["ok"], out)
         self.assertEqual(out["from"], "alpha")
         self.assertEqual(out["to"], "beta")
@@ -876,7 +876,7 @@ class VaultOpTest(unittest.TestCase):
         existing = self.b / "system" / "contracts" / "usage-contract.schema.yaml"
         existing.write_text("vault_id: beta\nuntouched: true\n", encoding="utf-8")
 
-        out = ops.vault_op("clone", vault="alpha", to="beta")
+        out = ops.vault_op("clone", vault="alpha", to="beta", confirm=True)
         self.assertTrue(out["ok"], out)
         self.assertIn("system/contracts/usage-contract.schema.yaml", out["skipped_existing"])
         self.assertNotIn("system/contracts/usage-contract.schema.yaml", out["copied"])
@@ -895,6 +895,13 @@ class VaultOpTest(unittest.TestCase):
         self.assertIn("system/config/notes.md", out["copied"])
         self.assertIn("system/contracts/usage-contract.schema.yaml", out["skipped_existing"])
         self.assertFalse((self.b / "system" / "config" / "notes.md").exists())
+
+    def test_clone_requires_confirmation_unless_dry_run(self):
+        out = ops.vault_op("clone", vault="alpha", to="beta")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "confirm_required")
+        preview = ops.vault_op("clone", vault="alpha", to="beta", dry_run=True)
+        self.assertTrue(preview["ok"], preview)
 
     def test_clone_requires_to(self):
         out = ops.vault_op("clone", vault="alpha")

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from apo_engine import okf, vaults
+from apo_engine.atomic_io import atomic_write_text
 
 DEFAULT_ROOTS = ("inbox", "projects", "areas", "resources", "archives", "system")
 RESERVED_NAMES = ("index.md", "log.md")
@@ -195,7 +196,7 @@ def fix_vault(
         if not result.stamped or result.content == content:
             continue
         if not dry_run:
-            note.write_text(result.content, encoding="utf-8")
+            atomic_write_text(note, result.content)
         fixed.append({"path": rel, "stamped": result.stamped})
 
     return {
@@ -286,16 +287,14 @@ def init_bundle(
         skipped.append(str(contract.relative_to(root)))
     else:
         contract.parent.mkdir(parents=True, exist_ok=True)
-        contract.write_text(STARTER_CONTRACT.format(version=okf_version), encoding="utf-8")
+        atomic_write_text(contract, STARTER_CONTRACT.format(version=okf_version))
         created.append(str(contract.relative_to(root)))
 
     index = root / "index.md"
     if index.exists() and not force:
         skipped.append("index.md")
     else:
-        index.write_text(
-            STARTER_INDEX.format(version=okf_version, title=root.name), encoding="utf-8"
-        )
+        atomic_write_text(index, STARTER_INDEX.format(version=okf_version, title=root.name))
         created.append("index.md")
 
     okf.clear_contract_cache()
@@ -327,7 +326,8 @@ def export_bundle(
 
     present = [name for name in include if (root / name).is_dir()]
     stamp = okf.utc_now()
-    (dest / "index.md").write_text(
+    atomic_write_text(
+        dest / "index.md",
         "\n".join(
             [
                 "---",
@@ -347,7 +347,6 @@ def export_bundle(
                 "",
             ]
         ),
-        encoding="utf-8",
     )
 
     copied = 0
@@ -376,7 +375,7 @@ def export_bundle(
             if not meta.type and meta.okf_type:
                 text = okf.set_fields(text, {"type": meta.okf_type}, rel_path=rel)
                 stamped_type += 1
-            out.write_text(text, encoding="utf-8")
+            atomic_write_text(out, text)
             copied += 1
 
     # Ship the contract so the export validates standalone.
@@ -386,11 +385,11 @@ def export_bundle(
         out_contract.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_contract, out_contract)
 
-    (dest / "export-manifest.txt").write_text(
+    atomic_write_text(
+        dest / "export-manifest.txt",
         f"exported_at={stamp}\ncopied={copied}\nskipped={skipped}\n"
         f"stamped_type={stamped_type}\nokf_version={okf_version}\n"
         f"roots={','.join(present)}\n",
-        encoding="utf-8",
     )
     return {
         "ok": True,
@@ -474,7 +473,7 @@ def ingest_bundle(
     data.setdefault("default", next(iter(registry)))
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(target, json.dumps(data, indent=2) + "\n")
 
     return {
         "ok": True,

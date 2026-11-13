@@ -12,6 +12,7 @@ from typing import Any, Iterable
 
 from . import note_lint
 from . import vaults as vault_reg
+from .atomic_io import atomic_write_text
 from .okf.frontmatter import set_fields
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+?)\]\]")
@@ -256,7 +257,7 @@ def hygiene_folder(
         entry = {"path": rel, **report}
         changed.append(entry)
         if not dry_run:
-            p.write_text(new_content, encoding="utf-8")
+            atomic_write_text(p, new_content)
     return {
         "ok": True,
         "folder": folder_n,

@@ -83,6 +83,10 @@ class VaultCloneRequest(_ActionBase):
     vault: str = ""
     to: Annotated[str, Field(description="Destination vault id (must exist).")] = ""
     dry_run: bool = False
+    confirm: Annotated[
+        bool,
+        Field(description="Required true for a real clone because it copies system/."),
+    ] = False
 
 
 class VaultOkfDryRunRequest(_ActionBase):
