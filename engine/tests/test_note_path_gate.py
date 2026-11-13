@@ -9,7 +9,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from apo_engine import okf, ops
+from apo_engine import config, okf, ops
 
 
 class NotePathGateBase(unittest.TestCase):
@@ -251,6 +251,121 @@ class NotePathGateTests(NotePathGateBase):
         self.assertFalse(out["ok"], out)
         self.assertEqual(out["error"], "bad_path")
         self.assertFalse((self.root.parent / "outside.md").exists())
+
+    def test_canonical_contract_targets_are_protected_for_mutators(self):
+        contract = self.root / "system" / "contracts" / "okf-contract.schema.yaml"
+        legacy = self.root / "system" / "config" / "git-contract.schema.yaml"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("git_contract_version: '0.1'\n", encoding="utf-8")
+        originals = {
+            contract: contract.read_text(encoding="utf-8"),
+            legacy: legacy.read_text(encoding="utf-8"),
+        }
+        host_note = self.root.parent / "host.md"
+        host_note.write_text("# Host\n", encoding="utf-8")
+        aliases: list[tuple[Path, str]] = []
+        for target in (contract, legacy):
+            link = self.root / f"{target.parent.name}-alias"
+            link.symlink_to(target.parent, target_is_directory=True)
+            aliases.extend(
+                (
+                    (target, str(target)),
+                    (target, f"{link.name}/{target.name}"),
+                )
+            )
+
+        for target, alias in aliases:
+            calls = (
+                ("write", lambda alias=alias: ops.write_note(alias, "changed\n", vault="meta")),
+                (
+                    "patch",
+                    lambda alias=alias: ops.patch_note(
+                        alias,
+                        [{"op": "replace_text", "find": "_version", "replace": "_changed"}],
+                        vault="meta",
+                    ),
+                ),
+                ("delete", lambda alias=alias: ops.delete_note(alias, vault="meta")),
+                (
+                    "move source",
+                    lambda alias=alias: ops.move_note(
+                        alias, "areas/threads/moved.yaml", vault="meta"
+                    ),
+                ),
+                (
+                    "move destination",
+                    lambda alias=alias: ops.move_note(
+                        "areas/threads/good.md", alias, vault="meta"
+                    ),
+                ),
+                (
+                    "copy destination",
+                    lambda alias=alias: ops.place_note(
+                        str(host_note), alias, vault="meta"
+                    ),
+                ),
+                (
+                    "batch patch",
+                    lambda alias=alias: ops.patch_notes(
+                        [
+                            {
+                                "path": alias,
+                                "ops": [
+                                    {
+                                        "op": "replace_text",
+                                        "find": "_version",
+                                        "replace": "_changed",
+                                    }
+                                ],
+                            }
+                        ],
+                        vault="meta",
+                    ),
+                ),
+            )
+            for action, call in calls:
+                with self.subTest(target=target, alias=alias, action=action):
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(originals[target], encoding="utf-8")
+                    self.md.parent.mkdir(parents=True, exist_ok=True)
+                    self.md.write_text("# Good\n", encoding="utf-8")
+                    moved = self.root / "areas" / "threads" / "moved.yaml"
+                    moved.unlink(missing_ok=True)
+                    with unittest.mock.patch.object(
+                        config, "SEND_ALLOW_ROOTS", str(host_note.parent)
+                    ):
+                        out = call()
+                    self.assertFalse(out["ok"], out)
+                    if "results" in out:
+                        self.assertEqual(
+                            out["results"][0]["error"], "protected_control_plane"
+                        )
+                    else:
+                        self.assertEqual(out["error"], "protected_control_plane")
+                    self.assertEqual(
+                        target.read_text(encoding="utf-8"), originals[target]
+                    )
+                    self.assertTrue(self.md.exists())
+                    self.assertFalse(moved.exists())
+
+    def test_safe_symlink_writes_and_contract_reads_remain_available(self):
+        safe_link = self.root / "safe-alias"
+        safe_link.symlink_to(self.md.parent, target_is_directory=True)
+        written = ops.write_note(
+            "safe-alias/linked.md", "# Linked\n", vault="meta"
+        )
+        self.assertTrue(written["ok"], written)
+        self.assertTrue((self.md.parent / "linked.md").exists())
+
+        contracts_link = self.root / "contracts-read"
+        contracts_link.symlink_to(
+            self.root / "system" / "contracts", target_is_directory=True
+        )
+        read = ops.read_note(
+            "contracts-read/okf-contract.schema.yaml", vault="meta", raw=True
+        )
+        self.assertTrue(read["ok"], read)
+        self.assertIn("okf_version", read["content"])
 
     def test_failed_delete_does_not_enqueue_purge(self):
         with unittest.mock.patch.object(Path, "unlink", side_effect=OSError("denied")):

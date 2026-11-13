@@ -249,21 +249,36 @@ def _safe_resolve(root: Path, relative_path: str) -> Path:
     return full
 
 
-def _require_note_path(path: str) -> None:
-    """Reject mutator I/O on non-note suffixes (scripts, dotfiles, etc.).
+def _require_note_path(
+    path: str,
+    *,
+    root: Path,
+    full: Path | None = None,
+) -> None:
+    """Reject mutator I/O on protected or non-note canonical targets.
 
     ``.json`` catalogs pass here for raw writes and object patch targets.
     """
-    normalized = posixpath.normpath(path.replace("\\", "/"))
-    if is_contract_schema_path(normalized):
+    try:
+        resolved_root = root.resolve()
+        lexical = posixpath.normpath(path.replace("\\", "/"))
+        lexical_full = _safe_resolve(resolved_root, lexical)
+        resolved_full = (full or lexical_full).resolve()
+        canonical = {
+            lexical_full.relative_to(resolved_root).as_posix(),
+            resolved_full.relative_to(resolved_root).as_posix(),
+        }
+    except ValueError as exc:
+        raise OpsError("bad_path", str(exc)) from exc
+    if any(is_contract_schema_path(candidate) for candidate in canonical):
         raise OpsError(
             "protected_control_plane",
             "contract schema files are host-controlled; use filesystem or CLI administration",
         )
-    if is_mutator_path(normalized):
+    if all(is_mutator_path(candidate) for candidate in canonical):
         return
     allowed = ", ".join(sorted(MUTATOR_SUFFIXES))
-    suffix = Path(normalized).suffix or "(none)"
+    suffix = Path(lexical).suffix or "(none)"
     raise OpsError(
         "unsupported_format",
         f"Apo mutators accept note paths only ({allowed}); "
@@ -2963,7 +2978,7 @@ def write_note(
         return _err(path=path, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(path)
+        _require_note_path(path, root=root, full=full)
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
 
@@ -3181,7 +3196,7 @@ def append_note(
         return _err(path=path, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(path)
+        _require_note_path(path, root=root, full=full)
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
 
@@ -3757,7 +3772,7 @@ def patch_note(
         return _err(path=path, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(path)
+        _require_note_path(path, root=root, full=full)
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
 
@@ -4188,16 +4203,15 @@ def patch_notes(
         paths_to_gate: list[str] = []
         if place_only and ops_list:
             place_op = _op_to_dict(ops_list[0])
-            for key in ("src", "dst"):
-                val = place_op.get(key)
-                if isinstance(val, str) and val.strip():
-                    paths_to_gate.append(val.strip())
+            val = place_op.get("dst")
+            if isinstance(val, str) and val.strip():
+                paths_to_gate.append(val.strip())
         elif path:
             paths_to_gate.append(path)
         gate_err: OpsError | None = None
         for gate_path in paths_to_gate:
             try:
-                _require_note_path(gate_path)
+                _require_note_path(gate_path, root=b.resolved().root)
             except OpsError as e:
                 gate_err = e
                 break
@@ -4464,8 +4478,8 @@ def move_note(
         return _err(src=src, dst=dst, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(src)
-        _require_note_path(dst)
+        _require_note_path(src, root=root, full=src_full)
+        _require_note_path(dst, root=root, full=dst_full)
     except OpsError as e:
         return _err(src=src, dst=dst, error=e.code, message=e.message)
 
@@ -4522,7 +4536,7 @@ def _copy_into_vault(
         return _err(src=src_display, dst=dst, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(dst)
+        _require_note_path(dst, root=root, full=dst_full)
     except OpsError as e:
         return _err(src=src_display, dst=dst, error=e.code, message=e.message)
 
@@ -4660,7 +4674,7 @@ def delete_note(path: str, *, vault: str = "", ref: str = "") -> dict[str, Any]:
         return _err(path=path, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(path)
+        _require_note_path(path, root=root, full=full)
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
 
