@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import posixpath
 import sqlite3
 import threading
 import time
@@ -251,18 +252,18 @@ def _safe_resolve(root: Path, relative_path: str) -> Path:
 def _require_note_path(path: str) -> None:
     """Reject mutator I/O on non-note suffixes (scripts, dotfiles, etc.).
 
-    ``.json`` catalogs pass here (raw write / set_field patch targets) even
-    though the indexer never treats them as notes — see ``MUTATOR_SUFFIXES``.
+    ``.json`` catalogs pass here for raw writes and object patch targets.
     """
-    if is_contract_schema_path(path):
+    normalized = posixpath.normpath(path.replace("\\", "/"))
+    if is_contract_schema_path(normalized):
         raise OpsError(
             "protected_control_plane",
             "contract schema files are host-controlled; use filesystem or CLI administration",
         )
-    if is_mutator_path(path):
+    if is_mutator_path(normalized):
         return
     allowed = ", ".join(sorted(MUTATOR_SUFFIXES))
-    suffix = Path(path.replace("\\", "/")).suffix or "(none)"
+    suffix = Path(normalized).suffix or "(none)"
     raise OpsError(
         "unsupported_format",
         f"Apo mutators accept note paths only ({allowed}); "

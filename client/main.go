@@ -190,9 +190,16 @@ func envAlias(canonical, deprecated, fallback string) (string, error) {
 }
 
 func cmdTools(args []string) error {
-	sf, _, err := splitFlags(args)
+	sf, rest, err := splitFlags(args)
 	if err != nil {
 		return err
+	}
+	positionals, _, err := partition(rest, map[string]bool{})
+	if err != nil {
+		return err
+	}
+	if len(positionals) != 0 {
+		return fmt.Errorf("unexpected argument %q for tools", positionals[0])
 	}
 	ctx := context.Background()
 	sess, err := connect(ctx, sf.serverURL, sf.token)
@@ -223,6 +230,9 @@ func cmdCall(args []string) error {
 	}
 	if len(positionals) < 1 {
 		return fmt.Errorf("usage: apo-remote call <tool> [--args '<json>']")
+	}
+	if len(positionals) > 1 {
+		return fmt.Errorf("unexpected argument %q for call", positionals[1])
 	}
 	tool := positionals[0]
 
@@ -290,6 +300,9 @@ func cmdRead(args []string) error {
 	if len(positionals) < 1 {
 		return fmt.Errorf("usage: apo-remote read <path> [--heading H]")
 	}
+	if len(positionals) > 1 {
+		return fmt.Errorf("unexpected argument %q for read", positionals[1])
+	}
 	toolArgs := map[string]any{"path": positionals[0]}
 	if v := flags["heading"]; v != "" {
 		toolArgs["heading"] = v
@@ -315,6 +328,9 @@ func cmdAppend(args []string) error {
 	}
 	if len(positionals) < 1 {
 		return fmt.Errorf("usage: cmd | apo-remote append <path> [--heading H] [--chunk-hash C] [--vault V] [--position start|end] [--create]")
+	}
+	if len(positionals) > 1 {
+		return fmt.Errorf("unexpected argument %q for append", positionals[1])
 	}
 	path := positionals[0]
 
@@ -371,14 +387,17 @@ func hasBoolFlag(args []string, name string) (bool, []string) {
 // interleaving of the two (unlike stdlib flag.FlagSet, which stops parsing
 // flags at the first positional) and both "--name value" and "--name=value"
 // forms (see splitEq). valueFlags names which "--name" flags consume a
-// value; every other "--"-prefixed token or bare token is treated as
-// positional.
+// value. Unknown "--"-prefixed tokens are rejected instead of becoming
+// positional text.
 func partition(args []string, valueFlags map[string]bool) (positionals []string, flags map[string]string, err error) {
 	flags = map[string]string{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		head, val, hasEq := splitEq(a)
-		if name, ok := strings.CutPrefix(head, "--"); ok && valueFlags[name] {
+		if name, isFlag := strings.CutPrefix(head, "--"); isFlag {
+			if !valueFlags[name] {
+				return nil, nil, fmt.Errorf("unknown flag %q", head)
+			}
 			if hasEq {
 				if val == "" {
 					return nil, nil, fmt.Errorf("--%s requires a non-empty value", name)

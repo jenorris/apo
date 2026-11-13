@@ -188,6 +188,70 @@ class NotePathGateTests(NotePathGateBase):
         )
         self.assertEqual(out.get("error"), "protected_control_plane")
 
+    def test_normalized_contract_schema_aliases_are_protected_for_all_mutators(self):
+        original = (
+            self.root / "system" / "contracts" / "okf-contract.schema.yaml"
+        ).read_text(encoding="utf-8")
+        aliases = (
+            "foo/../system/contracts/okf-contract.schema.yaml",
+            r"foo\..\system\contracts\okf-contract.schema.yaml",
+        )
+        for alias in aliases:
+            calls = (
+                lambda alias=alias: ops.write_note(alias, "changed\n", vault="meta"),
+                lambda alias=alias: ops.append_note(alias, text="changed", vault="meta"),
+                lambda alias=alias: ops.patch_note(
+                    alias,
+                    [{"op": "replace_text", "find": "okf_version", "replace": "changed"}],
+                    vault="meta",
+                ),
+                lambda alias=alias: ops.delete_note(alias, vault="meta"),
+                lambda alias=alias: ops.move_note(
+                    alias, "areas/threads/moved.yaml", vault="meta"
+                ),
+                lambda alias=alias: ops.move_note(
+                    "areas/threads/good.md", alias, vault="meta"
+                ),
+                lambda alias=alias: ops.patch_notes(
+                    [
+                        {
+                            "path": alias,
+                            "ops": [
+                                {
+                                    "op": "replace_text",
+                                    "find": "okf_version",
+                                    "replace": "changed",
+                                }
+                            ],
+                        }
+                    ],
+                    vault="meta",
+                ),
+            )
+            for call in calls:
+                with self.subTest(alias=alias, call=call):
+                    out = call()
+                    self.assertFalse(out["ok"], out)
+                    if "results" in out:
+                        self.assertEqual(
+                            out["results"][0]["error"], "protected_control_plane"
+                        )
+                    else:
+                        self.assertEqual(out["error"], "protected_control_plane")
+        self.assertEqual(
+            (
+                self.root / "system" / "contracts" / "okf-contract.schema.yaml"
+            ).read_text(encoding="utf-8"),
+            original,
+        )
+        self.assertTrue(self.md.exists())
+
+    def test_normalization_does_not_weaken_traversal_rejection(self):
+        out = ops.write_note("../outside.md", "# Outside\n", vault="meta")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error"], "bad_path")
+        self.assertFalse((self.root.parent / "outside.md").exists())
+
     def test_failed_delete_does_not_enqueue_purge(self):
         with unittest.mock.patch.object(Path, "unlink", side_effect=OSError("denied")):
             with unittest.mock.patch.object(ops, "_enqueue_purge") as enqueue:
