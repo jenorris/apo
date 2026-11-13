@@ -108,6 +108,12 @@ class ForwardSpanTests(unittest.TestCase):
             self.assertFalse(of.forward_event("work", _sample_event()))
 
 
+def _flush_forwarder() -> None:
+    import sys
+
+    sys.modules["apo_engine.otel_forwarder"].flush()
+
+
 class RecordCallIntegrationTests(unittest.TestCase):
     def test_record_call_forwards(self) -> None:
         from apo_engine import tool_metrics
@@ -132,6 +138,8 @@ class RecordCallIntegrationTests(unittest.TestCase):
             "apo_engine.telemetry_contract.policy_for_vault",
             return_value=TelemetryPolicy(),
         ), mock.patch(
+            "apo_engine.otel_forwarder.otel_export_enabled", return_value=True
+        ), mock.patch(
             "apo_engine.otel_forwarder.forward_event", side_effect=_capture
         ):
             tool_metrics.record_call(
@@ -141,10 +149,42 @@ class RecordCallIntegrationTests(unittest.TestCase):
                 duration_ms=3.0,
                 conversation_id="conv-xyz",
             )
+            _flush_forwarder()
 
         self.assertEqual(len(captured), 1)
         self.assertEqual(captured[0][0], "work")
         self.assertEqual(captured[0][1], "write_note")
+
+    def test_slow_collector_does_not_block_record_call(self) -> None:
+        import time
+
+        from apo_engine import tool_metrics
+        from apo_engine.telemetry_contract import TelemetryPolicy
+
+        sent: list[str] = []
+
+        def _slow(collection, event, *, vault_root=None):  # type: ignore[no-untyped-def]
+            time.sleep(0.5)
+            sent.append(str(event.get("tool")))
+            return True
+
+        with mock.patch(
+            "apo_engine.tool_metrics.metrics_enabled", return_value=True
+        ), mock.patch(
+            "apo_engine.telemetry_contract.policy_for_vault",
+            return_value=TelemetryPolicy(),
+        ), mock.patch(
+            "apo_engine.otel_forwarder.otel_export_enabled", return_value=True
+        ), mock.patch(
+            "apo_engine.otel_forwarder.forward_event", side_effect=_slow
+        ):
+            start = time.monotonic()
+            tool_metrics.record_call(collection="work", tool="search_notes", ok=True)
+            elapsed = time.monotonic() - start
+            _flush_forwarder()
+
+        self.assertLess(elapsed, 0.25)
+        self.assertEqual(sent, ["search_notes"])
 
 
 if __name__ == "__main__":

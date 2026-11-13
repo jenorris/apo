@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from apo_engine import deferred, ops, tool_metrics, vaults
+from apo_engine import deferred, ops, otel_forwarder, tool_metrics, vaults
 
 
 @pytest.fixture(autouse=True)
@@ -40,3 +40,7 @@ def _isolated_apo_runtime(tmp_path, monkeypatch):
     vaults.invalidate_bindings_cache()
     # read_usage_layout() is cached too — same leak risk, same fix.
     vaults._usage_layout_cache.clear()
+    yield
+    # Queued metrics events must land (or be dropped) before the runtime redirect is undone.
+    tool_metrics.flush()
+    otel_forwarder.flush()

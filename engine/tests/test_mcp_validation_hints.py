@@ -133,6 +133,8 @@ class McpValidationHintTest(unittest.TestCase):
             self.assertNotIn("union_tag_not_found", text)
 
             # conftest redirects tool_metrics.DEFERRED_DIR into an isolated tmp.
+            # _load_server re-execs apo_engine.*; the middleware queued into that copy.
+            _sys.modules["apo_engine.tool_metrics"].flush()
             metrics_db = tool_metrics.metrics_db_path()
             self.assertTrue(metrics_db.is_file(), f"missing metrics db at {metrics_db}")
             stats = tool_metrics.tool_stats("hint_test", days=None, path=metrics_db)
