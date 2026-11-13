@@ -55,8 +55,10 @@ class QueryEmbedWarmTests(unittest.TestCase):
             core.query_embed("long lived query")
         with core._query_embed_lock:
             core._query_embed_cache.clear()
-        config.QUERY_EMBED_TTL = 1.0
-        time.sleep(1.1)
+        # Entry must outlive the in-memory TTL (but not the 86400s disk TTL); a few
+        # tens of ms is enough — the setUp patch restores QUERY_EMBED_TTL on stop.
+        config.QUERY_EMBED_TTL = 0.02
+        time.sleep(0.05)
         with mock.patch.object(core, "_ollama_embed_request", side_effect=AssertionError("no ollama")):
             vec = core.query_embed("long lived query")
         self.assertEqual(vec, [1.0, 2.0])

@@ -56,7 +56,7 @@ otlp = [
 # joserfc/starlette back test_mcp_auth_google.py (mock RS256 JWKS + an ASGI
 # TestClient) — real deps today only via fastmcp's transitive install, which
 # a fastmcp version bump could silently drop.
-dev = ["pytest>=8.0", "joserfc>=1.0", "starlette>=0.37"]
+dev = ["pytest>=8.0", "pytest-xdist>=3.5", "joserfc>=1.0", "starlette>=0.37"]
 
 [project.scripts]
 apo-engine = "apo_engine.cli:main"

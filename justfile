@@ -38,8 +38,10 @@ tool-reinstall:
 # Engine test suite (hermetic — never touches ~/.apo or your vault).
 # PYTHONPATH=src so git worktrees hit this tree's sources (venv may be
 # editable-installed against the primary clone).
+# Runs in parallel (-n auto) when pytest-xdist is installed (`uv sync --extra dev`);
+# pass `-n 0` to force serial, e.g. `just test -n 0 -x`.
 test *ARGS:
-    cd engine && PYTHONPATH=src .venv/bin/python -m pytest tests {{ARGS}}
+    cd engine && PYTHONPATH=src .venv/bin/python -m pytest tests $(.venv/bin/python -c 'import xdist' 2>/dev/null && echo '-n auto') {{ARGS}}
 
 ollama:
     @command -v ollama >/dev/null 2>&1 || { echo "ollama not found on PATH — install it first (e.g. brew install ollama)"; exit 1; }

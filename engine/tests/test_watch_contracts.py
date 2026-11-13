@@ -24,6 +24,49 @@ from test_retrieval_gaps import _fake_embed
 
 _CONTRACT = "system/contracts/okf-contract.schema.yaml"
 
+# Child-process probe: can a watchdog Observer deliver a file event here at all?
+# Under macOS sandboxes (and some containers) FSEvents/inotify streams silently
+# never fire, and stopping the dead observer then raises SIGBUS inside
+# watchdog's fsevents emitter — killing the whole pytest process. So probe in a
+# subprocess and skip when it cannot see an event. The child exits via os._exit
+# to skip that unsafe observer.stop().
+_FS_EVENT_PROBE = """
+import os, sys, tempfile, threading, time
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
+seen = threading.Event()
+class H(FileSystemEventHandler):
+    def on_any_event(self, event):
+        seen.set()
+
+with tempfile.TemporaryDirectory() as d:
+    obs = Observer()
+    obs.schedule(H(), d, recursive=True)
+    obs.start()
+    time.sleep(0.5)
+    deadline = time.monotonic() + 4
+    n = 0
+    while time.monotonic() < deadline and not seen.is_set():
+        with open(os.path.join(d, f"probe{n}.txt"), "w") as f:
+            f.write("x")
+        n += 1
+        seen.wait(0.5)
+    os._exit(0 if seen.is_set() else 3)
+"""
+
+
+def _fs_events_available() -> bool:
+    import subprocess
+    import sys
+
+    try:
+        return subprocess.run(
+            [sys.executable, "-c", _FS_EVENT_PROBE], timeout=20, capture_output=True
+        ).returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
 
 class ContractsEventRelTest(unittest.TestCase):
     def setUp(self):
@@ -116,6 +159,8 @@ class ContractTriggerTest(unittest.TestCase):
             import watchdog  # noqa: F401
         except ImportError:
             self.skipTest("watchdog not installed")
+        if not _fs_events_available():
+            self.skipTest("filesystem event delivery (FSEvents/inotify) unavailable in this environment")
         binding = vaults.VaultBinding(
             name="watch_contracts_test", root=self.vault, index=self.index, collection="watch_contracts_test"
         )
