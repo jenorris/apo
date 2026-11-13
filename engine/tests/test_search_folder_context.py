@@ -77,6 +77,16 @@ class SearchFolderContextTest(unittest.TestCase):
             rows["changelog/note.md"]["folder_context"], "dated log of machine changes"
         )
 
+    def test_single_vault_hits_omit_path_context_and_qualified_path(self):
+        out = ops.search("gribblefrotz", hybrid=False, limit=10)
+        self.assertTrue(out["vault"])
+        for row in out["results"]:
+            self.assertNotIn("path_context", row)
+            self.assertNotIn("qualified_path", row)
+        explained = ops.search("gribblefrotz", hybrid=False, limit=10, explain=True)
+        rows = {r["source"]: r for r in explained["results"]}
+        self.assertIn("path_context", rows["changelog/note.md"])
+
     def test_hit_outside_any_described_folder_has_no_context_key(self):
         out = ops.search("gribblefrotz", hybrid=False, limit=10)
         rows = {r["source"]: r for r in out["results"]}

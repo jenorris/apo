@@ -89,7 +89,7 @@ Tool path / folder args accept an optional **`vault_id:relative/path`** prefix (
 
 Workbench example: registry = work, contracts, optima, compliance → `atlas:areas/…` is denied; `work:areas/threads/…` is allowed.
 
-Successful reads/writes/search hits also return **`qualified_path`** (`vault:rel`) for copy-paste, while keeping relative `path` / `source` + `vault`.
+Successful reads and writes also return **`qualified_path`** (`vault:rel`) for copy-paste, while keeping relative `path` / `source` + `vault`. Search hits carry it only on fan-out (`vaults=` or `folders=`), next to the per-hit `vault`. A single-vault search names the vault once in the envelope.
 
 v1 `patch_note` batches (`items[]`): all prefixed paths must resolve to the **same** vault_id.
 
