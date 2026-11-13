@@ -118,6 +118,10 @@ Idle vault scans no longer commit when nothing changed.
 | `APO_EXCLUDE_VEC_K` | `64` | Unscoped+exclude: hard cap on global vec0 KNN neighbors |
 | `APO_QUERY_EMBED_TTL` | `120` | Seconds to reuse identical query embeddings (`0` disables) |
 | `APO_QUERY_EMBED_CACHE` | `64` | Max cached query vectors |
+| `APO_EMBED_CONCURRENCY` | `2` | Index embed batches in flight (Ollama / llama-server); inserts stay serial on the writer thread |
+
+The persisted query-embed cache lives in `<index>.qcache.db` next to `index.db`, so MCP
+readers that embed a novel query never write `index.db`.
 
 ## Debounce / coalescing (2026-07-13)
 
