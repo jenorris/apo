@@ -18,11 +18,6 @@ Desma), prefer **`apo-mcp`'s HTTP transport** (FastMCP, default `:8878`) or
 **`apo-local`** for in-process/no-daemon calls. Cursor and Claude Code keep
 stdio MCP.
 
-The legacy hand-rolled RPC server (`apo-engine serve`) is **removed** — see
-[`local-rpc.md`](./local-rpc.md) for the historical pointer. Do not point new
-Hermes integrations at it; use `apo-mcp`'s HTTP transport or `apo-local`
-instead.
-
 ## Desk projection
 
 ```bash

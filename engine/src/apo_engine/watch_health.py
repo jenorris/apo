@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .atomic_io import atomic_write_text
+
 # Known hook names — informational only, not enforced (callers may record
 # any string key).
 GIT_SYNC = "git_sync"
@@ -57,6 +59,7 @@ class HookHealthTracker:
         self.path = vault_root / _STATUS_REL
         self._state: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
         self._last_write = 0.0
 
     def record(
@@ -68,27 +71,67 @@ class HookHealthTracker:
         error: str | None = None,
     ) -> None:
         with self._lock:
+            previous = self._state.get(hook, {})
             self._state[hook] = {
                 "last_tick_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "last_tick_seconds": round(max(0.0, seconds), 3),
                 "ok": bool(ok),
                 "error": (error or None),
+                "running": False,
+                "started_at": previous.get("started_at"),
             }
             snapshot = dict(self._state)
         self._maybe_write(snapshot, force=not ok)
 
+    def record_started(self, hook: str) -> None:
+        """Record a hook start while preserving the legacy completed-tick fields."""
+        with self._lock:
+            previous = self._state.get(hook, {})
+            self._state[hook] = {
+                **previous,
+                "running": True,
+                "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+            snapshot = dict(self._state)
+        self._maybe_write(snapshot, force=True)
+
+    def record_noop(self, hook: str, *, seconds: float) -> None:
+        """Record a healthy no-op unless it follows an unresolved failure."""
+        with self._lock:
+            previous = self._state.get(hook, {})
+            if previous.get("ok") is False:
+                self._state[hook] = {
+                    **previous,
+                    "running": False,
+                }
+            else:
+                self._state[hook] = {
+                    "last_tick_at": datetime.now(timezone.utc).isoformat(
+                        timespec="seconds"
+                    ),
+                    "last_tick_seconds": round(max(0.0, seconds), 3),
+                    "ok": True,
+                    "error": None,
+                    "running": False,
+                    "started_at": previous.get("started_at"),
+                }
+            snapshot = dict(self._state)
+        self._maybe_write(snapshot, force=previous.get("ok") is False)
+
     def _maybe_write(self, snapshot: dict[str, Any], *, force: bool) -> None:
-        now = time.monotonic()
-        if not force and (now - self._last_write) < _WRITE_MIN_GAP_S:
-            return
-        self._last_write = now
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(
-                json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
-        except OSError:
-            pass
+        with self._write_lock:
+            now = time.monotonic()
+            if not force and (now - self._last_write) < _WRITE_MIN_GAP_S:
+                return
+            self._last_write = now
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_text(
+                    self.path,
+                    json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
+                )
+            except OSError:
+                pass
 
 
 def read_hook_health(vault_root: Path) -> dict[str, Any]:
@@ -113,7 +156,7 @@ def hook_health_flags(hooks: dict[str, Any], *, now: datetime | None = None) -> 
         if row.get("ok") is False:
             flags.append(f"hook_error:{name}")
             continue
-        at_raw = row.get("last_tick_at")
+        at_raw = row.get("started_at") if row.get("running") else row.get("last_tick_at")
         if not at_raw:
             continue
         try:

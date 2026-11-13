@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Literal
 
 from . import vaults as vault_reg
+from .atomic_io import atomic_write_text
 
 Remediation = Literal["auto", "llm", "human"]
 Severity = Literal["info", "warn", "error"]
@@ -198,10 +199,10 @@ def detect_okf(
     ``vault(lint)`` and the CLI report the same corpus.
     """
     from apo_engine import okf
-    from apo_engine.note_format import is_contract_schema_path, is_note_path
+    from apo_engine.note_format import is_contract_schema_path, is_json_catalog, is_note_path
 
     rel = (path or "").replace("\\", "/").lstrip("/")
-    if not rel or not is_note_path(rel) or is_contract_schema_path(rel):
+    if not rel or not is_note_path(rel) or is_json_catalog(rel) or is_contract_schema_path(rel):
         return []
     if okf.get_contract(vault_root) is None:
         return []
@@ -1006,7 +1007,7 @@ def lint_folder(
         )
         if fix and new_content != content:
             try:
-                p.write_text(new_content, encoding="utf-8")
+                atomic_write_text(p, new_content)
             except OSError:
                 pass
         all_flaws.extend(note_flaws)

@@ -7,7 +7,7 @@
 #      MCP host's APO_VAULTS would point at (Workbench: harness/mcp/vaults.workbench.json).
 #      Discovery vars inherited from the shell or the repo .env (`just` dotenv-loads
 #      it) are dropped so the render matches the registry the MCP server serves.
-#   2. APO_VAULTS / APO_VAULT_PATHS / APO_COLLECTION_ROOT already in the environment
+#   2. APO_VAULTS / APO_VAULT_PATHS / APO_VAULTS_ROOT already in the environment
 #      — used as-is, with a stderr note naming which one, so an inherited dev
 #      profile is visible rather than silent.
 #   3. Nothing set → error. Never falls through to the legacy single-root desk.
@@ -34,17 +34,17 @@ if [ -n "$registry" ]; then
     exit 1
   fi
   echo "registry: $registry (explicit)" >&2
-  exec env -u APO_COLLECTION_ROOT -u APO_VAULT_PATHS -u APO_DEFAULT_VAULT \
-           -u APO_NOTES_ROOT -u APO_INDEX -u APO_COLLECTION \
+  exec env -u APO_VAULTS_ROOT -u APO_COLLECTION_ROOT -u APO_VAULT_PATHS -u APO_DEFAULT_VAULT \
+           -u APO_NOTES_ROOT -u APO_INDEX -u APO_RUNTIME_COLLECTION -u APO_COLLECTION \
            APO_VAULTS="$registry" "$eng" desk-project --mode "$mode"
 fi
 
-for var in APO_VAULTS APO_VAULT_PATHS APO_COLLECTION_ROOT; do
+for var in APO_VAULTS APO_VAULT_PATHS APO_VAULTS_ROOT APO_COLLECTION_ROOT; do
   if [ -n "${!var:-}" ]; then
     echo "registry: $var=${!var} (inherited — pass --registry / set APO_DESK_REGISTRY to pin the MCP host's vaults.json)" >&2
     exec "$eng" desk-project --mode "$mode"
   fi
 done
 
-echo "error: no vault registry — pass --registry vaults.json, set APO_DESK_REGISTRY, or export APO_VAULT_PATHS / APO_COLLECTION_ROOT" >&2
+echo "error: no vault registry — pass --registry vaults.json, set APO_DESK_REGISTRY, or export APO_VAULT_PATHS / APO_VAULTS_ROOT" >&2
 exit 1

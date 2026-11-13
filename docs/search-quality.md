@@ -1,7 +1,7 @@
 # Search quality — measure it, don't vibe it
 
 Apo ships a labeled eval harness so retrieval changes are argued with numbers.
-Everything below runs through `ops.search` — the exact path MCP/RPC clients use.
+Everything below runs through `ops.search` — the exact path MCP clients use.
 
 ## Eval harness
 

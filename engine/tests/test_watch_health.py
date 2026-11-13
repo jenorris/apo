@@ -97,6 +97,13 @@ class HookHealthFlagsTest(unittest.TestCase):
         flags = watch_health.hook_health_flags(hooks)
         self.assertIn("hook_stale:optima_merge", flags)
 
+    def test_stale_running_hook_uses_start_time(self):
+        stale_at = (
+            datetime.now(timezone.utc) - timedelta(seconds=watch_health.STALE_AFTER_S + 5)
+        ).isoformat(timespec="seconds")
+        hooks = {"git_sync": {"running": True, "started_at": stale_at}}
+        self.assertEqual(watch_health.hook_health_flags(hooks), ["hook_stale:git_sync"])
+
     def test_error_takes_precedence_over_staleness_check(self):
         stale_at = (
             datetime.now(timezone.utc) - timedelta(seconds=watch_health.STALE_AFTER_S + 5)

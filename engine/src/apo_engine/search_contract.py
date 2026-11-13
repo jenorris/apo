@@ -107,14 +107,16 @@ def resolve_search_exclude(
     if caller_exclude:
         return list(caller_exclude), None, "caller"
     root = vault_root.resolve()
-    data = load_search_contract(root)
+    contract_data = load_search_contract(root)
+    parsed = parse_contract(contract_data or {})
+    data = parsed.normalized
     if folder_clean:
         folder_ex = _folder_exclude_globs(data or {}, folder_clean=folder_clean, query=query)
         if folder_ex:
             return folder_ex, folder_ex, "folder_exclude"
         return None, None, "folder"
-    if data is not None:
-        vault_defaults = _normalize_str_list(data.get("default_exclude"))
+    if contract_data is not None:
+        vault_defaults = data["default_exclude"]
         if vault_defaults:
             return vault_defaults, vault_defaults, "vault"
         return None, None, "vault"
@@ -132,9 +134,7 @@ def load_boost_vocab(vault_root: Path, explicit: str | None = None) -> list[str]
     fallback to some other vault's vocabulary.
     """
     data = load_search_contract(vault_root, explicit)
-    if not data:
-        return []
-    return _normalize_str_list(data.get("boost_vocab"))
+    return parse_contract(data or {}).normalized["boost_vocab"] if data else []
 
 
 def clear_default_exclude_cache() -> None:
@@ -142,14 +142,17 @@ def clear_default_exclude_cache() -> None:
     vc.clear_yaml_cache()
 
 
-KNOWN_TOP_KEYS = frozenset({"search_contract_version", "default_exclude", "folder_exclude"})
+KNOWN_TOP_KEYS = frozenset(
+    {"search_contract_version", "default_exclude", "folder_exclude", "boost_vocab"}
+)
 KNOWN_FOLDER_RULE_KEYS = frozenset({"folder", "when_folder", "exclude", "unless_query", "notes"})
 
 
-def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+def _check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
     """Shape findings for a parsed search contract (advisory, never blocks)."""
     findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
     findings.extend(vc.str_list_findings(data.get("default_exclude"), "default_exclude"))
+    findings.extend(vc.str_list_findings(data.get("boost_vocab"), "boost_vocab"))
     rules = data.get("folder_exclude")
     if rules is None:
         return findings
@@ -182,3 +185,18 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
             )
         findings.extend(vc.str_list_findings(rule.get("unless_query"), f"{where}.unless_query"))
     return findings
+
+
+def parse_contract(data: dict[str, Any]) -> vc.ContractParse:
+    """Normalize every search key once and return its checker findings."""
+    normalized = dict(data)
+    normalized["default_exclude"] = _normalize_str_list(data.get("default_exclude"))
+    normalized["boost_vocab"] = _normalize_str_list(data.get("boost_vocab"))
+    normalized["folder_exclude"] = [
+        rule for rule in (data.get("folder_exclude") or []) if isinstance(rule, dict)
+    ]
+    return vc.ContractParse(normalized, tuple(_check_contract(data)))
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    return list(parse_contract(data).findings)

@@ -7,7 +7,7 @@ Changelog is the SoT for what shipped; GitHub Releases are the public cut notes.
 
 | Bump | Use when |
 |------|----------|
-| **MAJOR** | Breaking MCP/RPC tool or schema changes agents cannot ignore |
+| **MAJOR** | Breaking MCP tool or schema changes agents cannot ignore |
 | **MINOR** | New capabilities or intentional product/positioning shifts (compat preserved) |
 | **PATCH** | Fixes, docs-only follow-ups that you want tagged, small ergonomics |
 

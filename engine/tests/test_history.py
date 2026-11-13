@@ -187,7 +187,7 @@ class TestHistory(unittest.TestCase):
             self.assertIn("subject", c)
 
     def test_browse_since_until_preview_last_and_fields_combo(self):
-        # Ported from the deleted RPC-transport test (rpc.py's /v1/history route
+        # Keep the history backend's serialized response behavior
         # forwarded these params from a JSON body) — same combo, direct ops call.
         from datetime import datetime
         from zoneinfo import ZoneInfo

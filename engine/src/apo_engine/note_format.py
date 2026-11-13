@@ -1,27 +1,25 @@
-"""Note format helpers — Markdown vs catalog YAML records.
+"""Note format helpers — Markdown and structured catalog records.
 
 Markdown remains the prose substrate (headings, append, hybrid search body).
 ``.yaml`` / ``.yml`` notes are whole-file mappings indexed as ``files.frontmatter``
-with optional title/description search chunks. ``.json`` catalogs are write /
-patch targets only (raw, no OKF wrapper) — not indexed, watched, or linted.
+with optional title/description search chunks. Top-level JSON objects use the
+same catalog model while preserving their raw bytes on whole-file writes.
+JSON arrays and scalars are valid payloads but are not catalog records.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-NOTE_SUFFIXES = frozenset({".md", ".yaml", ".yml", ".mmd"})
+NOTE_SUFFIXES = frozenset({".md", ".yaml", ".yml", ".mmd", ".json"})
 YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 JSON_SUFFIXES = frozenset({".json"})
 MARKDOWN_SUFFIXES = frozenset({".md"})
 MMD_SUFFIXES = frozenset({".mmd"})
-# Suffixes the mutators (write/patch/append/delete/move) accept. Wider than
-# NOTE_SUFFIXES on purpose: ``.json`` is a legitimate vault payload to write and
-# set_field-patch, but the indexer / watcher / lint walk (``is_note_path``) must
-# keep ignoring it — a JSON blob is not a searchable note.
 MUTATOR_SUFFIXES = NOTE_SUFFIXES | JSON_SUFFIXES
 
 # Default ignore extras so machine contracts are not catalog noise.
@@ -129,6 +127,15 @@ def parse_yaml_document(text: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def parse_json_object(text: str) -> dict[str, Any] | None:
+    """Parse a top-level JSON object; return ``None`` for invalid or non-object JSON."""
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def dump_yaml_document(data: dict[str, Any]) -> str:
     """Serialize a mapping as a vault YAML note (trailing newline).
 
@@ -170,6 +177,17 @@ def chunk_yaml_note(
         end = text.count("\n") + (0 if text.endswith("\n") else 1)
         end = max(1, end)
     return [("", 0, search, 1, end)]
+
+
+def chunk_json_note(
+    text: str,
+    rel: str,
+    data: dict[str, Any],
+) -> list[tuple[str, int, str, int, int]]:
+    """One searchable chunk for a JSON object, including every key and value."""
+    searchable = json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
+    end = max(1, text.count("\n") + (0 if text.endswith("\n") else 1))
+    return [("", 0, searchable, 1, end)]
 
 
 def coerce_yaml_value(value: Any) -> Any:

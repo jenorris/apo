@@ -1,4 +1,4 @@
-"""Per-request session identity for MCP/RPC (conversation_id in the wire layer)."""
+"""Per-request session identity for MCP (conversation_id in the wire layer)."""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ def extract_session_fields(
     arguments: dict[str, Any] | None = None,
     body: dict[str, Any] | None = None,
 ) -> tuple[str | None, str | None]:
-    """Read conversation/generation ids from MCP _meta, _apo args, or RPC body."""
+    """Read conversation/generation ids from MCP _meta or compatibility args."""
     m = _meta_dict(meta)
     cid = str(m.get(META_CONVERSATION_ID) or m.get("conversation_id") or "").strip()
     gid = str(m.get(META_GENERATION_ID) or m.get("generation_id") or "").strip()
@@ -135,7 +135,7 @@ def strip_session_payload(arguments: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def strip_session_body(body: dict[str, Any]) -> dict[str, Any]:
-    """Remove _apo / wire-only keys from RPC JSON bodies."""
+    """Remove _apo and other wire-only keys from JSON bodies."""
     if "_apo" not in body and "_meta" not in body:
         return body
     out = dict(body)
@@ -150,7 +150,7 @@ def process_session_id() -> str:
 
 
 def request_conversation_id() -> str | None:
-    """Active request conversation id (MCP/RPC layer), else legacy fallbacks.
+    """Active request conversation id (MCP layer), else legacy fallbacks.
 
     Resolution order: per-request contextvar, then the legacy env/file
     fallback, then this process's id. Never returns None in practice, which is

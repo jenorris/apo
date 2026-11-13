@@ -101,7 +101,7 @@ class PlaceNoteTest(unittest.TestCase):
 
     def test_patch_entry_place_op_stale_expected_mtime_rejected(self):
         """Same guard via patch_entry(ops=[{op: place, ...}]) — the path
-        apo-engine serve's /v1/move and /v1/place routes dispatch through."""
+        the public place operation dispatches through."""
         src = self.vault / "inbox" / "f.md"
         src.parent.mkdir(parents=True)
         src.write_text("# F\n", encoding="utf-8")

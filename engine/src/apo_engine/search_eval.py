@@ -15,7 +15,7 @@ queries:
 
 A result counts as a hit when its path equals an ``expect`` entry, or — for
 entries ending in ``/`` — starts with that prefix. Scoring runs through
-``ops.search`` so it measures exactly what MCP/RPC clients get (including
+``ops.search`` so it measures exactly what MCP clients get (including
 rerank and degraded modes).
 
 Two things ``hit@k``/``MRR`` alone miss, both handled here:

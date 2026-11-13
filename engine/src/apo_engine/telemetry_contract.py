@@ -90,7 +90,7 @@ def load_telemetry_contract(
     return vc.load_yaml_cached(path)
 
 
-def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+def _check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
     """Shape findings for a parsed telemetry contract (advisory, never blocks)."""
     from apo_engine.metrics_backend import _BACKEND_ALIASES, VALID_BACKENDS
 
@@ -132,7 +132,7 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
     return findings
 
 
-def policy_from_contract(data: dict[str, Any] | None) -> TelemetryPolicy:
+def _policy_from_data(data: dict[str, Any] | None) -> TelemetryPolicy:
     if not data:
         return TelemetryPolicy()
     if data.get("enabled") is False:
@@ -154,6 +154,20 @@ def policy_from_contract(data: dict[str, Any] | None) -> TelemetryPolicy:
         expose_paths=bool(agent.get("expose_paths")),
         vault_id=str(data.get("vault_id") or "").strip(),
     )
+
+
+def parse_contract(data: dict[str, Any]) -> vc.ContractParse:
+    return vc.ContractParse(_policy_from_data(data), tuple(_check_contract(data)))
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    return list(parse_contract(data).findings)
+
+
+def policy_from_contract(data: dict[str, Any] | None) -> TelemetryPolicy:
+    if not data:
+        return TelemetryPolicy()
+    return parse_contract(data).normalized
 
 
 def policy_for_vault(vault_root: Path | None) -> TelemetryPolicy:

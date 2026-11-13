@@ -12,6 +12,18 @@ def _path(env: str, default: str) -> Path:
     return Path(os.environ.get(env, default)).expanduser().resolve()
 
 
+def env_alias(canonical: str, deprecated: str, default: str = "") -> str:
+    """Resolve one canonical/deprecated environment-name migration pair."""
+    new = (os.environ.get(canonical) or "").strip()
+    old = (os.environ.get(deprecated) or "").strip()
+    if new and old and new != old:
+        raise ValueError(
+            f"conflicting configuration: {canonical}={new!r} and deprecated "
+            f"{deprecated}={old!r}; set one value or make both identical"
+        )
+    return new or old or default
+
+
 ENV_TRUTHY = ("1", "true", "yes", "on")
 ENV_FALSY = ("0", "false", "no", "off")
 
@@ -81,10 +93,10 @@ QUERY_PREFIX: str = os.environ.get("APO_QUERY_PREFIX", "")
 
 # YAML catalog chunking (Markdown is section-indexed — see section_markdown).
 YAML_MAX_CHARS: int = int(
-    os.environ.get("APO_YAML_MAX_CHARS", os.environ.get("APO_MAX_CHARS", "1200"))
+    env_alias("APO_YAML_MAX_CHARS", "APO_MAX_CHARS", "1200")
 )
 YAML_OVERLAP: int = int(
-    os.environ.get("APO_YAML_OVERLAP", os.environ.get("APO_OVERLAP", "150"))
+    env_alias("APO_YAML_OVERLAP", "APO_OVERLAP", "150")
 )
 # Deprecated aliases — markdown indexing ignores these; kept for test/back-compat imports.
 MAX_CHARS: int = YAML_MAX_CHARS
@@ -110,7 +122,9 @@ EMBED_WINDOW_OVERLAP: int = int(os.environ.get("APO_EMBED_WINDOW_OVERLAP", "400"
 IGNORE_FILE: Path = _path("APO_IGNORE", str(_ENGINE_ROOT / ".indexignore"))
 
 # Deferred-queue namespace (MCP + watcher).
-COLLECTION: str = os.environ.get("APO_COLLECTION", "notes_global")
+COLLECTION: str = env_alias(
+    "APO_RUNTIME_COLLECTION", "APO_COLLECTION", "notes_global"
+)
 
 # Default wiki path convention for agents (defuddle → write_note); not an MCP tool knob.
 INGEST_DIR: str = os.environ.get("APO_INGEST_DIR", "resources/wiki")
@@ -120,10 +134,7 @@ INGEST_DIR: str = os.environ.get("APO_INGEST_DIR", "resources/wiki")
 # system/config/ and okf-profile.schema.yaml).
 # APO_OKF_ENFORCEMENT=off|soft|hard overrides contract default / per-rule soft|hard.
 # APO_OKF_CONTRACT preferred; APO_OKF_PROFILE is a legacy alias.
-OKF_CONTRACT: str = (
-    os.environ.get("APO_OKF_CONTRACT", "").strip()
-    or os.environ.get("APO_OKF_PROFILE", "").strip()
-)
+OKF_CONTRACT: str = env_alias("APO_OKF_CONTRACT", "APO_OKF_PROFILE")
 OKF_PROFILE: str = OKF_CONTRACT  # legacy alias
 OKF_ENFORCEMENT: str = os.environ.get("APO_OKF_ENFORCEMENT", "").strip().lower()
 
@@ -150,12 +161,18 @@ WATCH_LOCK_BACKOFF_MAX: float = float(os.environ.get("APO_WATCH_LOCK_BACKOFF_MAX
 WATCH_USE_EVENTS: bool = env_bool("APO_WATCH_EVENTS", True)
 
 # Fallback poll interval when events are inactive (seconds).
-WATCH_POLL_INTERVAL: float = float(os.environ.get("WATCH_INTERVAL", "30"))
+WATCH_POLL_INTERVAL: float = float(
+    env_alias("APO_WATCH_INTERVAL", "WATCH_INTERVAL", "30")
+)
 
 # Full-vault reconcile when fsevents are on (seconds). Defaults to 5 minutes —
 # day-to-day indexing is event + deferred driven; the walk is a safety net only.
 WATCH_RECONCILE_INTERVAL: float = float(
-    os.environ.get("WATCH_RECONCILE_INTERVAL", "300")
+    env_alias(
+        "APO_WATCH_RECONCILE_INTERVAL",
+        "WATCH_RECONCILE_INTERVAL",
+        "300",
+    )
 )
 
 # Coalesce rapid saves / deferred enqueues before embedding (seconds of quiet).

@@ -76,7 +76,7 @@ def load_archival_contract(
     return vc.load_yaml_cached(path)
 
 
-def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+def _check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
     """Shape findings for a parsed archival contract (advisory, never blocks)."""
     findings = vc.unknown_key_findings(data, KNOWN_TOP_KEYS)
     # ``mode: auto`` and a non-mirror strategy are documented-but-unimplemented
@@ -130,6 +130,18 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
                 )
             )
     return findings
+
+
+def parse_contract(data: dict[str, Any]) -> vc.ContractParse:
+    """Normalize archival mapping sections once for runtime and checking."""
+    normalized = dict(data)
+    for key in ("destination", "eligibility", "actions", "hot_search", "schedule", "safety"):
+        normalized[key] = data.get(key) if isinstance(data.get(key), dict) else {}
+    return vc.ContractParse(normalized, tuple(_check_contract(data)))
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    return list(parse_contract(data).findings)
 
 
 def raw_mode(data: dict[str, Any] | None) -> str:
@@ -555,6 +567,7 @@ def evaluate_write_path(
     data = load_archival_contract(vault_root)
     if data is None:
         return [], None
+    data = parse_contract(data).normalized
     tip = AUTO_TIP if raw_mode(data) == "auto" else None
     if effective_mode(data) != "suggest":
         return [], tip

@@ -6,13 +6,15 @@ import hashlib
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from apo_engine import config, core, git_catalog, ops
+from apo_engine import config, core, git_catalog, ops, ref_catalog
 
 _DIM = 16
 
@@ -62,6 +64,10 @@ class GitCatalogOpsTest(unittest.TestCase):
         )
         (self.vault / "catalog.yaml").write_text(
             "title: Catalog\nokf_type: concept\nstatus: active\n",
+            encoding="utf-8",
+        )
+        (self.vault / "catalog.json").write_text(
+            '{"title":"JSON Catalog","okf_type":"concept","status":"active","description":"amber relay"}',
             encoding="utf-8",
         )
         schemas = self.vault / "system" / "contracts"
@@ -206,6 +212,108 @@ class GitCatalogOpsTest(unittest.TestCase):
         a = ops.filter_notes({"okf_type": "policy"}, ref="feature/demo")
         self.assertTrue(a["ok"], a)
         tree = a["tree_oid"]
+        self.assertEqual(git_catalog.build_count(tree), 1)
+
+    def test_ref_catalog_path_is_sibling(self):
+        self.assertEqual(
+            ref_catalog.path_for(self.tmp / "notes.sqlite3"),
+            self.tmp / "notes-refs.sqlite3",
+        )
+        self.assertEqual(
+            ref_catalog.path_for(self.tmp / "notes"),
+            self.tmp / "notes-refs",
+        )
+
+    def test_fresh_main_index_has_no_ref_tables(self):
+        fresh = self.tmp / "fresh.db"
+        db = core.connect(fresh)
+        names = {
+            row[0]
+            for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+            )
+        }
+        db.close()
+        self.assertFalse({"ref_trees", "ref_files", "ref_fts"} & names)
+
+    def test_ref_catalog_is_built_lazily_in_sibling_db(self):
+        refs = ref_catalog.path_for(self.index)
+        self.assertFalse(refs.exists())
+        out = ops.filter_notes({"okf_type": "policy"}, ref="feature/demo")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(refs.exists())
+        with sqlite3.connect(refs) as db:
+            names = {
+                row[0]
+                for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+                )
+            }
+        self.assertTrue({"ref_trees", "ref_files", "ref_fts"} <= names)
+
+    def test_ref_catalog_includes_json_objects(self):
+        filtered = ops.filter_notes({"title": "JSON Catalog"}, ref="feature/demo")
+        self.assertTrue(filtered["ok"], filtered)
+        self.assertEqual(filtered["notes"][0]["path"], "catalog.json")
+        searched = ops.search("amber relay", ref="feature/demo")
+        self.assertTrue(searched["ok"], searched)
+        self.assertEqual(searched["results"][0]["source"], "catalog.json")
+
+    def test_ref_catalog_does_not_use_core_writer_connection(self):
+        with mock.patch.object(
+            core, "writer_connect", side_effect=AssertionError("main writer used")
+        ):
+            out = ops.filter_notes({"okf_type": "policy"}, ref="feature/demo")
+        self.assertTrue(out["ok"], out)
+
+    def test_main_writer_lock_does_not_block_ref_catalog(self):
+        main = core.writer_connect()
+        main.execute("BEGIN IMMEDIATE")
+        try:
+            out = ops.filter_notes(
+                {"okf_type": "policy"}, ref="feature/demo", limit=20
+            )
+        finally:
+            main.rollback()
+        self.assertTrue(out["ok"], out)
+
+    def test_ref_reader_isolated_from_ref_writer_lock(self):
+        built = ops.filter_notes(
+            {"okf_type": "policy"}, ref="feature/demo", limit=20
+        )
+        self.assertTrue(built["ok"], built)
+        locked = sqlite3.connect(ref_catalog.path_for(self.index))
+        locked.execute("BEGIN IMMEDIATE")
+        try:
+            total, rows = core.filter_notes_at_ref(
+                {"okf_type": "policy"}, built["tree_oid"], limit=20
+            )
+        finally:
+            locked.rollback()
+            locked.close()
+        self.assertGreaterEqual(total, 1)
+        self.assertTrue(rows)
+
+    def test_concurrent_first_ref_build_runs_once(self):
+        git_catalog.reset_build_counts()
+        barrier = threading.Barrier(3)
+        results: list[dict] = []
+
+        def run() -> None:
+            barrier.wait()
+            results.append(
+                ops.filter_notes({"okf_type": "policy"}, ref="feature/demo")
+            )
+
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=20)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertTrue(all(result["ok"] for result in results), results)
+        tree = results[0]["tree_oid"]
         self.assertEqual(git_catalog.build_count(tree), 1)
         b = ops.filter_notes({"status": "review"}, ref="feature/demo")
         self.assertTrue(b["ok"], b)

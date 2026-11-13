@@ -14,21 +14,13 @@ from . import core, vaults
 _ROW_SNIPPET_CHARS = 240
 
 
-class ApoStore:
-    def count(self) -> int:
-        return core.count_chunks()
-
-    def lookup_chunk(self, chunk_hash: str, *, include_text: bool = True) -> dict | None:
-        return core.lookup_chunk(chunk_hash, include_text=include_text)
-
-
 def shape_search_hits(
     hits: list[core.Hit],
     *,
     layout: dict[str, str] | None = None,
     explain: bool = False,
 ) -> list[dict]:
-    """Vault-relative rows for MCP / RPC — no Path.resolve() on the event loop."""
+    """Vault-relative rows for MCP — no Path.resolve() on the event loop."""
     rows: list[dict] = []
     layout = layout or {}
     for h in hits:

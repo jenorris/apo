@@ -21,7 +21,7 @@ from test_patch_note_schema import _list_tools_lean, _tool_params
 # Raised 2026-08-31: graph_neighbors tool + search_notes explain= param.
 # Raised 2026-09-26: vault action okf_dry_run — was implemented in ops.vault_op
 # and tested at the okf module level, but unreachable from any user-facing
-# surface (missing from this union, no CLI path, no RPC route). Closing a
+# surface (missing from this union and with no CLI path). Closing a
 # real capability gap costs one more discriminated-union variant (+284 chars).
 TOTAL_TOOLS_CHAR_CEILING = 31_900
 PATCH_NOTE_CHAR_CEILING = 6_000

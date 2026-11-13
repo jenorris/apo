@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import posixpath
 import sqlite3
 import threading
 import time
@@ -41,6 +42,7 @@ from apo_engine.agent_args import (
     resolve_where,
     shape_note_read,
 )
+from apo_engine.atomic_io import atomic_write_bytes, atomic_write_text
 from apo_engine.markdown_patch import (
     PatchError,
     apply_append,
@@ -53,6 +55,7 @@ from apo_engine.markdown_patch import (
 from apo_engine.note_format import (
     MUTATOR_SUFFIXES,
     ensure_indexed_path,
+    is_contract_schema_path,
     is_json_catalog,
     is_mmd_note,
     is_markdown_note,
@@ -120,6 +123,8 @@ def _vault_lint_merged_payload(
             if hit is not None and now - hit[0] < _LINT_SWEEP_CACHE_TTL:
                 return hit[1]
     data = archival_contract.load_archival_contract(root)
+    if data is not None:
+        data = archival_contract.parse_contract(data).normalized
     arch = archival_contract.lint_vault(
         root,
         data,
@@ -210,7 +215,7 @@ def _resolve_binding_and_rel(
     """Peel optional ``vault_id:rel`` prefix; gate vault_id to process registry.
 
     Mutating and path-bearing ops use this so writes cannot target vaults outside
-    the MCP/RPC process bindings. ``write=True`` additionally rejects a vault
+    the MCP process bindings. ``write=True`` additionally rejects a vault
     mounted read-only, same gate as ``_binding(..., write=True)``.
     """
     default, bindings = vaults.load_bindings()
@@ -244,16 +249,36 @@ def _safe_resolve(root: Path, relative_path: str) -> Path:
     return full
 
 
-def _require_note_path(path: str) -> None:
-    """Reject mutator I/O on non-note suffixes (scripts, dotfiles, etc.).
+def _require_note_path(
+    path: str,
+    *,
+    root: Path,
+    full: Path | None = None,
+) -> None:
+    """Reject mutator I/O on protected or non-note canonical targets.
 
-    ``.json`` catalogs pass here (raw write / set_field patch targets) even
-    though the indexer never treats them as notes — see ``MUTATOR_SUFFIXES``.
+    ``.json`` catalogs pass here for raw writes and object patch targets.
     """
-    if is_mutator_path(path):
+    try:
+        resolved_root = root.resolve()
+        lexical = posixpath.normpath(path.replace("\\", "/"))
+        lexical_full = _safe_resolve(resolved_root, lexical)
+        resolved_full = (full or lexical_full).resolve()
+        canonical = {
+            lexical_full.relative_to(resolved_root).as_posix(),
+            resolved_full.relative_to(resolved_root).as_posix(),
+        }
+    except ValueError as exc:
+        raise OpsError("bad_path", str(exc)) from exc
+    if any(is_contract_schema_path(candidate) for candidate in canonical):
+        raise OpsError(
+            "protected_control_plane",
+            "contract schema files are host-controlled; use filesystem or CLI administration",
+        )
+    if all(is_mutator_path(candidate) for candidate in canonical):
         return
     allowed = ", ".join(sorted(MUTATOR_SUFFIXES))
-    suffix = Path(path.replace("\\", "/")).suffix or "(none)"
+    suffix = Path(lexical).suffix or "(none)"
     raise OpsError(
         "unsupported_format",
         f"Apo mutators accept note paths only ({allowed}); "
@@ -2953,7 +2978,7 @@ def write_note(
         return _err(path=path, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(path)
+        _require_note_path(path, root=root, full=full)
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
 
@@ -2969,12 +2994,11 @@ def write_note(
                 flaws=mflaws,
             )
 
-    # ``.json`` is a raw catalog: whole-file CAS, no OKF stamp / frontmatter
-    # wrapper, and no index enqueue (the indexer's walk never yields .json, so
-    # enqueuing would leave rows a full reindex would not reproduce).
+    # ``.json`` is always written exactly as supplied: whole-file CAS and no
+    # OKF/frontmatter wrapper. Only top-level objects are catalog records.
     if is_json_catalog(path):
         try:
-            json.loads(content)
+            json_value = json.loads(content)
         except json.JSONDecodeError as e:
             return _err(
                 path=path,
@@ -2998,7 +3022,10 @@ def write_note(
             return guard
         existed = full.exists()
         full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(content, encoding="utf-8")
+        atomic_write_text(full, content)
+        # Enqueue every valid JSON change. The indexer catalogs objects and
+        # purges a formerly indexed object when it becomes an array or scalar.
+        _enqueue_index(b, full)
         out = {
             "ok": True,
             "path": path,
@@ -3009,6 +3036,9 @@ def write_note(
             "catalog_format": "json",
             "tip": "raw catalog write (no OKF frontmatter wrapper)",
         }
+        if not isinstance(json_value, dict):
+            out["index_status"] = "unsupported_json_top_level"
+            out["index_reason"] = "only top-level JSON objects are catalog records"
         attach_region_hashes(out, content)
         out = _finalize_write(
             out,
@@ -3055,7 +3085,7 @@ def write_note(
     )
 
     full.parent.mkdir(parents=True, exist_ok=True)
-    full.write_text(to_write, encoding="utf-8")
+    atomic_write_text(full, to_write)
     _enqueue_index(b, full)
 
     out: dict[str, Any] = {
@@ -3166,7 +3196,7 @@ def append_note(
         return _err(path=path, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(path)
+        _require_note_path(path, root=root, full=full)
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
 
@@ -3230,7 +3260,7 @@ def append_note(
                 message="note not found (pass create=true to create)",
             )
         full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(minimal_note_stub(path), encoding="utf-8")
+        atomic_write_text(full, minimal_note_stub(path))
         prior_text = full.read_text(encoding="utf-8")
 
     content = prior_text if prior_text is not None else full.read_text(encoding="utf-8")
@@ -3260,7 +3290,7 @@ def append_note(
     new_content, write_flaws = _prepare_write_content(
         new_content, path=path, vault=b.name, format_only=True
     )
-    full.write_text(new_content, encoding="utf-8")
+    atomic_write_text(full, new_content)
     _enqueue_index(b, full)
 
     out: dict[str, Any] = {
@@ -3681,7 +3711,7 @@ def _apply_table_ops(
     if dry_run:
         return {"ok": True, "path": rel, "dry_run": True, "applied": applied, "results": results, "vault": b.name}
 
-    full.write_text(new_content, encoding="utf-8")
+    atomic_write_text(full, new_content)
     _enqueue_index(b, full)
 
     # New content_hash per touched row — keyed by (table_id, row_key) so multi-table
@@ -3742,7 +3772,7 @@ def patch_note(
         return _err(path=path, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(path)
+        _require_note_path(path, root=root, full=full)
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
 
@@ -3857,9 +3887,10 @@ def patch_note(
     okf_meta: dict[str, Any] = {}
     write_flaws: list[dict[str, Any]] = []
     if is_json_catalog(path):
-        # Raw catalog: no OKF stamp, no lint auto-fix, no index enqueue (same
-        # treatment as the write_note .json branch).
-        full.write_text(to_write, encoding="utf-8")
+        # Raw catalog: no OKF stamp or lint auto-fix. JSON patching only accepts
+        # objects, so every successful mutation remains an indexable record.
+        atomic_write_text(full, to_write)
+        _enqueue_index(b, full)
     else:
         okf = apo_okf.process_concept(
             vault_root=root,
@@ -3883,7 +3914,7 @@ def patch_note(
             to_write, path=path, vault=b.name, okf_result=okf
         )
 
-        full.write_text(to_write, encoding="utf-8")
+        atomic_write_text(full, to_write)
         _enqueue_index(b, full)
 
     failed = sum(1 for r in result.results if r.get("status") == "error")
@@ -4172,16 +4203,15 @@ def patch_notes(
         paths_to_gate: list[str] = []
         if place_only and ops_list:
             place_op = _op_to_dict(ops_list[0])
-            for key in ("src", "dst"):
-                val = place_op.get(key)
-                if isinstance(val, str) and val.strip():
-                    paths_to_gate.append(val.strip())
+            val = place_op.get("dst")
+            if isinstance(val, str) and val.strip():
+                paths_to_gate.append(val.strip())
         elif path:
             paths_to_gate.append(path)
         gate_err: OpsError | None = None
         for gate_path in paths_to_gate:
             try:
-                _require_note_path(gate_path)
+                _require_note_path(gate_path, root=b.resolved().root)
             except OpsError as e:
                 gate_err = e
                 break
@@ -4448,8 +4478,8 @@ def move_note(
         return _err(src=src, dst=dst, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(src)
-        _require_note_path(dst)
+        _require_note_path(src, root=root, full=src_full)
+        _require_note_path(dst, root=root, full=dst_full)
     except OpsError as e:
         return _err(src=src, dst=dst, error=e.code, message=e.message)
 
@@ -4506,7 +4536,7 @@ def _copy_into_vault(
         return _err(src=src_display, dst=dst, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(dst)
+        _require_note_path(dst, root=root, full=dst_full)
     except OpsError as e:
         return _err(src=src_display, dst=dst, error=e.code, message=e.message)
 
@@ -4575,7 +4605,7 @@ def _copy_into_vault(
     )
 
     dst_full.parent.mkdir(parents=True, exist_ok=True)
-    dst_full.write_text(to_write, encoding="utf-8")
+    atomic_write_text(dst_full, to_write)
     _enqueue_index(b, dst_full)
 
     out: dict[str, Any] = {
@@ -4644,15 +4674,15 @@ def delete_note(path: str, *, vault: str = "", ref: str = "") -> dict[str, Any]:
         return _err(path=path, error="bad_path", message=str(e))
 
     try:
-        _require_note_path(path)
+        _require_note_path(path, root=root, full=full)
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
 
     if not full.exists():
         return _err(path=path, error="not_found", message="note not found")
     abs_path = str(full.resolve())
-    purged = _enqueue_purge(b, full)
     full.unlink()
+    purged = _enqueue_purge(b, full)
     index_deferred.dequeue_paths(b.collection, [abs_path])
     out: dict[str, Any] = {
         "ok": True,
@@ -4759,6 +4789,7 @@ def vault_op(
     include_unresolved: bool = False,
     max_nodes: int | None = 500,
     op: str = "",
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Vault management: list | contracts | describe | merge | project | stats | lint | okf_dry_run | clone | export | grammar.
 
@@ -4968,6 +4999,11 @@ def vault_op(
             return _err(error=e.code, message=e.message)
         if src_b.name == dst_b.name:
             return _err(error="bad_request", message="clone requires two different vaults")
+        if not dry_run and not confirm:
+            return _err(
+                error="confirm_required",
+                message="clone copies system/ control files; pass confirm=true",
+            )
         src_root = src_b.resolved().root
         dst_root = dst_b.resolved().root
         src_system = src_root / "system"
@@ -4989,7 +5025,7 @@ def vault_op(
             copied.append(rel)
             if not dry_run:
                 dst_file.parent.mkdir(parents=True, exist_ok=True)
-                dst_file.write_bytes(f.read_bytes())
+                atomic_write_bytes(dst_file, f.read_bytes())
         if not dry_run:
             for rel in copied:
                 _enqueue_index(dst_b, dst_root / rel)

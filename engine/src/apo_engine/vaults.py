@@ -6,7 +6,7 @@ sqlite without threading explicit paths through every call.
 
 Discovery (preferred → fallback):
 
-1. ``APO_COLLECTION_ROOT`` / ``--collection-root`` — parent directory of vaults;
+1. ``APO_VAULTS_ROOT`` / ``--vaults-root`` — parent directory of vaults;
    each immediate child with a usage-contract ``vault_id`` is registered.
 2. ``APO_VAULT_PATHS`` / repeatable ``--vault-path PATH`` — explicit roots
    (Workbench escape hatch for non-sibling trees such as ``compliance``).
@@ -14,9 +14,10 @@ Discovery (preferred → fallback):
    ``collection`` field are ignored (names come from usage ``vault_id``).
    Still the only way to mark a vault ``read_only`` — this is how
    ``apo-engine okf ingest`` mounts a foreign OKF bundle. Prefer
-   ``APO_COLLECTION_ROOT`` / ``APO_VAULT_PATHS`` for ordinary (writable)
+   ``APO_VAULTS_ROOT`` / ``APO_VAULT_PATHS`` for ordinary (writable)
    multi-vault registration; emits a one-shot stderr note when used for that.
-4. Legacy single-root: ``APO_NOTES_ROOT`` / ``APO_INDEX`` / ``APO_COLLECTION``.
+4. Legacy single-root: ``APO_NOTES_ROOT`` / ``APO_INDEX`` /
+   ``APO_RUNTIME_COLLECTION``.
 
 Tool-facing name is always usage-contract ``vault_id``. Internal queue /
 telemetry partition id is ``compute_collection_id(root)`` (git root-commit
@@ -40,9 +41,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-import yaml
-
-from apo_engine import config
+from apo_engine import config, vault_contracts
+from apo_engine.config import env_alias
 
 _APO_DISABLED = Path("system") / "contracts" / ".apo-disabled"
 _USAGE_CANDIDATES = (
@@ -191,11 +191,7 @@ def _read_usage_data(root: Path) -> dict[str, Any] | None:
         path = root / rel
         if not path.is_file():
             continue
-        try:
-            raw = path.read_text(encoding="utf-8")
-            data = yaml.safe_load(raw)
-        except (OSError, yaml.YAMLError):
-            return None
+        data = vault_contracts.load_yaml_cached(path)
         if isinstance(data, dict):
             return data
         return None
@@ -350,7 +346,7 @@ def _warn_apo_vaults_shim() -> None:
         "APO_VAULTS: keys/collection are ignored; names come from usage-contract "
         "vault_id. Still supported for read-only vault mounts (apo-engine okf "
         "ingest) — for ordinary multi-vault registration prefer "
-        "APO_COLLECTION_ROOT (parent directory of vaults) or APO_VAULT_PATHS / "
+        "APO_VAULTS_ROOT (parent directory of vaults) or APO_VAULT_PATHS / "
         "--vault-path."
     )
     print(f"apo: note: {msg}", file=sys.stderr)
@@ -371,7 +367,7 @@ def _load_vaults_raw() -> dict | None:
 
 
 def collection_root_path() -> Path | None:
-    raw = (os.environ.get("APO_COLLECTION_ROOT") or "").strip()
+    raw = env_alias("APO_VAULTS_ROOT", "APO_COLLECTION_ROOT")
     if not raw:
         return None
     return Path(raw).expanduser()
@@ -449,7 +445,7 @@ def _add_binding(
 
 def _discover_collection_root(root: Path) -> dict[str, VaultBinding]:
     if not root.is_dir():
-        raise ValueError(f"APO_COLLECTION_ROOT is not a directory: {root}")
+        raise ValueError(f"APO_VAULTS_ROOT is not a directory: {root}")
     out: dict[str, VaultBinding] = {}
     for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
         if not child.is_dir() or child.name.startswith("."):
@@ -457,7 +453,7 @@ def _discover_collection_root(root: Path) -> dict[str, VaultBinding]:
         b = _binding_for_root(child)
         if b is None:
             continue  # Wiki / junk siblings without vault_id
-        _add_binding(out, b, source=f"APO_COLLECTION_ROOT/{child.name}")
+        _add_binding(out, b, source=f"APO_VAULTS_ROOT/{child.name}")
     return out
 
 
@@ -569,6 +565,7 @@ def _bindings_fingerprint() -> str:
     return "\x1f".join(
         (
             os.environ.get("APO_COLLECTION_ROOT", ""),
+            os.environ.get("APO_VAULTS_ROOT", ""),
             os.environ.get("APO_VAULT_PATHS", ""),
             os.environ.get("APO_VAULTS", ""),
             os.environ.get("APO_DEFAULT_VAULT", ""),
@@ -624,7 +621,7 @@ def _load_bindings_uncached() -> tuple[str, dict[str, VaultBinding]]:
     if coll_root is not None:
         discovered = _discover_collection_root(_path(coll_root))
         for b in discovered.values():
-            _add_binding(out, b, source="APO_COLLECTION_ROOT")
+            _add_binding(out, b, source="APO_VAULTS_ROOT")
 
     paths = explicit_vault_paths()
     if paths:
@@ -676,7 +673,7 @@ def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
     Flags:
       --vault-path PATH (repeatable; --vault is a back-compat alias — see note below)
       --default-vault NAME (--default is a back-compat alias)
-      --collection-root DIR  (parent directory of vaults)
+      --vaults-root DIR  (--collection-root is a deprecated alias)
 
     Returns remaining argv (prog name preserved). Safe to call before
     ``load_bindings`` / MCP ``_load_vaults``.
@@ -711,27 +708,52 @@ def apply_discovery_argv(argv: list[str] | None = None) -> list[str]:
     )
     p.add_argument(
         "--default-vault",
-        "--default",
         dest="default_vault",
         default="",
         metavar="NAME",
-        help=(
-            "Default usage-contract vault_id when vault= is empty. --default is "
-            "a back-compat alias (matches add_discovery_arguments' --default-vault)."
-        ),
+        help="Default usage-contract vault_id when vault= is empty.",
+    )
+    p.add_argument(
+        "--default",
+        dest="default_legacy",
+        default="",
+        metavar="NAME",
+        help="Deprecated alias for --default-vault.",
+    )
+    p.add_argument(
+        "--vaults-root",
+        default="",
+        metavar="DIR",
+        help="Parent directory of vaults (canonical).",
     )
     p.add_argument(
         "--collection-root",
         default="",
         metavar="DIR",
-        help="Parent directory of vaults (autoconfigure). Not a queue/telemetry id.",
+        help="Deprecated alias for --vaults-root.",
     )
     ns, remaining = p.parse_known_args(rest)
 
-    if ns.collection_root:
-        os.environ["APO_COLLECTION_ROOT"] = str(Path(ns.collection_root).expanduser())
-    if ns.default_vault:
-        os.environ["APO_DEFAULT_VAULT"] = str(ns.default_vault).strip()
+    if ns.vaults_root and ns.collection_root and ns.vaults_root != ns.collection_root:
+        raise ValueError(
+            "conflicting configuration: --vaults-root and deprecated "
+            "--collection-root differ; pass one value or make both identical"
+        )
+    if (
+        ns.default_vault
+        and ns.default_legacy
+        and ns.default_vault != ns.default_legacy
+    ):
+        raise ValueError(
+            "conflicting configuration: --default-vault and deprecated "
+            "--default differ; pass one value or make both identical"
+        )
+    root_arg = ns.vaults_root or ns.collection_root
+    if root_arg:
+        os.environ["APO_VAULTS_ROOT"] = str(Path(root_arg).expanduser())
+    default_arg = ns.default_vault or ns.default_legacy
+    if default_arg:
+        os.environ["APO_DEFAULT_VAULT"] = str(default_arg).strip()
     if ns.vault_path:
         # Merge with any existing APO_VAULT_PATHS
         existing = (os.environ.get("APO_VAULT_PATHS") or "").strip()
@@ -770,20 +792,47 @@ def add_discovery_arguments(parser: Any) -> None:
         help="Default usage-contract vault_id (APO_DEFAULT_VAULT).",
     )
     parser.add_argument(
+        "--default",
+        dest="default_legacy",
+        default="",
+        metavar="NAME",
+        help="Deprecated alias for --default-vault.",
+    )
+    parser.add_argument(
+        "--vaults-root",
+        default="",
+        metavar="DIR",
+        help="Parent directory of vaults (APO_VAULTS_ROOT).",
+    )
+    parser.add_argument(
         "--collection-root",
         default="",
         metavar="DIR",
-        help="Parent directory of vaults (APO_COLLECTION_ROOT). Not a collection id.",
+        help="Deprecated alias for --vaults-root / APO_VAULTS_ROOT.",
     )
 
 
 def apply_discovery_namespace(ns: Any) -> None:
     """Apply argparse namespace fields from :func:`add_discovery_arguments`."""
-    coll = getattr(ns, "collection_root", "") or ""
+    canonical = getattr(ns, "vaults_root", "") or ""
+    deprecated = getattr(ns, "collection_root", "") or ""
+    if canonical and deprecated and canonical != deprecated:
+        raise ValueError(
+            "conflicting configuration: --vaults-root and deprecated "
+            "--collection-root differ; pass one value or make both identical"
+        )
+    coll = canonical or deprecated
     default = getattr(ns, "default_vault", "") or ""
+    default_legacy = getattr(ns, "default_legacy", "") or ""
+    if default and default_legacy and default != default_legacy:
+        raise ValueError(
+            "conflicting configuration: --default-vault and deprecated "
+            "--default differ; pass one value or make both identical"
+        )
+    default = default or default_legacy
     paths = getattr(ns, "vault_paths", None) or []
     if coll:
-        os.environ["APO_COLLECTION_ROOT"] = str(Path(coll).expanduser())
+        os.environ["APO_VAULTS_ROOT"] = str(Path(coll).expanduser())
     if default:
         os.environ["APO_DEFAULT_VAULT"] = str(default).strip()
     if paths:

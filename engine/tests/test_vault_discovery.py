@@ -28,10 +28,12 @@ class DiscoveryRegistryTests(unittest.TestCase):
             "APO_VAULTS",
             "APO_VAULT_PATHS",
             "APO_COLLECTION_ROOT",
+            "APO_VAULTS_ROOT",
             "APO_DEFAULT_VAULT",
             "APO_NOTES_ROOT",
             "APO_INDEX",
             "APO_COLLECTION",
+            "APO_RUNTIME_COLLECTION",
         ):
             self._env[key] = os.environ.pop(key, None)
         self.tmp = tempfile.TemporaryDirectory()
@@ -61,6 +63,22 @@ class DiscoveryRegistryTests(unittest.TestCase):
         default, bindings = vaults.load_bindings()
         self.assertEqual(default, "work")
         self.assertEqual(set(bindings), {"work"})
+
+    def test_vaults_root_canonical_alias(self):
+        notes = self.root / "Notes"
+        work = notes / "Work"
+        work.mkdir(parents=True)
+        _write_usage(work, "work")
+        os.environ["APO_VAULTS_ROOT"] = str(notes)
+        default, bindings = vaults.load_bindings()
+        self.assertEqual(default, "work")
+        self.assertEqual(set(bindings), {"work"})
+
+    def test_conflicting_vaults_root_aliases_fail(self):
+        os.environ["APO_VAULTS_ROOT"] = str(self.root / "new")
+        os.environ["APO_COLLECTION_ROOT"] = str(self.root / "old")
+        with self.assertRaisesRegex(ValueError, "APO_VAULTS_ROOT.*APO_COLLECTION_ROOT"):
+            vaults.collection_root_path()
 
     def test_duplicate_vault_id_fails(self):
         a = self.root / "a"
@@ -172,6 +190,32 @@ class DiscoveryRegistryTests(unittest.TestCase):
         )
         self.assertEqual(remaining, ["server.py", "--other"])
         self.assertEqual(os.environ.get("APO_DEFAULT_VAULT"), "alpha")
+
+    def test_apply_discovery_argv_rejects_conflicting_default_aliases(self):
+        with self.assertRaisesRegex(ValueError, "--default-vault.*--default"):
+            vaults.apply_discovery_argv(
+                ["server.py", "--default-vault", "alpha", "--default", "beta"]
+            )
+
+    def test_apply_discovery_argv_accepts_matching_default_aliases(self):
+        remaining = vaults.apply_discovery_argv(
+            ["server.py", "--default-vault", "alpha", "--default", "alpha", "--other"]
+        )
+        self.assertEqual(remaining, ["server.py", "--other"])
+        self.assertEqual(os.environ["APO_DEFAULT_VAULT"], "alpha")
+
+    def test_apply_discovery_argv_vaults_root_alias_conflict(self):
+        with self.assertRaisesRegex(ValueError, "--vaults-root.*--collection-root"):
+            vaults.apply_discovery_argv(
+                ["server.py", "--vaults-root", "/new", "--collection-root", "/old"]
+            )
+
+    def test_apply_discovery_argv_matching_root_aliases(self):
+        remaining = vaults.apply_discovery_argv(
+            ["server.py", "--vaults-root", str(self.root), "--collection-root", str(self.root)]
+        )
+        self.assertEqual(remaining, ["server.py"])
+        self.assertEqual(os.environ["APO_VAULTS_ROOT"], str(self.root))
 
 
 if __name__ == "__main__":

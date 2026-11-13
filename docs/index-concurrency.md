@@ -28,7 +28,7 @@ MCP enqueues work under `~/.apo/`:
 
 Write enqueue already wakes the watcher (`wake-*`). Lean desk hides `reindex_deferred`
 (`apo_admin` → `memory_status`); use it only for diagnostics. Otherwise the watcher picks up
-queues on fsevents or the periodic hash scan (`WATCH_INTERVAL`, default 30s).
+queues on fsevents or the periodic hash scan (`APO_WATCH_INTERVAL`, default 30s).
 
 ## Watcher-aware `index` / `reindex`
 
@@ -65,7 +65,7 @@ The bound is:
 | Situation | Bound on scheduling delay |
 |-----------|---------------------------|
 | Watcher running, write enqueued with `wake` (**every write op does this**) | `APO_WATCH_DEBOUNCE` (default **2s**) |
-| Watcher running, wake missed / fs-event only | `APO_WATCH_DEBOUNCE + WATCH_INTERVAL` (default **32s**) |
+| Watcher running, wake missed / fs-event only | `APO_WATCH_DEBOUNCE + APO_WATCH_INTERVAL` (default **32s**) |
 | Watcher not running | **Unbounded** — nothing consumes the queue |
 
 This is a bound on **scheduling only**. `embed()` is a network call to Ollama whose duration
@@ -109,7 +109,8 @@ Idle vault scans no longer commit when nothing changed.
 | `APO_EMBED_FAIL_BACKOFF` | `30` | Seconds between embed-drop retries while below quarantine threshold |
 | `APO_WATCH_LOCK_BACKOFF_START` | `2` | Initial watcher sleep after sqlite lock/busy (seconds) |
 | `APO_WATCH_LOCK_BACKOFF_MAX` | `60` | Cap on watcher lock-error exponential backoff (seconds) |
-| `WATCH_INTERVAL` | `30` | Periodic full hash scan (seconds) |
+| `APO_WATCH_INTERVAL` | `30` | Periodic full hash scan (seconds); deprecated alias: `WATCH_INTERVAL` |
+| `APO_WATCH_RECONCILE_INTERVAL` | `300` | Full-vault reconcile interval with filesystem events; deprecated alias: `WATCH_RECONCILE_INTERVAL` |
 | `APO_WATCH_EVENTS` | `1` | fsevents via `watchdog` (`0` = poll-only) |
 | `APO_WATCH_DEBOUNCE` | `2` | Quiet-seconds before embedding a touched path (FS + deferred queue) |
 | `APO_SEARCH_CANDIDATES` | `24` | Floor for hybrid vec/FTS candidate pool (`max(k*4, this)`) |

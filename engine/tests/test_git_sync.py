@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import unittest.mock
@@ -163,7 +164,7 @@ class _VaultRepoCase(unittest.TestCase):
 
 class GitSyncRepoTest(_VaultRepoCase):
     def test_status_reports_sync_enabled(self):
-        # Ported from the deleted RPC-transport test — enabled-contract case
+        # Enabled-contract regression case.
         # (test_sync_disabled_status below covers the disabled case).
         out = ops.git_sync_op("status")
         self.assertTrue(out["ok"], msg=out)
@@ -241,20 +242,50 @@ class GitSyncRepoTest(_VaultRepoCase):
             extra=f"  on_block_command: 'printf \"%s\\n\" \"$APO_SYNC_ERROR\" >> {sentinel}'\n",
         )
 
-        git_sync._block(self.vault, "boom: push rejected")
-        self.assertEqual(sentinel.read_text(encoding="utf-8").splitlines(), ["boom: push rejected"])
+        argv = json.dumps(
+            [sys.executable, "-c", "import os,pathlib; pathlib.Path(os.environ['OUT']).write_text(os.environ['APO_SYNC_ERROR'])"]
+        )
+        with unittest.mock.patch.dict(os.environ, {"APO_GIT_SYNC_ON_BLOCK_ARGV": argv, "OUT": str(sentinel)}):
+            git_sync._block(self.vault, "boom: push rejected")
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "boom: push rejected")
 
         # Still blocked → no repeat alert on every later tick.
-        git_sync._block(self.vault, "boom: push rejected")
-        self.assertEqual(sentinel.read_text(encoding="utf-8").splitlines(), ["boom: push rejected"])
+        with unittest.mock.patch.dict(os.environ, {"APO_GIT_SYNC_ON_BLOCK_ARGV": argv, "OUT": str(sentinel)}):
+            git_sync._block(self.vault, "boom: push rejected")
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "boom: push rejected")
 
         # Cleared, then blocked again → new episode, new alert.
         git_sync.clear_block(self.vault)
-        git_sync._block(self.vault, "boom: second episode")
-        self.assertEqual(
-            sentinel.read_text(encoding="utf-8").splitlines(),
-            ["boom: push rejected", "boom: second episode"],
+        with unittest.mock.patch.dict(os.environ, {"APO_GIT_SYNC_ON_BLOCK_ARGV": argv, "OUT": str(sentinel)}):
+            git_sync._block(self.vault, "boom: second episode")
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "boom: second episode")
+
+    def test_vault_on_block_command_is_ignored(self):
+        sentinel = self.tmp / "vault-command-ran"
+        _write_contract(
+            self.vault,
+            enabled=True,
+            extra=f"  on_block_command: 'touch {sentinel}'\n",
         )
+        with self.assertWarns(DeprecationWarning):
+            git_sync._block(self.vault, "boom")
+        self.assertFalse(sentinel.exists())
+
+    def test_malformed_host_argv_is_ignored(self):
+        with unittest.mock.patch.dict(os.environ, {"APO_GIT_SYNC_ON_BLOCK_ARGV": '{"bad": true}'}):
+            with self.assertWarns(RuntimeWarning):
+                git_sync._block(self.vault, "boom")
+
+    def test_shell_metacharacters_are_not_interpreted(self):
+        sentinel = self.tmp / "shell-expanded"
+        argv = json.dumps(
+            [sys.executable, "-c", "import sys; assert sys.argv[1] == '; touch nope'", "; touch nope"]
+        )
+        with unittest.mock.patch.dict(os.environ, {"APO_GIT_SYNC_ON_BLOCK_ARGV": argv}):
+            with unittest.mock.patch.object(git_sync.subprocess, "run", wraps=subprocess.run) as run:
+                git_sync._block(self.vault, f"boom > {sentinel}")
+        self.assertFalse(sentinel.exists())
+        self.assertFalse(run.call_args.kwargs["shell"])
 
     def test_block_survives_failing_on_block_command(self):
         _write_contract(self.vault, enabled=True, extra="  on_block_command: 'exit 7'\n")

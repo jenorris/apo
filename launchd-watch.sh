@@ -9,10 +9,19 @@ set -a
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
 set +a
 
+if [[ -n "${APO_WATCH_INTERVAL:-}" && -n "${WATCH_INTERVAL:-}" && "${APO_WATCH_INTERVAL}" != "${WATCH_INTERVAL}" ]]; then
+  echo "error: APO_WATCH_INTERVAL conflicts with deprecated WATCH_INTERVAL; make both identical" >&2
+  exit 1
+fi
+if [[ -n "${APO_WATCH_RECONCILE_INTERVAL:-}" && -n "${WATCH_RECONCILE_INTERVAL:-}" && "${APO_WATCH_RECONCILE_INTERVAL}" != "${WATCH_RECONCILE_INTERVAL}" ]]; then
+  echo "error: APO_WATCH_RECONCILE_INTERVAL conflicts with deprecated WATCH_RECONCILE_INTERVAL; make both identical" >&2
+  exit 1
+fi
+
 APO_ENGINE_BIN="${APO_ENGINE_BIN:-${HOME}/.local/bin/apo-engine}"
 WATCH_PID_DIR="${WATCH_PID_DIR:-${HOME}/.apo}"
 OLLAMA_URL="${APO_OLLAMA_URL:-http://127.0.0.1:11434}"
-WATCH_INTERVAL="${WATCH_INTERVAL:-30}"
+WATCH_INTERVAL_VALUE="${APO_WATCH_INTERVAL:-${WATCH_INTERVAL:-30}}"
 EMBED_BACKEND="${APO_EMBED_BACKEND:-ollama}"
 
 mkdir -p "${WATCH_PID_DIR}"
@@ -44,9 +53,9 @@ if [[ "${EMBED_BACKEND}" == "ollama" ]]; then
 fi
 
 printf '[apo-watch] watching %s → %s (fsevents + %ss scan, embed=%s model=%s)\n' \
-  "${APO_NOTES_ROOT}" "${APO_INDEX:-engine/index.db}" "${WATCH_INTERVAL}" \
+  "${APO_NOTES_ROOT}" "${APO_INDEX:-engine/index.db}" "${WATCH_INTERVAL_VALUE}" \
   "${EMBED_BACKEND}" "${APO_MODEL:-}"
 
 echo $$ > "${WATCH_PID_DIR}/watch.pid"
 cd "${SCRIPT_DIR}"
-exec "${APO_ENGINE_BIN}" watch --interval "${WATCH_INTERVAL}"
+exec "${APO_ENGINE_BIN}" watch --interval "${WATCH_INTERVAL_VALUE}"

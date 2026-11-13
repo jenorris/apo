@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -10,7 +9,7 @@ from typing import Any, Callable
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
-from apo_engine import tool_metrics
+from apo_engine import config, tool_metrics
 from apo_engine.session_context import request_conversation_id
 
 
@@ -72,7 +71,7 @@ class ToolMetricsMiddleware(Middleware):
         super().__init__()
         self.collection = (
             (collection or "").strip()
-            or (os.environ.get("APO_COLLECTION") or "").strip()
+            or config.env_alias("APO_RUNTIME_COLLECTION", "APO_COLLECTION")
             or "default"
         )
         self.default_vault_id = vault_id

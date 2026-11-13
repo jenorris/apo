@@ -54,7 +54,13 @@ You keep Obsidian / git / plain-text workflows. Agents **filter and surgically u
 
 ## Vault data & contracts
 
-Apo indexes **arbitrary YAML frontmatter** (Markdown) and **standalone YAML catalog notes** into sqlite. That is the structured store: any schema you put in YAML is queryable without a vault walk. `filter_notes` is the catalog API; `patch_note` / `set_field` mutates rows in place.
+Apo indexes **arbitrary YAML frontmatter** (Markdown), **standalone YAML mappings**,
+and **top-level JSON objects** into sqlite. JSON writes preserve the exact supplied
+representation and never receive OKF/frontmatter wrappers. Arrays and scalars stay
+on disk but return `unsupported_json_top_level` and are omitted from the catalog.
+Invalid JSON is rejected by mutators and omitted by direct/rebuild indexing.
+Git-ref catalogs apply the same object-only rule.
+`filter_notes` is the catalog API; `patch_note` / `set_field` mutates rows in place.
 
 ```bash
 # examples — any key you put in frontmatter / YAML notes is fair game
@@ -70,7 +76,7 @@ No separate issue tracker required for “show me open X in folder Y.” Prefer 
 
 **Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard and `apo-engine okf validate|fix|export|ingest`. Legacy `system/config/` still resolves. Templates: [docs/contracts/](docs/contracts/). Desk: `vault(request={action: "merge"|"project"})` + `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
 
-**Multi-vault:** set `APO_COLLECTION_ROOT` (parent directory of vaults, autoconfigure) and/or `APO_VAULT_PATHS` (explicit roots) plus `APO_DEFAULT_VAULT`. Tools take `vault=`; watch runs one thread per vault. Foreign OKF bundles can register as **read-only** vaults. `APO_VAULTS` (JSON registry) still loads as a legacy roots-only compat shim. See [docs/multi-vault.md](docs/multi-vault.md).
+**Multi-vault:** set `APO_VAULTS_ROOT` (parent directory of vaults, autoconfigure) and/or `APO_VAULT_PATHS` (explicit roots) plus `APO_DEFAULT_VAULT`. `APO_COLLECTION_ROOT` remains a deprecated alias for one migration window; matching dual values are accepted and conflicts fail. Tools take `vault=`; watch runs one thread per vault. Foreign OKF bundles can register as **read-only** vaults. `APO_VAULTS` (JSON registry) still loads as a legacy roots-only compat shim. See [docs/multi-vault.md](docs/multi-vault.md).
 
 ### Git sync
 
@@ -111,12 +117,12 @@ just okf validate --vault-root ~/Notes/Yours --profile okf   # SPEC §11 exactly
 
 | | |
 |--|--|
-| **Frontmatter catalogs** | `filter_notes` on any YAML property (`okf_type`, `status`, tags, …) — MD frontmatter or whole-file YAML notes |
+| **Structured catalogs** | `filter_notes` on any property — Markdown frontmatter, whole-file YAML mappings, or top-level JSON objects |
 | **Surgical writes** | `append_note` / `patch_note` with heading / `chunk_hash` anchors and `expected_mtime` |
 | **Vault contracts** | Optional OKF / search / git / usage contracts — stamp and validate on write; OKF CLI for lint/export/ingest |
 | **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown (+ YAML title/description fields) |
 | **Typed query expansion** | Opt-in `expand=true` — lex/vec/hyde sub-queries RRF-fused with a top-rank bonus and position-aware rerank blend (adapted from [tobi/qmd](https://github.com/tobi/qmd)) |
-| **MCP surface** | 11 top-level tools + 6 admin capabilities via `apo_admin` |
+| **MCP surface** | 12 top-level tools + 7 admin capabilities via `apo_admin` |
 | **Index-backed graphs** | `backlinks` + `history` (mtime browse; file git log when git contract active) hit sqlite / git — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
 | **Measurable quality** | Labeled search eval (`just search-eval`, hit@k / MRR) + optional local cross-encoder reranker |
@@ -195,7 +201,11 @@ Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habit
 
 ### CLI entry points
 
-`just setup` installs four console scripts onto `PATH`. **`apo` is the one to reach for by hand going forward** — it dispatches by leading token, so the other three never need separate memorizing:
+`just setup` runs `uv sync --locked --extra mcp --extra dev` and links four
+console scripts from `engine/.venv/bin` into `~/.local/bin`. Ensure
+`~/.local/bin` is on `PATH`. **`apo` is the one to reach for by hand going
+forward** — it dispatches by leading token, so the other three never need
+separate memorizing:
 
 | Command | Routes to | Covers |
 |---------|-----------|--------|
@@ -233,9 +243,10 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 | Surface | Count | Notes |
 |---------|------:|-------|
 | Top-level | **12** | Core search/write + `vault` + `apo_admin` |
-| Via `apo_admin` | **6** | `memory_status`, `reindex`, `reload_config`, `delete_note`, `git_sync`, `list_refs` |
+| Via `apo_admin` | **7** | `memory_status`, `index_health`, `reindex`, `reload_config`, `delete_note`, `git_sync`, `list_refs` |
 
-Counts are contract-tested (`engine/tests/test_apo_admin.py`) — if this table drifts from the code, CI fails.
+Counts are checked against the live tool registry and admin handlers by
+`scripts/check_public_facts.py` — if this table drifts from the code, CI fails.
 
 Habit KPIs (optional): **`vault(request={action: "stats"})`**. Operator traces: OTel → Jaeger (Workbench `harness/observability/`).
 
@@ -274,7 +285,7 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 |-----|---------|---------|
 | `APO_NOTES_ROOT` | (required) | Absolute path to the vault root |
 | `APO_INDEX` | `engine/index.db` | sqlite-vec database path — recommend `~/.apo/index.db` (survives clean checkouts; multi-vault defaults there) |
-| `APO_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace |
+| `APO_RUNTIME_COLLECTION` | `notes_global` | Deferred-queue / runtime namespace (`APO_COLLECTION` is deprecated) |
 | `APO_DEFERRED_DIR` | `~/.apo` | Runtime dir for queues + tool metrics (tests/sandboxes override) |
 | `APO_TOOL_METRICS` | `1` | Record MCP tool-use events in `~/.apo/metrics.duckdb` (`0`/`false`/`no`/`off` disables) |
 | `APO_WATCH_EVENTS` | `1` | `apo-engine watch` uses filesystem events (`0`/`false`/`no`/`off` falls back to poll-only) |
@@ -295,7 +306,8 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | `APO_EMBED_BACKEND` | `ollama` | `ollama` or `fastembed` (ONNX) |
 | `APO_MODEL` | `bge-m3` | Ollama model, or a FastEmbed id when backend is `fastembed` |
 | `OLLAMA_KEEP_ALIVE` | `5m` | Keep embed model warm; `0` = unload when idle |
-| `WATCH_INTERVAL` | `30` | Periodic mtime scan (seconds) |
+| `APO_WATCH_INTERVAL` | `30` | Periodic mtime scan (seconds); deprecated alias: `WATCH_INTERVAL` |
+| `APO_WATCH_RECONCILE_INTERVAL` | `300` | Full-vault reconcile interval with filesystem events; deprecated alias: `WATCH_RECONCILE_INTERVAL` |
 | `APO_WATCH_DEBOUNCE` | `2` | Quiet seconds before re-embedding a path |
 
 Optional ONNX: `APO_EMBED_BACKEND=fastembed`, `APO_MODEL=BAAI/bge-large-en-v1.5`, then `just reindex`. Vectors are not interchangeable across models.
@@ -319,8 +331,8 @@ Tuning: [docs/index-concurrency.md](docs/index-concurrency.md).
 | [docs/contracts/archival.md](docs/contracts/archival.md) | Archival contract (suggest shipped; auto deferred) |
 | [docs/contracts/](docs/contracts/) | Contract templates (PARA, llm-wiki, OKF bundle) |
 | [docs/contracts/okf-bundle.md](docs/contracts/okf-bundle.md) | OKF conformance table, `apo-engine okf` CLI, type/provenance policies |
-| [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_COLLECTION_ROOT` / `APO_VAULT_PATHS`) |
-| [docs/local-rpc.md](docs/local-rpc.md) | Loopback JSON RPC (removed 2026-09-27) — historical pointer only |
+| [docs/multi-vault.md](docs/multi-vault.md) | Multi-index vault registry (`APO_VAULTS_ROOT` / `APO_VAULT_PATHS`) |
+| [docs/glossary.md](docs/glossary.md) | Canonical vocabulary for vaults, contracts, projections, and catalogs |
 | [docs/hermes.md](docs/hermes.md) | Hermes/Lyra: Mnemosyne + Apo two-tier; desk projection (`body` + `guidance`) |
 | [docs/index-concurrency.md](docs/index-concurrency.md) | Indexer / latency internals |
 | [docs/assets/apo-icon-prompt.md](docs/assets/apo-icon-prompt.md) | App mark brief |

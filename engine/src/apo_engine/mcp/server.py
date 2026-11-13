@@ -6,6 +6,7 @@ Vault: APO_NOTES_ROOT. Deferred queue: ~/.apo/deferred-<collection>.json
 """
 
 import asyncio
+import ipaddress
 import json
 import os
 from dataclasses import dataclass, field as dc_field, replace as dc_replace
@@ -18,10 +19,10 @@ from apo_engine import __version__ as apo_version
 from apo_engine import apo_admin as apo_admin_ops
 from apo_engine import config as apo_config
 from apo_engine import deferred as index_deferred
+from apo_engine import core as apo_core
 from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
 from apo_engine.mcp_auth import build_auth_provider_from_env
-from apo_engine.mcp_backend import ApoStore
 from apo_engine.mcp_instructions import MCP_INSTRUCTIONS as _MCP_INSTRUCTIONS
 from apo_engine.mcp_action_schemas import (
     VAULT_ACTION_FIELD_DESC,
@@ -93,7 +94,7 @@ def _runtime_config_path() -> Path:
         return Path(explicit).expanduser()
     # Per-collection override file so multiple server instances (one per vault
     # registration) never clobber each other through a shared runtime file.
-    coll = (os.environ.get("APO_COLLECTION") or "").strip()
+    coll = apo_config.env_alias("APO_RUNTIME_COLLECTION", "APO_COLLECTION")
     base = Path.home() / ".apo"
     return base / (f"mcp-runtime.{coll}.json" if coll else "mcp-runtime.json")
 
@@ -120,12 +121,30 @@ def _pick(overrides: dict, key: str, default: str | None = None) -> str | None:
     return default
 
 
+def _pick_alias(
+    overrides: dict,
+    canonical: str,
+    deprecated: str,
+    default: str | None = None,
+) -> str | None:
+    """Resolve a canonical/deprecated runtime override pair."""
+    new = str(overrides.get(canonical) or "").strip()
+    old = str(overrides.get(deprecated) or "").strip()
+    if new and old and new != old:
+        raise VaultError(
+            f"runtime config conflict: {canonical} and deprecated {deprecated} differ"
+        )
+    if new or old:
+        return new or old
+    return apo_config.env_alias(canonical, deprecated, default or "") or default
+
+
 def _load_deferred(collection: str) -> set[str]:
     return index_deferred.load_index_queue(collection)
 
 
 def _load_vaults() -> None:
-    """(Re)build the vault registry from the discovery env (APO_COLLECTION_ROOT /
+    """(Re)build the vault registry from the discovery env (APO_VAULTS_ROOT /
     APO_VAULT_PATHS, legacy APO_VAULTS, or single-root env).
 
     Each vault has its own NOTES_ROOT, INDEX_PATH, and deferred COLLECTION.
@@ -147,7 +166,12 @@ def _load_vaults() -> None:
     for name, b in bindings.items():
         coll = b.collection
         if name == default_name:
-            coll = _pick(overrides, "APO_COLLECTION", coll) or coll
+            coll = _pick_alias(
+                overrides,
+                "APO_RUNTIME_COLLECTION",
+                "APO_COLLECTION",
+                coll,
+            ) or coll
         VAULTS[name] = Vault(
             binding=dc_replace(b, collection=coll),
             ingest_dir=ingest,
@@ -195,7 +219,8 @@ def _top_level_dirs(v: Vault) -> list[str]:
 # and this is byte-identical to no auth= kwarg at all. Only a dedicated
 # instance with APO_MCP_AUTH=google (the public desma endpoint) pays for or
 # is gated by auth.
-mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS, auth=build_auth_provider_from_env())
+_AUTH_PROVIDER = build_auth_provider_from_env()
+mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS, auth=_AUTH_PROVIDER)
 
 # FastMCP wraps middleware with reversed(list): first added = outermost.
 # Metrics must sit *outside* validation rewrite so schema rejects are recorded as
@@ -246,7 +271,7 @@ def _metrics_vault_for_args(args: dict[str, Any]) -> tuple[str, Path | None, str
         if dv is not None:
             return dv.name, dv.root, dv.collection
     root_s = os.environ.get("APO_NOTES_ROOT", "").strip()
-    coll = (os.environ.get("APO_COLLECTION") or "").strip() or key or "default"
+    coll = apo_config.env_alias("APO_RUNTIME_COLLECTION", "APO_COLLECTION") or key or "default"
     return key, Path(root_s).expanduser() if root_s else None, coll
 
 
@@ -305,7 +330,6 @@ def _delete_note_sync(path: str, vault: str = "") -> dict:
 
 def _memory_status_sync() -> dict:
     vaults: dict[str, Any] = {}
-    store = ApoStore()
     for name, v in VAULTS.items():
         info: dict[str, Any] = {
             "root": str(v.root),
@@ -318,7 +342,7 @@ def _memory_status_sync() -> dict:
         }
         try:
             with _bound(v):
-                info["indexed_chunks"] = store.count()
+                info["indexed_chunks"] = apo_core.count_chunks()
             info["index"] = "ok"
         except Exception as e:
             info["index"] = f"error: {e}"
@@ -1141,6 +1165,28 @@ def _csv_env(name: str) -> list[str] | None:
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 
+def _require_safe_http_bind(host: str, *, auth_provider: object | None) -> None:
+    """Reject unauthenticated HTTP unless the bind host is explicit loopback."""
+    if auth_provider is not None:
+        return
+    value = (host or "").strip().lower()
+    if value == "localhost":
+        return
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise RuntimeError(
+            "unauthenticated HTTP requires an explicit loopback bind host"
+        ) from exc
+    if address == ipaddress.ip_address("::1"):
+        return
+    if isinstance(address, ipaddress.IPv4Address) and address in ipaddress.ip_network(
+        "127.0.0.0/8"
+    ):
+        return
+    raise RuntimeError("unauthenticated HTTP requires an explicit loopback bind host")
+
+
 def main() -> None:
     _maybe_warm_query_embed()
     # Default: stdio, one subprocess per client (Claude Code, Cursor, each Hermes
@@ -1165,9 +1211,11 @@ def main() -> None:
     # client, never replace the loopback defaults.
     transport = (os.environ.get("APO_MCP_TRANSPORT") or "stdio").strip().lower()
     if transport in ("http", "streamable-http"):
+        host = os.environ.get("APO_MCP_HOST", "127.0.0.1")
+        _require_safe_http_bind(host, auth_provider=_AUTH_PROVIDER)
         mcp.run(
             transport="http",
-            host=os.environ.get("APO_MCP_HOST", "127.0.0.1"),
+            host=host,
             port=int(os.environ.get("APO_MCP_PORT", "8878")),
             allowed_hosts=_csv_env("APO_MCP_ALLOWED_HOSTS"),
             allowed_origins=_csv_env("APO_MCP_ALLOWED_ORIGINS"),

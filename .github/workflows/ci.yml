@@ -7,6 +7,18 @@ on:
   pull_request:
 
 jobs:
+  go-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache-dependency-path: client/go.sum
+      - name: Test Go client
+        working-directory: client
+        run: go test ./...
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -16,6 +28,12 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: engine/uv.lock
 
       # setup-python macOS builds omit SQLite loadable extensions (needed for sqlite-vec).
       # Homebrew Python links Homebrew SQLite, which enables enable_load_extension.
@@ -39,15 +57,18 @@ jobs:
           print("sqlite", sqlite3.sqlite_version, "ok")
           PY
 
-      - name: Install engine (editable + MCP + dev)
+      - name: Sync locked engine environment
         working-directory: engine
         run: |
           PYTHON="${PYTHON_BIN:-python}"
-          # Homebrew Python is PEP 668 externally-managed — always use a venv.
-          "$PYTHON" -m venv .venv
-          .venv/bin/python -m pip install -U pip
-          .venv/bin/python -m pip install -e '.[mcp,dev]'
+          uv sync --locked --python "$PYTHON" --extra mcp --extra dev
 
       - name: Run tests
         working-directory: engine
         run: .venv/bin/python -m pytest tests -q
+
+      - name: Check public facts
+        run: engine/.venv/bin/python scripts/check_public_facts.py
+
+      - name: Check stale vocabulary
+        run: engine/.venv/bin/python scripts/check_stale_vocabulary.py

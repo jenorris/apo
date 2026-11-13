@@ -6,7 +6,7 @@ Use when the vault is (or should be) a **git checkout** with an off-machine remo
 
 Encode the live contract in the vault (`system/config/git.md` prose + `system/contracts/git-contract.schema.yaml`). This file is a **template** to copy — not live Apo config.
 
-**Runtime:** Apo loads the YAML to (1) gate `history(path=…)` file-level git log and (2) optionally run **git sync** when `sync.enabled: true` (write-debounce commit+push; idle scheduled `pull --ff-only`; MCP/RPC `git_sync`). Gateway `GitRemote` stays out of scope.
+**Runtime:** Apo loads the YAML to (1) gate `history(path=…)` file-level git log and (2) optionally run **git sync** when `sync.enabled: true` (write-debounce commit+push; idle scheduled `pull --ff-only`; MCP `git_sync`). Gateway `GitRemote` stays out of scope.
 
 ## Stance
 
@@ -46,8 +46,8 @@ Fill `remote` / `host` for *this* vault. Keep `never_commit` aligned with the va
 3. Apo MCP writes update files on disk; with `sync.enabled`, the watcher debounces commit+push. Prefer MCP `git_sync` for status / force run / rebase / clear_block.
 4. Tool-triggered `git_sync` `action=run` should pass an agent `message` (subject). Empty message / auto commits use `sync.commit_message_template` with `{iso_local}` → `YYYY-MM-DD HH:MM ET`, plus path tokens `{path_count}`, `{top_folders}` / `{paths_summary}`. A capped `Paths:` body trailer is always attached.
 5. When binaries are stored: use Git LFS if `lfs.enabled`; keep `.sha256` digest sidecars in **plain** git (not LFS pointers only).
-6. After a bare-metal restore: clone → point `APO_COLLECTION_ROOT` / `APO_VAULT_PATHS` (or legacy `APO_VAULTS` / `APO_NOTES_ROOT`) at the checkout → `just index --vault <id>` (or equivalent). Do not copy old `index.db` from backups unless debugging.
-7. **History:** prefer MCP/RPC `history`. Browse mode (no `path`) = index mtime with optional `since`/`until`, `preview=first\|last`, `heading=`, `exclude=`, `fields=` (returns `chunk_hash`). With `path=` and this contract active (YAML + `.git`), Apo returns **file-level** `git log` commits.
+6. After a bare-metal restore: clone → point `APO_VAULTS_ROOT` / `APO_VAULT_PATHS` (or legacy `APO_VAULTS` / `APO_NOTES_ROOT`) at the checkout → `just index --vault <id>` (or equivalent). Do not copy old `index.db` from backups unless debugging.
+7. **History:** prefer MCP `history`. Browse mode (no `path`) = index mtime with optional `since`/`until`, `preview=first\|last`, `heading=`, `exclude=`, `fields=` (returns `chunk_hash`). With `path=` and this contract active (YAML + `.git`), Apo returns **file-level** `git log` commits.
 8. **`ref=` catalog (read-only):** `filter_notes(…, ref=)`, `read_note(path, ref=)`, and `search_notes(…, ref=)` project notes from a reachable git tip at the **vault registry root** (`git -C <vault.root>`). Catalog is frontmatter/YAML; search is FTS-only (no embeddings / no `chunk_hash`). Writes never take `ref=`.
 
 ## `ref=` semantics
@@ -71,7 +71,7 @@ read_note("policies/….md", ref="feature/COMP-…", vault="compliance")
 
 Omit `ref=` only when intentionally querying the indexed primary working tree. After merge + pull + reindex, `ref=` is optional.
 
-**Discover tips:** `apo_admin(action=invoke, name=list_refs, vault=…)` (or RPC `POST /v1/list_refs`) lists `refs/heads/*` at the registry root. Unknown `ref=` errors name a few reachable heads and point at `list_refs` instead of a bare `not_found`.
+**Discover tips:** `apo_admin(action=invoke, name=list_refs, vault=…)` lists `refs/heads/*` at the registry root. Unknown `ref=` errors name a few reachable heads and point at `list_refs` instead of a bare `not_found`.
 
 ## Runtime
 
@@ -81,7 +81,7 @@ Omit `ref=` only when intentionally querying the indexed primary working tree. A
 | `filter_notes`/`read_note` `ref=` | Vault root is a git work tree; ref must resolve (`rev-parse`) |
 | Auto commit+push | `sync.enabled` + Apo write debounce (watcher) |
 | Auto pull | `sync.enabled` + idle schedule (`git pull --ff-only`) |
-| MCP/RPC `git_sync` | Contract active; `action=status\|run\|pull\|rebase\|clear_block` |
+| MCP `git_sync` | Contract active; `action=status\|run\|pull\|rebase\|clear_block` |
 
 On conflict / non-ff / push reject: **stop and surface** — status in `.apo/git-sync-status.json` (`state=blocked`) and tool payload. No force-push, no auto-resolve.
 

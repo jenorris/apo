@@ -87,7 +87,7 @@ def clear_optima_contract_cache() -> None:
     vc.clear_yaml_cache()
 
 
-def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+def _check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
     """Shape findings for the Stage B merge knobs only.
 
     The optima contract is a broad agent IR (schemas, query hints, commands)
@@ -159,9 +159,7 @@ def merge_opted_out(settings: MergeSettings | None = None) -> bool:
     return str(raw).strip().lower() in {"0", "false", "off", "no"}
 
 
-def merge_settings(vault_root: Path) -> MergeSettings:
-    """Parse Stage B merge knobs from the live optima contract (missing → disabled)."""
-    data = load_optima_contract(vault_root) or {}
+def _merge_settings_from_data(data: dict[str, Any]) -> MergeSettings:
     refresh = data.get("refresh") if isinstance(data.get("refresh"), dict) else {}
     watch = refresh.get("watch") if isinstance(refresh.get("watch"), dict) else {}
     known = data.get("known_paths") if isinstance(data.get("known_paths"), dict) else {}
@@ -230,6 +228,20 @@ def merge_settings(vault_root: Path) -> MergeSettings:
         output_current=output_current,
         on_all_sources_missing=on_missing,
     )
+
+
+def parse_contract(data: dict[str, Any]) -> vc.ContractParse:
+    """Normalize Stage B settings once and return checker findings."""
+    return vc.ContractParse(_merge_settings_from_data(data), tuple(_check_contract(data)))
+
+
+def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
+    return list(parse_contract(data).findings)
+
+
+def merge_settings(vault_root: Path) -> MergeSettings:
+    """Parse Stage B merge knobs from the live optima contract (missing → disabled)."""
+    return parse_contract(load_optima_contract(vault_root) or {}).normalized
 
 
 def merge_enabled(vault_root: Path) -> bool:

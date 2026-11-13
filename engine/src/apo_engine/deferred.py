@@ -254,7 +254,7 @@ REGISTRY_WAKE_NAME = "wake-registry"
 
 
 def touch_registry_wake() -> None:
-    """Nudge the multi-vault watcher supervisor to re-read the vault registry (APO_COLLECTION_ROOT / APO_VAULT_PATHS / legacy APO_VAULTS; add-only hot-add)."""
+    """Nudge the watcher to re-read APO_VAULTS_ROOT / APO_VAULT_PATHS / legacy APO_VAULTS."""
     try:
         DEFERRED_DIR.mkdir(parents=True, exist_ok=True)
         (DEFERRED_DIR / REGISTRY_WAKE_NAME).touch()

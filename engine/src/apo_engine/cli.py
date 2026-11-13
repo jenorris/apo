@@ -266,7 +266,25 @@ def _cmd_doctor(args) -> int:
 
 
 def _cmd_watch(args) -> int:
-    run_watch(interval=args.interval, use_events=not args.poll_only, verbose=True)
+    def optima_hooks(binding, verbose):
+        from . import optima_contract, optima_merge, watch_health
+
+        if not optima_contract.optima_contract_active(binding.root):
+            return ()
+        controller = optima_merge.VaultMergeController(binding.root, verbose=verbose)
+        return (
+            (
+                watch_health.OPTIMA_MERGE,
+                lambda *, index_busy: controller.tick(index_busy=index_busy),
+            ),
+        )
+
+    run_watch(
+        interval=args.interval,
+        use_events=not args.poll_only,
+        verbose=True,
+        hook_factories=(optima_hooks,),
+    )
     return 0
 
 
