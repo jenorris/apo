@@ -211,28 +211,98 @@ class StaticBearerTokenVerifier(TokenVerifier):
     — surfaced as access-token claims (``apo_vaults`` / ``apo_default_vault``)
     and enforced by :class:`apo_engine.vault_scope.VaultScopeMiddleware`.
     Entries without ``vaults`` are unscoped, exactly as before.
+
+    An entry with an ``admin`` policy (see :mod:`apo_engine.token_admin`) is
+    an *admin* client: it is accepted only by :meth:`verify_admin` (the
+    ``/admin/clients`` API) and refused on ``/mcp``, so an admin token is never
+    also an unscoped MCP client.
+
+    Built with ``tokens_path`` (:meth:`from_file`), the verifier re-reads the
+    file when it changes (mtime/size/inode), so issuing or revoking a client
+    needs no restart. A changed file that fails to parse is logged and the
+    previous clients stay in force.
     """
 
-    def __init__(self, digests: dict[str, str], scopes: dict[str, dict] | None = None):
+    def __init__(
+        self,
+        digests: dict[str, str],
+        scopes: dict[str, dict] | None = None,
+        admins: dict[str, Any] | None = None,
+        tokens_path: Path | str | None = None,
+    ):
         super().__init__()
         if not digests:
             raise AuthConfigError("token auth needs at least one client digest")
-        self._digests = {name: d.lower() for name, d in digests.items()}
-        self._scopes = scopes or {}
+        self._set(digests, scopes or {}, admins or {})
+        self._path = Path(tokens_path).expanduser() if tokens_path else None
+        self._stamp = self._stat()
 
-    async def verify_token(self, token: str) -> AccessToken | None:
+    @classmethod
+    def from_file(cls, tokens_path: Path | str) -> "StaticBearerTokenVerifier":
+        p = Path(tokens_path)
+        return cls(load_token_digests(p), load_token_scopes(p), load_token_admins(p), tokens_path=p)
+
+    def _set(self, digests: dict[str, str], scopes: dict[str, dict], admins: dict[str, Any]) -> None:
+        self._digests = {name: d.lower() for name, d in digests.items()}
+        self._scopes = scopes
+        self._admins = admins
+
+    def _stat(self):
+        if self._path is None:
+            return None
+        try:
+            st = os.stat(self._path)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+    def _maybe_reload(self) -> None:
+        stamp = self._stat()
+        if self._path is None or stamp is None or stamp == self._stamp:
+            return
+        self._stamp = stamp
+        try:
+            digests = load_token_digests(self._path)
+            scopes = load_token_scopes(self._path)
+            admins = load_token_admins(self._path)
+            if not digests:
+                raise AuthConfigError("no clients")
+        except AuthConfigError as exc:
+            logger.error("tokens file changed but is invalid; keeping the previous clients: %s", exc)
+            return
+        self._set(digests, scopes, admins)
+        logger.info("token clients reloaded: %d client(s)", len(digests))
+
+    def _match(self, token: str) -> str | None:
+        self._maybe_reload()
         presented = hashlib.sha256(token.encode("utf-8")).hexdigest()
         for name, digest in self._digests.items():
             if hmac.compare_digest(presented, digest):
-                scope = self._scopes.get(name) or {}
-                claims = (
-                    {"apo_vaults": list(scope["vaults"]), "apo_default_vault": scope["default_vault"]}
-                    if scope.get("vaults")
-                    else {}
-                )
-                return AccessToken(token=token, client_id=name, scopes=[], claims=claims)
-        logger.warning("Bearer token rejected: no matching client digest")
+                return name
         return None
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        name = self._match(token)
+        if name is None:
+            logger.warning("Bearer token rejected: no matching client digest")
+            return None
+        if name in self._admins:
+            logger.warning("Bearer token rejected on /mcp: %s is an admin client", name)
+            return None
+        scope = self._scopes.get(name) or {}
+        claims = (
+            {"apo_vaults": list(scope["vaults"]), "apo_default_vault": scope["default_vault"]}
+            if scope.get("vaults")
+            else {}
+        )
+        return AccessToken(token=token, client_id=name, scopes=[], claims=claims)
+
+    def verify_admin(self, token: str) -> tuple[str, Any] | None:
+        """``(client name, AdminPolicy)`` for an admin token, else None."""
+        name = self._match(token)
+        if name is None or name not in self._admins:
+            return None
+        return name, self._admins[name]
 
 
 def _read_token_clients(tokens_path: Path) -> dict[str, Any]:
@@ -281,6 +351,21 @@ def load_token_scopes(tokens_path: Path) -> dict[str, dict]:
     return scopes
 
 
+def load_token_admins(tokens_path: Path) -> dict[str, Any]:
+    """Admin clients: ``{name: AdminPolicy}`` for entries with an ``admin`` policy."""
+    from apo_engine.token_admin import AdminPolicy
+
+    admins: dict[str, Any] = {}
+    for name, entry in _read_token_clients(tokens_path).items():
+        if not isinstance(entry, dict) or "admin" not in entry:
+            continue
+        try:
+            admins[name] = AdminPolicy.parse(name, entry["admin"])
+        except ValueError as exc:
+            raise AuthConfigError(str(exc)) from exc
+    return admins
+
+
 def build_auth_provider_from_env() -> AuthProvider | None:
     """Construct the auth provider from ``APO_MCP_AUTH`` and its config env.
 
@@ -300,9 +385,7 @@ def build_auth_provider_from_env() -> AuthProvider | None:
         tokens_path = os.environ.get("APO_MCP_TOKENS_FILE")
         if not tokens_path:
             raise AuthConfigError("APO_MCP_AUTH=token requires APO_MCP_TOKENS_FILE")
-        return StaticBearerTokenVerifier(
-            load_token_digests(Path(tokens_path)), load_token_scopes(Path(tokens_path))
-        )
+        return StaticBearerTokenVerifier.from_file(Path(tokens_path))
     if kind != "google":
         raise AuthConfigError(
             f"unsupported APO_MCP_AUTH={kind!r}; expected 'google' or 'token'"

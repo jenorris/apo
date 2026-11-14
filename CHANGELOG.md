@@ -4,6 +4,37 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- **Token-client admin API** (`/admin/clients`, token-auth instances only).
+  An *admin* client is a tokens-file entry with an `admin` policy:
+  `{"sha256": …, "admin": {"prefix": "ops-", "vaults": ["atlas", "grid"]}}`.
+  - It may issue (`POST /admin/clients {name, vaults, default_vault?}`),
+    list, rescope (`PUT /admin/clients/{name}`), rotate
+    (`POST …/{name}/rotate`) and revoke (`DELETE …/{name}`) clients.
+  - It can only touch clients named `<prefix><something>`, only grant vaults
+    in its ceiling (and known to the server), and never create or touch an
+    admin entry.
+  - It manages an existing client only when that client is already scoped
+    inside the ceiling. A hand-provisioned client that matches the prefix but
+    is unscoped, or scoped wider, is refused with 403 and left out of the
+    listing, so rotating it can't hand the admin a wider token.
+  - Tokens are generated server-side and returned once, with
+    `Cache-Control: no-store`. The file keeps only digests and gains
+    `issued_by` and `rotated` fields.
+  - Writes take an `fcntl` lock on `<file>.lock` and replace the file
+    atomically, keeping every other entry.
+  - Admin tokens are refused on `/mcp`, so an admin is never also an
+    unscoped MCP client.
+
+### Changed
+
+- **The tokens file hot-reloads.** The verifier re-reads
+  `APO_MCP_TOKENS_FILE` when its mtime, size or inode changes, so issuing,
+  rescoping or revoking a client (through the API or by hand) needs no
+  restart. A changed file that fails to parse is logged, and the previous
+  clients stay in force.
+
 ## [0.37.0] — 2026-11-14
 
 The watcher no longer indexes its own state, and search returns one hit per chunk.

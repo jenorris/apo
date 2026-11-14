@@ -290,6 +290,15 @@ from apo_engine.vault_scope import VaultScopeMiddleware, scoped_vault_ids  # noq
 
 mcp.add_middleware(VaultScopeMiddleware(lambda: VAULTS.keys()))
 
+# Token-auth instances also serve /admin/clients: issue / rescope / rotate /
+# revoke scoped clients, for admin clients only (apo_engine.token_admin).
+from apo_engine.mcp_auth import StaticBearerTokenVerifier  # noqa: E402
+
+if isinstance(mcp.auth, StaticBearerTokenVerifier):
+    from apo_engine.token_admin_http import register_admin_routes  # noqa: E402
+
+    register_admin_routes(mcp, mcp.auth, os.environ["APO_MCP_TOKENS_FILE"], lambda: VAULTS.keys())
+
 # Index backend connects lazily per vault (registry loaded above).
 
 
