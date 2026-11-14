@@ -35,6 +35,20 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
   restart. A changed file that fails to parse is logged, and the previous
   clients stay in force.
 
+### Fixed
+
+- **Symlinks no longer get around the `.env` / `.git` / `.apo` guard.** The
+  0.37.0 check looked at the path asked for, so an in-vault `leak.md -> .env`
+  or `x.md -> .git/config` was still read in full. Reads, writes and
+  `note://` now check the resolved target, and the indexer (full scan, batch
+  index and hash migration) skips such links, so their targets never reach
+  search. Ordinary in-vault symlinks still work.
+- **Deleting the tokens file revokes.** The hot-reloading verifier kept the
+  last clients in force when `APO_MCP_TOKENS_FILE` disappeared. It now
+  refuses every client until the file returns.
+- `test_stem_lower_matches_pathlib` passes on Python 3.14, where a trailing
+  `.` became a pathlib suffix. `_stem_lower` keeps the pre-3.14 answer.
+
 ## [0.37.0] — 2026-11-14
 
 The watcher no longer indexes its own state, and search returns one hit per chunk.

@@ -287,8 +287,21 @@ class _IndexedTestCase(unittest.TestCase):
 
 class FolderSearchOverheadTest(_IndexedTestCase):
     def test_stem_lower_matches_pathlib(self):
-        for p in ("a/b/c.md", ".md", "x/.md", "a.b.md", "dir.x/name.md", "noext", "a/b.", "A/Mixed-Case.MD"):
-            self.assertEqual(ranking._stem_lower(p), Path(p).stem.lower(), p)
+        # Explicit, not Path(p).stem: Python 3.14 made a trailing "." a suffix
+        # (Path("a/b.").stem == "b"), so pathlib is no longer a stable oracle.
+        # _stem_lower keeps the pre-3.14 answer on every supported version.
+        cases = {
+            "a/b/c.md": "c",
+            ".md": ".md",
+            "x/.md": ".md",
+            "a.b.md": "a.b",
+            "dir.x/name.md": "name",
+            "noext": "noext",
+            "a/b.": "b.",
+            "A/Mixed-Case.MD": "mixed-case",
+        }
+        for p, want in cases.items():
+            self.assertEqual(ranking._stem_lower(p), want, p)
 
     def test_phrase_stem_paths_match_legacy_and_cache_the_folder(self):
         self.index()

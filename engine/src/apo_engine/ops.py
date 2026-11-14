@@ -250,7 +250,11 @@ def _stamp_qualified(out: dict[str, Any], *, vault: str, path: str) -> dict[str,
 
 def _safe_resolve(root: Path, relative_path: str) -> Path:
     full = (root / relative_path).resolve()
-    full.relative_to(root)  # raises ValueError on traversal
+    rel = full.relative_to(root)  # raises ValueError on traversal
+    # Checked on the resolved target: a symlink like ``leak.md -> .env`` is
+    # named like a note but must not read or write the protected file.
+    if has_blocked_dot_segment(rel.as_posix()):
+        raise ValueError("path is not a note")
     return full
 
 

@@ -220,7 +220,8 @@ class StaticBearerTokenVerifier(TokenVerifier):
     Built with ``tokens_path`` (:meth:`from_file`), the verifier re-reads the
     file when it changes (mtime/size/inode), so issuing or revoking a client
     needs no restart. A changed file that fails to parse is logged and the
-    previous clients stay in force.
+    previous clients stay in force. A file that disappears revokes every
+    client until it returns.
     """
 
     def __init__(
@@ -257,10 +258,19 @@ class StaticBearerTokenVerifier(TokenVerifier):
         return (st.st_mtime_ns, st.st_size, st.st_ino)
 
     def _maybe_reload(self) -> None:
+        if self._path is None:
+            return
         stamp = self._stat()
-        if self._path is None or stamp is None or stamp == self._stamp:
+        if stamp == self._stamp:
             return
         self._stamp = stamp
+        if stamp is None:
+            # The file is gone (or unreadable). Fail closed: deleting the
+            # tokens file must revoke, not leave the last clients in force.
+            # They come back when the file does (its stamp changes again).
+            self._set({}, {}, {})
+            logger.error("tokens file %s is missing; refusing every client until it returns", self._path)
+            return
         try:
             digests = load_token_digests(self._path)
             scopes = load_token_scopes(self._path)

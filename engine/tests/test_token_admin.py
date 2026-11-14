@@ -157,6 +157,14 @@ class VerifierReloadTest(unittest.TestCase):
         reg.revoke(POLICY, "ops-admin", "ops-lyra")
         self.assertIsNone(self.verify(out["token"]))
 
+    def test_a_deleted_tokens_file_revokes_until_it_returns(self):
+        saved = self.path.read_text()
+        self.path.unlink()
+        self.assertIsNone(self.verify(OPTIMA_TOKEN), "a missing file must not leave old clients in force")
+        self.assertIsNone(self.verifier.verify_admin(ADMIN_TOKEN))
+        self.path.write_text(saved)
+        self.assertEqual(self.verify(OPTIMA_TOKEN).client_id, "optima-service")
+
     def test_a_broken_edit_keeps_the_previous_clients(self):
         time.sleep(0.01)
         self.path.write_text("{not json")

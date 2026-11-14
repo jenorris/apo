@@ -89,6 +89,19 @@ def has_blocked_dot_segment(rel: str) -> bool:
     return any(p in {".git", ".env", ENGINE_STATE_DIR} or p.startswith(".env") for p in parts)
 
 
+def resolved_target_exposed(root: Path, path: Path) -> bool:
+    """True when ``path``, followed through symlinks, stays in ``root`` off blocked dot-segments.
+
+    The lexical checks above see only the name asked for; an in-vault symlink
+    such as ``leak.md -> .env`` passes them while its target does not.
+    """
+    try:
+        rel = Path(path).resolve().relative_to(Path(root).resolve()).as_posix()
+    except (OSError, ValueError):
+        return False
+    return not has_blocked_dot_segment(rel)
+
+
 def is_exposed_note_rel(rel: str) -> bool:
     """True when a vault-relative path is a note and not under a dot-segment."""
     if has_blocked_dot_segment(rel):

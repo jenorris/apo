@@ -410,7 +410,10 @@ _folder_stems_lock = threading.Lock()
 
 
 def _stem_lower(path: str) -> str:
-    """``Path(path).stem.lower()`` for an index-relative posix path, without pathlib."""
+    """``Path(path).stem.lower()`` for an index-relative posix path, without pathlib.
+
+    A trailing ``.`` stays in the stem (``a/b.`` -> ``b.``), as pathlib did before 3.14.
+    """
     name = path.rsplit("/", 1)[-1]
     dot = name.rfind(".")
     return (name[:dot] if 0 < dot < len(name) - 1 else name).lower()

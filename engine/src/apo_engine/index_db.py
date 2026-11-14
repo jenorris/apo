@@ -754,7 +754,7 @@ def _prune_dir_names(ignore: list[str]) -> set[str]:
 
 def _iter_notes(root: Path, ignore: list[str]) -> Iterator[Path]:
     """Yield note paths, pruning ignored directories so we never descend into ``.obsidian`` etc."""
-    from apo_engine.note_format import is_note_path
+    from apo_engine.note_format import is_note_path, resolved_target_exposed
 
     ignore_res = _compile_ignore(ignore)
     prune = _prune_dir_names(ignore)
@@ -768,6 +768,8 @@ def _iter_notes(root: Path, ignore: list[str]) -> Iterator[Path]:
             rel = p.relative_to(root).as_posix()
             if _is_ignored(rel, ignore_res):
                 continue
+            if p.is_symlink() and not resolved_target_exposed(root, p):
+                continue  # e.g. leak.md -> .env: never index the target
             yield p
 
 
@@ -785,12 +787,14 @@ def _migrate_hash_algo(db: sqlite3.Connection, *, verbose: bool = False) -> None
     chunk text. Leaves ``chunk_hash`` alone so search anchors stay valid until a file
     is naturally reindexed.
     """
+    from apo_engine.note_format import resolved_target_exposed
+
     root = vaults.notes_root()
     file_updates: list[tuple[str, str]] = []
     if root.exists():
         for (rel,) in db.execute("SELECT path FROM files"):
             full = root / rel
-            if not full.is_file():
+            if not full.is_file() or not resolved_target_exposed(root, full):
                 continue
             try:
                 text = full.read_text(encoding="utf-8", errors="replace")

@@ -68,3 +68,53 @@ class GitRefTest(unittest.TestCase):
         self.assertEqual(git_sync._validated_branch("main"), "main")
         self.assertEqual(git_sync._validated_remote("-origin"), "")
         self.assertEqual(git_sync._validated_remote("origin"), "origin")
+
+
+class SymlinkedDotTargetTest(unittest.TestCase):
+    """A note-named symlink onto .env / .git must not read, write or index the target."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="apo-symdot-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        v = self.vault = self.tmp / "vault"
+        v.mkdir()
+        (v / ".env").write_text("SECRET_TOKEN=hunter2\n", encoding="utf-8")
+        (v / ".git").mkdir()
+        (v / ".git" / "config").write_text("[remote]\nurl=https://u:pat@host\n", encoding="utf-8")
+        (v / "leak.md").symlink_to(".env")
+        (v / "gitleak.md").symlink_to(".git/config")
+        (v / "sub").mkdir()
+        (v / "sub" / "real.md").write_text("# real\n", encoding="utf-8")
+        (v / "alias.md").symlink_to("sub/real.md")  # an ordinary in-vault symlink still works
+        for p in (
+            unittest.mock.patch.object(config, "NOTES_ROOT", v),
+            unittest.mock.patch.object(config, "INDEX_PATH", self.tmp / "index.db"),
+            unittest.mock.patch.object(config, "COLLECTION", "symdot"),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_read_through_symlink_is_refused(self):
+        for rel in ("leak.md", "gitleak.md"):
+            out = ops.read_note(path=rel, raw=True)
+            self.assertFalse(out.get("ok"), rel)
+            self.assertEqual(out.get("error"), "bad_path", rel)
+            self.assertNotIn("hunter2", repr(out))
+        self.assertTrue(ops.read_note(path="alias.md", raw=True).get("ok"))
+
+    def test_write_through_symlink_is_refused(self):
+        out = ops.append_note(path="leak.md", text="more")
+        self.assertFalse(out.get("ok"))
+        self.assertEqual((self.vault / ".env").read_text(encoding="utf-8"), "SECRET_TOKEN=hunter2\n")
+
+    def test_full_scan_skips_symlinked_dot_targets(self):
+        from apo_engine.index_db import _iter_notes
+
+        rels = {p.relative_to(self.vault.resolve()).as_posix() for p in _iter_notes(self.vault, [])}
+        self.assertNotIn("leak.md", rels)
+        self.assertNotIn("gitleak.md", rels)
+        self.assertIn("alias.md", rels)
+        self.assertIn("sub/real.md", rels)

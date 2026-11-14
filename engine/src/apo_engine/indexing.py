@@ -34,6 +34,7 @@ except ImportError:
 
 from . import config, links, oversize, ref_catalog, rerank, table_markdown, vaults
 from .index_models import Hit, IndexStats, QueueStats
+from .note_format import has_blocked_dot_segment
 
 from . import content, chunking, embeddings, index_db, link_index, retrieval
 from . import ranking
@@ -359,6 +360,10 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
         if rel in seen_rels:
             continue
         seen_rels.add(rel)
+        if has_blocked_dot_segment(rel):
+            # Resolved through a symlink onto .env / .git / .apo: never index it.
+            purge_rels.append(rel)
+            continue
         if _is_ignored(rel, ignore_res):
             # High-churn / vault .indexignore — drop any stale catalog rows.
             purge_rels.append(rel)

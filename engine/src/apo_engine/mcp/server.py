@@ -196,8 +196,12 @@ def _bound(v: Vault):
 
 def _safe_resolve(v: Vault, relative_path: str) -> Path:
     """Resolve a vault-relative path and assert it stays within the vault root."""
+    from apo_engine.note_format import has_blocked_dot_segment
+
     full = (v.root / relative_path).resolve()
-    full.relative_to(v.root)  # raises ValueError on traversal
+    rel = full.relative_to(v.root)  # raises ValueError on traversal
+    if has_blocked_dot_segment(rel.as_posix()):  # resolved target, not the name asked for
+        raise ValueError(f"path is not a note: {relative_path}")
     return full
 
 
