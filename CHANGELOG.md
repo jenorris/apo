@@ -4,6 +4,11 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.38.0] — 2026-11-14
+
+A token admin can issue and revoke scoped clients, and symlinks no longer get
+around the `.env` / `.git` / `.apo` guard.
+
 ### Added
 
 - **Token-client admin API** (`/admin/clients`, token-auth instances only).
