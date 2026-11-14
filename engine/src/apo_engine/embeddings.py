@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import OrderedDict, deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import cmp_to_key
@@ -43,6 +43,7 @@ def normalize_query(query: str) -> str:
 # Query-embedding LRU (identical agent searches within TTL skip Ollama).
 _query_embed_cache: OrderedDict[str, tuple[float, list[float]]] = OrderedDict()
 _query_embed_lock = threading.Lock()
+_query_embed_inflight: dict[tuple[str, str, str], Future[list[float]]] = {}
 # Reused across search() calls — avoid ThreadPoolExecutor create/teardown per query.
 # --------------------------------------------------------------------------- #
 # Embedding backends
@@ -397,39 +398,66 @@ def query_embed(query: str) -> list[float]:
     Applies ``config.QUERY_PREFIX`` (asymmetric BGE query instruction) on the query
     side only — the passage/index path in :func:`embed` is never prefixed, so toggling
     the prefix needs no reindex. Cache key is the raw (unprefixed) normalized query.
+    Concurrent misses for the same model, prefix, and query share one backend call.
     """
     key = _normalize_query(query)
     ttl = config.QUERY_EMBED_TTL
     now = time.monotonic()
-    if ttl > 0 and key:
+    prefix = getattr(config, "QUERY_PREFIX", "") or ""
+    flight_key = (config.MODEL_NAME, prefix, key)
+    owner = False
+    future: Future[list[float]] | None = None
+    if key:
         with _query_embed_lock:
-            hit = _query_embed_cache.get(key)
-            if hit is not None and now - hit[0] < ttl:
-                _query_embed_cache.move_to_end(key)
-                return hit[1]
-        disk = _load_query_embed_disk(key)
-        if disk is not None:
+            if ttl > 0:
+                hit = _query_embed_cache.get(key)
+                if hit is not None and now - hit[0] < ttl:
+                    _query_embed_cache.move_to_end(key)
+                    return hit[1]
+            future = _query_embed_inflight.get(flight_key)
+            if future is None:
+                future = Future()
+                _query_embed_inflight[flight_key] = future
+                owner = True
+        if not owner:
+            return future.result()
+    try:
+        if ttl > 0 and key:
+            disk = _load_query_embed_disk(key)
+            if disk is not None:
+                with _query_embed_lock:
+                    _query_embed_cache[key] = (now, disk)
+                    _query_embed_cache.move_to_end(key)
+                    while len(_query_embed_cache) > config.QUERY_EMBED_CACHE_SIZE:
+                        _query_embed_cache.popitem(last=False)
+                if future is not None:
+                    future.set_result(disk)
+                return disk
+        keep_alive = getattr(config, "QUERY_EMBED_KEEP_ALIVE", "5m") or None
+        vec = embed(
+            [prefix + query if prefix else query],
+            keep_alive=keep_alive if config.EMBED_BACKEND == "ollama" else None,
+            as_query=True,
+        )[0]
+        if ttl > 0 and key and vec is not None:
             with _query_embed_lock:
-                _query_embed_cache[key] = (now, disk)
+                _query_embed_cache[key] = (now, vec)
                 _query_embed_cache.move_to_end(key)
                 while len(_query_embed_cache) > config.QUERY_EMBED_CACHE_SIZE:
                     _query_embed_cache.popitem(last=False)
-            return disk
-    prefix = getattr(config, "QUERY_PREFIX", "") or ""
-    keep_alive = getattr(config, "QUERY_EMBED_KEEP_ALIVE", "5m") or None
-    vec = embed(
-        [prefix + query if prefix else query],
-        keep_alive=keep_alive if config.EMBED_BACKEND == "ollama" else None,
-        as_query=True,
-    )[0]
-    if ttl > 0 and key and vec is not None:
-        with _query_embed_lock:
-            _query_embed_cache[key] = (now, vec)
-            _query_embed_cache.move_to_end(key)
-            while len(_query_embed_cache) > config.QUERY_EMBED_CACHE_SIZE:
-                _query_embed_cache.popitem(last=False)
-        _save_query_embed_disk(key, vec)
-    return vec
+            _save_query_embed_disk(key, vec)
+        if future is not None:
+            future.set_result(vec)
+        return vec
+    except BaseException as exc:
+        if future is not None:
+            future.set_exception(exc)
+        raise
+    finally:
+        if owner:
+            with _query_embed_lock:
+                if _query_embed_inflight.get(flight_key) is future:
+                    _query_embed_inflight.pop(flight_key, None)
 
 
 def clear_query_embed_cache() -> None:

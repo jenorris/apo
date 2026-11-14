@@ -1292,6 +1292,26 @@ def _search_at_ref(
 
 
 _SEARCH_FANOUT_WORKERS = 3
+_search_fanout_pool_lock = threading.Lock()
+
+
+def _new_search_fanout_pool() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(
+        max_workers=_SEARCH_FANOUT_WORKERS,
+        thread_name_prefix="apo-search",
+    )
+
+
+_search_fanout_pool = _new_search_fanout_pool()
+
+
+def _reset_search_fanout_pool() -> None:
+    """Replace the pool and close worker-local readers after registry changes."""
+    global _search_fanout_pool
+    with _search_fanout_pool_lock:
+        old_pool = _search_fanout_pool
+        _search_fanout_pool = _new_search_fanout_pool()
+    old_pool.shutdown(wait=True)
 
 
 def _run_search_pairs(
@@ -1306,14 +1326,13 @@ def _run_search_pairs(
     """
     if len(pairs) <= 1:
         return [run_pair(b, f) for b, f in pairs]
-    with ThreadPoolExecutor(
-        max_workers=min(_SEARCH_FANOUT_WORKERS, len(pairs)),
-        thread_name_prefix="apo-search",
-    ) as pool:
+    with _search_fanout_pool_lock:
+        pool = _search_fanout_pool
         futures = [
-            pool.submit(contextvars.copy_context().run, run_pair, b, f) for b, f in pairs
+            pool.submit(contextvars.copy_context().run, run_pair, b, f)
+            for b, f in pairs
         ]
-        return [fut.result() for fut in futures]
+    return [fut.result() for fut in futures]
 
 
 def search(

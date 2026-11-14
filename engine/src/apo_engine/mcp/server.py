@@ -300,6 +300,7 @@ mcp.add_middleware(VaultScopeMiddleware(lambda: VAULTS.keys()))
 
 def _reload_config_sync() -> dict:
     _load_vaults()
+    apo_ops._reset_search_fanout_pool()
     # Nudge multi-vault watcher to hot-add any new vaults from the registry.
     try:
         from apo_engine import deferred as index_deferred
