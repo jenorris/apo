@@ -1,7 +1,7 @@
 flowchart TB
   subgraph record["Authoritative student record (SIS / integration initiatives)"]
     SIS[SIS — Banner, Colleague, etc.]
-    IP[Integration partners — StarRez, TouchNet, Flywire, RMS]
+    IP[Integration partners — Campus, TouchNet, Flywire, RMS]
     SIS --> IP
     IP --> GGREC[Core API — external_id / student_id / WebStart / ProAPI]
   end
@@ -12,4 +12,4 @@ flowchart TB
   end
 
   GGSSO -->|"join on canonical keys only"| GGREC
-  GGREC --> Widget[Tuition / Renters widget]
+  GGREC --> Widget[Coverage / Renters widget]

@@ -301,7 +301,7 @@ Minimum to boot: set `APO_NOTES_ROOT` (and usually `APO_INDEX`) in `.env`.
 | `APO_MCP_HOST` / `APO_MCP_PORT` | `127.0.0.1` / `8878` | HTTP transport bind address |
 | `APO_MCP_ALLOWED_HOSTS` / `APO_MCP_ALLOWED_ORIGINS` | (empty) | Comma-separated additions to the loopback allowlist (HTTP transport) |
 | `APO_INGEST_DIR` | `resources/wiki` | Advisory convention for wiki ingest paths |
-| `APO_SEND_ALLOW_ROOTS` | `$HOME` | Colon-separated host roots place op / host copy may read from |
+| `APO_SEND_ALLOW_ROOTS` | (empty) | Colon-separated host roots `place` may read. Unset allows no host path. |
 | `APO_SEND_MAX_BYTES` | `5242880` | Max size for host-source `.md` copies (place op) |
 | `APO_EMBED_BACKEND` | `ollama` | `ollama` or `fastembed` (ONNX) |
 | `APO_MODEL` | `bge-m3` | Ollama model, or a FastEmbed id when backend is `fastembed` |

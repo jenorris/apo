@@ -33,11 +33,11 @@ queries:
     folder: areas/threads
     expect: ["areas/threads/itops-716-wazuh-agent-reenroll.md"]
 
-  - query: "dv 2213 bossman school strangler"
+  - query: "dv 2213 registrar school strangler"
     folder: areas/threads
-    expect: ["areas/threads/dv-2213-bossman-school-strangler.md"]
+    expect: ["areas/threads/dv-2213-registrar-school-strangler.md"]
 
-  - query: "snowflake mfa enforcement gradguard"
+  - query: "snowflake mfa enforcement acme"
     folder: areas/threads
     expect: ["areas/threads/snowflake-mfa-enforcement.md"]
 
@@ -69,33 +69,33 @@ queries:
     folder: areas/threads
     expect: ["areas/threads/knowbe4-overdue-training.md"]
 
-  - query: "lucid gradguard domain migration"
+  - query: "chart acme domain migration"
     folder: areas/threads
-    expect: ["areas/threads/lucid-gradguard-domain-migration.md"]
+    expect: ["areas/threads/chart-acme-domain-migration.md"]
 
   - query: "soc2 investment case security 2026"
     folder: areas/threads
     expect: ["areas/threads/soc2-investment-case-2026.md"]
 
-  - query: "stripe amtrust payment method domains"
+  - query: "stripe carrier payment method domains"
     folder: areas/threads
-    expect: ["areas/threads/stripe-amtrust-payment-method-domains.md"]
+    expect: ["areas/threads/stripe-carrier-payment-method-domains.md"]
 
-  - query: "graphify skypad pilot"
+  - query: "graphify ledger pilot"
     folder: areas/threads
-    expect: ["areas/threads/graphify-skypad-pilot.md"]
+    expect: ["areas/threads/graphify-ledger-pilot.md"]
 
-  - query: "dv 2471 harmon jit gradguard"
+  - query: "dv 2471 issuance jit acme"
     folder: areas/threads
-    expect: ["areas/threads/dv-2471-harmon-jit-gradguard.md"]
+    expect: ["areas/threads/dv-2471-issuance-jit-acme.md"]
 
   - query: "core-api memory optimization plan"
-    folder: areas/gradguard-platform
-    expect: ["areas/gradguard-platform/core-api-memory-optimization-plan.md"]
+    folder: areas/acme-platform
+    expect: ["areas/acme-platform/core-api-memory-optimization-plan.md"]
 
-  - query: "floci opentofu pre deploy testing plan"
-    folder: areas/gradguard-platform
-    expect: ["areas/gradguard-platform/floci-opentofu-pre-deploy-testing-plan.md"]
+  - query: "indexer opentofu pre deploy testing plan"
+    folder: areas/acme-platform
+    expect: ["areas/acme-platform/indexer-opentofu-pre-deploy-testing-plan.md"]
 
   - query: "plat 977 trivy accepted risks ngiroot tofu"
     folder: areas/threads
@@ -105,9 +105,9 @@ queries:
     folder: areas/threads
     expect: ["areas/threads/plat-1000-trivy-expedite.md"]
 
-  - query: "usc sftp tuition insurance plat 913"
+  - query: "usc sftp coverage insurance plat 913"
     folder: areas/threads
-    expect: ["areas/threads/plat-913-usc-sftp-tuition-insurance.md"]
+    expect: ["areas/threads/plat-913-usc-sftp-coverage-insurance.md"]
 
   - query: "itops 726 cursor mosyle ipad deployment"
     folder: areas/threads
@@ -117,7 +117,7 @@ queries:
     folder: areas/threads
     expect: ["areas/threads/eks-api-secure-access-jake.md"]
 
-  - query: "dv 2497 charge on cancelled webhook skypad"
+  - query: "dv 2497 charge on cancelled webhook ledger"
     folder: areas/threads
     expect: ["areas/threads/dv-2497-charge-on-cancelled-webhook.md"]
 
@@ -126,9 +126,9 @@ queries:
     expect: ["areas/threads/workbench-local-telemetry.md"]
 
   - query: "app module git ref pinning per environment"
-    folder: areas/gradguard-platform
-    expect: ["areas/gradguard-platform/app-module-git-ref-pinning-plan.md"]
+    folder: areas/acme-platform
+    expect: ["areas/acme-platform/app-module-git-ref-pinning-plan.md"]
 
-  - query: "skypad core api merge feasibility markel renters"
-    folder: areas/gradguard-platform
-    expect: ["areas/gradguard-platform/skypad-core-api-merge-feasibility.md"]
+  - query: "ledger core api merge feasibility underwriter renters"
+    folder: areas/acme-platform
+    expect: ["areas/acme-platform/ledger-core-api-merge-feasibility.md"]

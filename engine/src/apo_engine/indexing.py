@@ -345,8 +345,10 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
     db = writer_connect()
     candidates: list[tuple[str, Path, float]] = []  # rel, path, mtime
     purge_rels: list[str] = []
+    mtime_updates: list[tuple[float, str]] = []
     ignore_res = _compile_ignore(_load_ignore())
     known_vaults = _known_vault_ids()
+    seen_rels: set[str] = set()
 
     for raw in sorted(paths, key=lambda p: str(p)):
         full_path = Path(raw).resolve()
@@ -354,6 +356,9 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
             rel = full_path.relative_to(root).as_posix()
         except ValueError as e:
             raise ValueError(f"path outside vault root: {full_path}") from e
+        if rel in seen_rels:
+            continue
+        seen_rels.add(rel)
         if _is_ignored(rel, ignore_res):
             # High-churn / vault .indexignore — drop any stale catalog rows.
             purge_rels.append(rel)
@@ -388,10 +393,10 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
             continue
         file_hash = _file_hash(text)
         if prev is not None and prev[1] == file_hash:
-            db.execute("UPDATE files SET mtime=? WHERE path=?", (st_mtime, rel))
+            mtime_updates.append((st_mtime, rel))
             continue
         if _is_embed_quarantined(db, rel, file_hash):
-            db.execute("UPDATE files SET mtime=? WHERE path=?", (st_mtime, rel))
+            mtime_updates.append((st_mtime, rel))
             continue
         if _embed_retry_backoff_active(db, rel, file_hash):
             continue
@@ -458,20 +463,11 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
 
     active = plans
 
-    # Load reusable embeddings before deletes.
+    # Load reusable embeddings before any delete. Embed before the write
+    # transaction so a crash during embed leaves the previous chunks in place.
     reuse: dict[str, dict[str, list[float]]] = {}
     for plan in active:
         reuse[plan.rel] = _vectors_by_content_hash(db, plan.rel)
-
-    for rel in purge_rels:
-        _delete_path_by_rel(db, rel)
-    for plan in active:
-        prev = known.get(plan.rel)
-        _delete_path(db, plan.rel)
-        if not (prev is not None and prev[1] == ""):
-            db.execute("DELETE FROM files WHERE path=?", (plan.rel,))
-        _insert_links(db, plan.rel, plan.links)
-    db.commit()
 
     # Assign vectors: reuse by body hash, else queue for embed.
     all_pending: list[PendingChunk] = []
@@ -508,6 +504,17 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
     elif verbose and active:
         print(f"  reused all chunks for {len(active)} file(s) (no embed)", flush=True)
 
+    for rel in purge_rels:
+        _delete_path_by_rel(db, rel)
+    for plan in active:
+        prev = known.get(plan.rel)
+        _delete_path(db, plan.rel)
+        if not (prev is not None and prev[1] == ""):
+            db.execute("DELETE FROM files WHERE path=?", (plan.rel,))
+        _insert_links(db, plan.rel, plan.links)
+    for st_mtime, rel in mtime_updates:
+        db.execute("UPDATE files SET mtime=? WHERE path=?", (st_mtime, rel))
+
     dropped = {
         pending_owner[i]
         for i, vec in enumerate(all_vectors)
@@ -529,7 +536,6 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
                 keep_v.append(vec)
             if keep_p:
                 _insert_pending_chunks(db, keep_p, keep_v)
-                db.commit()
             if verbose and texts_to_embed:
                 print(
                     f"  … stored {min(i + batch, len(all_pending))}/{len(all_pending)} chunks",
@@ -551,7 +557,7 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
     if active or purge_rels:
         touched = [plan.rel for plan in active]
         resolve_links(db, sources=touched, paths=touched + purge_rels)
-    if purge_rels or stamped or dropped:
+    if purge_rels or stamped or dropped or mtime_updates:
         _finalize_index_writes(db)
     else:
         db.commit()  # mtime-only updates

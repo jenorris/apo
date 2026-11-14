@@ -970,7 +970,7 @@ class VaultOpTest(unittest.TestCase):
             "  beta: employer\n"
             "role_notes:\n"
             "  pkb: 'Personal knowledge base only'\n"
-            "  employer: 'GradGuard Work only'\n"
+            "  employer: 'Acme Work only'\n"
             "  household: 'Should never appear'\n"
             "pointers:\n"
             "  memory_policy: 'alpha:system/config/policy'\n"
@@ -993,7 +993,7 @@ class VaultOpTest(unittest.TestCase):
             self.assertTrue(projected["ok"])
             body = projected["body"]
             self.assertIn("Personal knowledge base only", body)
-            self.assertNotIn("GradGuard Work only", body)
+            self.assertNotIn("Acme Work only", body)
             self.assertNotIn("Should never appear", body)
             self.assertNotIn("work-environment", body)
             self.assertIn("policy", body)

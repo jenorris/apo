@@ -503,7 +503,7 @@ the same class of drift 0.29.0 chased across tool surfaces.
 - `search-contract.schema.yaml` gains `boost_vocab`: the architecture/system
   vocabulary that biases ranking toward infra-flavored results used to be a
   hardcoded regex in engine source — literal employer system names
-  (`skypad`, `faber`, `cortana`, `starrez`, …) shipping in a general-purpose
+  shipping in a general-purpose
   local tool, applied identically to every vault including personal ones with
   no relation to that vocabulary. Now empty by default (no boost, not a
   crash) and set per-vault; the `work` vault's contract now carries the exact
@@ -787,7 +787,7 @@ existing client (Claude Code, Cursor, each Hermes gateway) is affected.
   separate Google OAuth client registration can authenticate against one
   endpoint. Default (`APO_MCP_AUTH` unset) is byte-identical to no `auth=`
   kwarg — every existing stdio/loopback client is unaffected. See
-  `docs/systemd/apo-desma-mcp.service.example` for a dedicated public
+  `docs/systemd/apo-mcp.service.example` for a dedicated public
   instance (not installed by this release).
 
 ### Fixed
@@ -1752,7 +1752,7 @@ Plan-shaped frontmatter: query and surgically update list-of-dict fields (e.g. C
 
 - **`filter_notes` `$elemMatch`** — match notes where at least one dict in a list field satisfies all inner predicates (AND). Example: `{"todos": {"$elemMatch": {"status": "pending"}}}` or correlated `{"id": "x", "status": "completed"}`.
 - **Dotted / selector `where` keys** — `{"todos.status": "pending"}` expands across list elements (single-field sugar). Multi-field correlation still requires `$elemMatch`.
-- **`set_field` / `delete_field` path grammar** (Markdown + YAML) — map keys, list indices (`todos.0.status`), and id selectors (`todos[id=skypad-resolver].status`). Markdown frontmatter is parse → mutate → dump (no orphaned multi-line YAML under `todos:`). Structured `value` (list/dict) passes through on Markdown.
+- **`set_field` / `delete_field` path grammar** (Markdown + YAML) — map keys, list indices (`todos.0.status`), and id selectors (`todos[id=item-resolver].status`). Markdown frontmatter is parse → mutate → dump (no orphaned multi-line YAML under `todos:`). Structured `value` (list/dict) passes through on Markdown.
 
 ### Changed
 

@@ -88,7 +88,7 @@ def find_section(
     lines: list[str],
     heading: str | None,
     *,
-    occurrence: int = 1,
+    occurrence: int | None = None,
     level: int | None = None,
 ) -> Section:
     if not heading or heading.lower() in ("eof", "preamble"):
@@ -131,6 +131,13 @@ def find_section(
             msg += f" (did you mean {suggestions[0]['heading']}?)"
         raise PatchError("anchor_not_found", msg, suggestions)
 
+    if occurrence is None:
+        if len(matches) > 1:
+            raise PatchError(
+                "anchor_ambiguous",
+                f"heading {heading!r} matches {len(matches)} sections; pass occurrence",
+            )
+        occurrence = 1
     if occurrence < 1 or occurrence > len(matches):
         raise PatchError(
             "anchor_ambiguous" if len(matches) > 1 else "anchor_not_found",

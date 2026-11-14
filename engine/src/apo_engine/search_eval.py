@@ -417,11 +417,11 @@ def format_report(report: dict[str, Any], *, verbose: bool = False) -> str:
 # ``regress_threshold`` points versus that snapshot (or reports "no-baseline"
 # when one hasn't been recorded yet — not a failure, just unverified).
 
-DEFAULT_EVAL_DIRS: tuple[Path, ...] = (Path("docs/examples"), Path.home() / ".apo")
+DEFAULT_EVAL_DIRS: tuple[Path, ...] = (Path.home() / ".apo",)
 
 
 def discover_eval_files(dirs: list[str | Path] | None = None) -> list[Path]:
-    """Find candidate eval fixture files under ``dirs`` (default: docs/examples + ~/.apo).
+    """Find candidate eval fixture files under ``dirs`` (default: ``~/.apo``).
 
     Skips ``*.example.yaml``/``*.example.yml`` (templates meant to be copied and
     edited, not run as-is) and anything without a literal ``queries:`` key (cheap

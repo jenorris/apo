@@ -26,6 +26,7 @@ import fnmatch
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -158,6 +159,31 @@ def _run_git_network(root: Path, *args: str) -> subprocess.CompletedProcess[str]
         )
 
 
+def _validated_branch(name: str) -> str:
+    """Return a branch name git will accept, or ``main`` when the contract value is not."""
+    candidate = (name or "").strip() or "main"
+    if candidate.startswith("-") or any(c in candidate for c in " \t\r\n"):
+        return "main"
+    proc = subprocess.run(
+        ["git", "check-ref-format", "--branch", candidate],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        return "main"
+    return candidate
+
+
+def _validated_remote(name: str) -> str:
+    candidate = (name or "").strip()
+    if not candidate:
+        return ""
+    if candidate.startswith("-") or any(c in candidate for c in " \t\r\n\\"):
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", candidate):
+        return ""
+    return candidate
+
+
 def _is_transient_network_error(err: str | None) -> bool:
     """True if ``err`` means the remote was unreachable (retry), not refused (block)."""
     text = (err or "").lower()
@@ -172,8 +198,8 @@ def sync_settings(vault_root: Path) -> SyncSettings:
     data = git_contract.parse_contract(raw).normalized
     sync = data.get("sync") if isinstance(data.get("sync"), dict) else {}
     never = data.get("never_commit") if isinstance(data.get("never_commit"), list) else []
-    branch = str(data.get("default_branch") or "main").strip() or "main"
-    remote = str(data.get("remote") or "").strip()
+    branch = _validated_branch(str(data.get("default_branch") or "main"))
+    remote = _validated_remote(str(data.get("remote") or ""))
     try:
         debounce = float(sync.get("debounce_seconds", 45))
     except (TypeError, ValueError):
@@ -782,7 +808,7 @@ def commit_and_push(
 def _push(vault_root: Path, settings: SyncSettings) -> dict[str, Any]:
     st = read_status(vault_root)
     # Intentionally never pass --force / --force-with-lease.
-    proc = _run_git_network(vault_root, "push")
+    proc = _run_git_network(vault_root, "push", "--end-of-options")
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "git push failed").strip()
         # Try setting upstream once if missing
@@ -791,7 +817,9 @@ def _push(vault_root: Path, settings: SyncSettings) -> dict[str, Any]:
             cur = _run_git(vault_root, "rev-parse", "--abbrev-ref", "HEAD")
             if cur.returncode == 0 and (cur.stdout or "").strip():
                 branch = (cur.stdout or "").strip()
-            proc = _run_git_network(vault_root, "push", "-u", "origin", branch)
+            proc = _run_git_network(
+                vault_root, "push", "-u", "--end-of-options", "origin", branch
+            )
             err = (proc.stderr or proc.stdout or "git push failed").strip()
             if proc.returncode != 0:
                 return _network_failure(vault_root, err, "push_failed", st=st)
@@ -851,7 +879,7 @@ def pull_ff_only(vault_root: Path) -> dict[str, Any]:
         }
 
     # Dirty tree: still attempt ff-only; git will refuse if it would overwrite
-    proc = _run_git_network(vault_root, "pull", "--ff-only")
+    proc = _run_git_network(vault_root, "pull", "--ff-only", "--end-of-options")
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "git pull --ff-only failed").strip()
         return _network_failure(vault_root, err, "pull_failed", st=st)
@@ -900,7 +928,9 @@ def rebase_onto_remote(vault_root: Path) -> dict[str, Any]:
             "status": st,
         }
 
-    fetch = _run_git_network(vault_root, "fetch", "origin", settings.default_branch)
+    fetch = _run_git_network(
+        vault_root, "fetch", "--end-of-options", "origin", settings.default_branch
+    )
     if fetch.returncode != 0:
         err = (fetch.stderr or fetch.stdout or "git fetch failed").strip()
         return _network_failure(vault_root, err, "fetch_failed", st=st)

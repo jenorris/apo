@@ -63,6 +63,8 @@ from apo_engine.note_format import (
     is_mmd_note,
     is_markdown_note,
     is_mutator_path,
+    has_blocked_dot_segment,
+    is_exposed_note_rel,
     is_yaml_note,
 )
 from apo_engine.json_patch import apply_json_patch
@@ -273,6 +275,8 @@ def _require_note_path(
         }
     except ValueError as exc:
         raise OpsError("bad_path", str(exc)) from exc
+    if any(has_blocked_dot_segment(candidate) for candidate in canonical):
+        raise OpsError("bad_path", "path is not a note")
     if any(is_contract_schema_path(candidate) for candidate in canonical):
         raise OpsError(
             "protected_control_plane",
@@ -878,14 +882,14 @@ def _attach_watcher_tip(out: dict[str, Any]) -> dict[str, Any]:
 def _send_allow_roots() -> list[Path]:
     raw = (config.SEND_ALLOW_ROOTS or "").strip()
     if not raw:
-        return [Path.home().expanduser().resolve()]
+        return []
     roots: list[Path] = []
     for part in raw.split(":"):
         p = part.strip()
         if not p:
             continue
         roots.append(Path(p).expanduser().resolve())
-    return roots or [Path.home().expanduser().resolve()]
+    return roots
 
 
 def _resolve_send_src(src: str, vault_root: Path) -> Path:
@@ -1892,6 +1896,13 @@ def read_note(
             error="bad_request",
             message="path= or chunk_hash= required",
         )
+    if path_s and not ch:
+        rel_for_check = path_s
+        head, _, tail = path_s.partition(":")
+        if tail and "/" not in head:
+            rel_for_check = tail
+        if not is_exposed_note_rel(rel_for_check):
+            return _err(path=path_s, error="bad_path", message="path is not a note")
     if ch:
         if heading is not None:
             return _err(
@@ -5043,7 +5054,7 @@ def vault_op(
         key = (vault or "").strip()
         try:
             src_b = _binding(key) if key else _binding("")
-            dst_b = _binding(to_key)
+            dst_b = _binding(to_key, write=True)
         except OpsError as e:
             return _err(error=e.code, message=e.message)
         if src_b.name == dst_b.name:
@@ -5064,10 +5075,25 @@ def vault_op(
         copied: list[str] = []
         skipped: list[str] = []
         for f in sorted(src_system.rglob("*")):
-            if not f.is_file():
+            if f.is_symlink() or not f.is_file():
+                continue
+            try:
+                if not f.resolve().is_relative_to(src_root.resolve()):
+                    continue
+            except OSError:
                 continue
             rel = f.relative_to(src_root).as_posix()
-            dst_file = dst_root / rel
+            dst_file = (dst_root / rel)
+            if dst_file.is_symlink():
+                skipped.append(rel)
+                continue
+            try:
+                if not dst_file.parent.resolve().is_relative_to(dst_root.resolve()):
+                    skipped.append(rel)
+                    continue
+            except OSError:
+                skipped.append(rel)
+                continue
             if dst_file.exists():
                 skipped.append(rel)
                 continue

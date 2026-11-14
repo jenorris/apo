@@ -229,10 +229,10 @@ def list_refs(vault_root: Path, *, kind: str = "heads") -> list[dict[str, Any]]:
 
 def _ignore_patterns(vault_root: Path) -> list[str]:
     """Same floor as index walk, without requiring vaults.bind for APO_IGNORE."""
-    from apo_engine.note_format import DEFAULT_YAML_IGNORE
+    from apo_engine.note_format import DEFAULT_YAML_IGNORE, ENGINE_STATE_GLOBS
     from apo_engine import config
 
-    patterns = [".git/*", ".obsidian/*", "*.excalidraw.md", *DEFAULT_YAML_IGNORE]
+    patterns = [".git/*", ".obsidian/*", *ENGINE_STATE_GLOBS, "*.excalidraw.md", *DEFAULT_YAML_IGNORE]
     for ignore_file in (config.IGNORE_FILE, vault_root / ".indexignore"):
         try:
             if ignore_file.exists():

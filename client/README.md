@@ -76,7 +76,7 @@ that note.
 
 `--bearer-token` / `APO_MCP_TOKEN` sets a bearer token on every request — for an
 `APO_MCP_AUTH=google`-gated instance (see
-`../engine/docs/systemd/apo-desma-mcp.service.example`), pass whatever OIDC
+`../engine/docs/systemd/apo-mcp.service.example`), pass whatever OIDC
 ID token that deployment's flow produces. Unset for the common case: a
 loopback or tailnet-only server with no auth configured.
 

@@ -9,7 +9,7 @@
 #   - "vault registers mermaid architecture" (areas/work/vault-registers.md) —
 #     no successor note; no mermaid diagram anywhere under areas/work/ anymore.
 #     Removed.
-#   - "gradguard ai workbench plan diagram" (projects/gradguard-ai-workbench/plan.md) —
+#   - "acme ai workbench plan diagram" (projects/acme-ai-workbench/plan.md) —
 #     project restructured into projects/ai-workbench-baseline/{README,candidates,
 #     segments/*}.md, none of which contain a mermaid diagram. Removed (no valid
 #     diagram target to re-point to).
@@ -27,13 +27,13 @@ queries:
     expect: [system/config/slack-status-bot.md]
 
   - query: app module git ref pinning plan architecture
-    expect: [areas/gradguard-platform/app-module-git-ref-pinning-plan.md]
+    expect: [areas/acme-platform/app-module-git-ref-pinning-plan.md]
 
   - query: core api memory optimization plan diagram
-    expect: [areas/gradguard-platform/core-api-memory-optimization-plan.md]
+    expect: [areas/acme-platform/core-api-memory-optimization-plan.md]
 
   - query: RDS proxy path forward diagram
-    expect: [areas/gradguard-platform/rds-proxy-path-forward.md]
+    expect: [areas/acme-platform/rds-proxy-path-forward.md]
 
   - query: partner IDP SSO sis architecture
     expect: [projects/partner-idp-sso/sis-complementary-architecture.md]

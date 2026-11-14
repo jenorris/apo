@@ -180,15 +180,15 @@ class CardholderMermaidIndexTest(unittest.TestCase):
         self.assertNotIn("subgraph PAY", text)
         self.assertNotIn("subgraph", text.lower())
 
-    def test_skypad_node_flatten(self):
+    def test_ledger_node_flatten(self):
         nodes = [r for r in self._rows() if r[0] == "mermaid_node" and r[1] == "SKY"]
         self.assertTrue(nodes, self._rows())
         text = nodes[0][2]
-        self.assertIn("skypad", text)
+        self.assertIn("ledger", text)
         self.assertIn("SKY", text)
         self.assertNotIn("subgraph", text.lower())
 
-    def test_skypad_node_flatten_has_relational_context(self):
+    def test_ledger_node_flatten_has_relational_context(self):
         # SKY's meaning is 1-hop relational: fed by Core API, feeds Stripe/Auth.net.
         nodes = [r for r in self._rows() if r[0] == "mermaid_node" and r[1] == "SKY"]
         self.assertTrue(nodes, self._rows())
@@ -203,7 +203,7 @@ class CardholderMermaidIndexTest(unittest.TestCase):
         edges = [r for r in self._rows() if r[0] == "mermaid_edge" and r[1] == "SKY->STR"]
         self.assertTrue(edges, self._rows())
         text = edges[0][2]
-        self.assertIn("skypad", text.lower())
+        self.assertIn("ledger", text.lower())
         self.assertIn("stripe", text.lower())
         self.assertNotIn("SKY --> STR", text)
 

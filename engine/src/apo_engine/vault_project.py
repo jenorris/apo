@@ -1319,7 +1319,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
             for n, r in sorted(vaults.items())
             if isinstance(r, dict) and r.get("role") not in _skip_roles
             and n != sv
-        ) or "`meta` / `norris` / `work` / `contracts`"
+        ) or f"`{sv}`"
     dual_enabled = bool(dual.get("enabled"))
     if dual_enabled:
         lines.append("## Dual-write")
@@ -1328,7 +1328,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
             f"On consequential turns (and new durable facts when enabled): domain note in the owning vault "
             f"({domain_s}); **also** `append_note(..., vault=\"{sv}\")` on `{sp}` → `## {sh}` "
             f"with `YYYY-MM-DD HH:MM ET` (process turns: `Tooling:`). "
-            f"Never write session logs to Meta/Norris/Work/Contracts dailies."
+            f"Do not write session logs into another vault's daily notes."
         )
     else:
         lines.append("## Session audit")

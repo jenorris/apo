@@ -40,11 +40,11 @@ class NodeFlattenTest(unittest.TestCase):
             "DFD — Cardholder",
             "API",
             "SKY",
-            "skypad — renters",
+            "ledger — renters",
             in_labels=["Core API"],
             out_labels=["Stripe — card", "Authorize.net — ACH"],
         )
-        self.assertTrue(flat.startswith("DFD — Cardholder > API > SKY — skypad — renters"))
+        self.assertTrue(flat.startswith("DFD — Cardholder > API > SKY — ledger — renters"))
         self.assertIn("· from: Core API", flat)
         self.assertIn("· to: Stripe — card, Authorize.net — ACH", flat)
 
@@ -62,10 +62,10 @@ class NodeFlattenTest(unittest.TestCase):
             "STR",
             "Stripe — card",
             template="{title} > {subgraph} > {node} — {label}",
-            in_labels=["skypad — renters"],
+            in_labels=["ledger — renters"],
             out_labels=[],
         )
-        self.assertEqual(flat, "Title > PAY > STR — Stripe — card · from: skypad — renters")
+        self.assertEqual(flat, "Title > PAY > STR — Stripe — card · from: ledger — renters")
 
 
 class NodeRelationsTest(unittest.TestCase):
@@ -74,7 +74,7 @@ class NodeRelationsTest(unittest.TestCase):
             diagram_type="flowchart",
             nodes=[
                 mp.MermaidNode("API1", "Core API", "API"),
-                mp.MermaidNode("SKY", "skypad — renters", "API"),
+                mp.MermaidNode("SKY", "ledger — renters", "API"),
                 mp.MermaidNode("STR", "Stripe — card", "PAY"),
                 mp.MermaidNode("AUTH", "Authorize.net — ACH", "PAY"),
             ],
@@ -85,7 +85,7 @@ class NodeRelationsTest(unittest.TestCase):
             ],
         )
         label_by_id, in_map, out_map = mi.node_relations(diagram)
-        self.assertEqual(label_by_id["SKY"], "skypad — renters")
+        self.assertEqual(label_by_id["SKY"], "ledger — renters")
         self.assertEqual(in_map["SKY"], ["Core API"])
         self.assertEqual(out_map["SKY"], ["Stripe — card", "Authorize.net — ACH"])
         self.assertNotIn("API1", in_map)  # nothing feeds API1 in this fixture
@@ -108,23 +108,23 @@ class EntityTokensTest(unittest.TestCase):
         self.assertIn("Stripe", tokens)
         self.assertIn("card", tokens)
 
-    def test_tuition_program_yields_tuition_token(self):
-        tokens = mi._entity_search_tokens("TProg", "Tuition Program")
-        self.assertIn("Tuition", tokens)
+    def test_coverage_program_yields_coverage_token(self):
+        tokens = mi._entity_search_tokens("TProg", "Coverage Program")
+        self.assertIn("Coverage", tokens)
         self.assertIn("Program", tokens)
-        # expect_entity: Tuition must match flattened node text
+        # expect_entity: Coverage must match flattened node text
         flat = (
             mi.node_flatten_text(
                 "DFD — Standard Data Flow",
-                "GradGuard",
+                "Acme",
                 "TProg",
-                "Tuition Program",
+                "Coverage Program",
                 template="{title} > {subgraph} > {node} — {label}",
             )
             + " · "
             + tokens
         )
-        self.assertIn("tuition", flat.lower())
+        self.assertIn("coverage", flat.lower())
 
 
 class CatalogPrefixTest(unittest.TestCase):
@@ -151,7 +151,7 @@ class FileHeaderEdgeFlattenTest(unittest.TestCase):
             direction="LR",
             nodes=[
                 mp.MermaidNode("STR", "Stripe — card", "PAY"),
-                mp.MermaidNode("SKY", "skypad — renters", "API"),
+                mp.MermaidNode("SKY", "ledger — renters", "API"),
             ],
             edges=[mp.MermaidEdge("SKY", "STR", "")],
             subgraphs=["WEB", "PAY"],
@@ -178,18 +178,18 @@ class FileHeaderEdgeFlattenTest(unittest.TestCase):
     def test_edge_flatten_resolves_node_labels(self):
         label_by_id, _in_map, _out_map = mi.node_relations(self.diagram)
         flat = mi.edge_flatten_text("DFD — Cardholder", self.diagram.edges[0], label_by_id)
-        self.assertEqual(flat, "DFD — Cardholder > skypad — renters --> Stripe — card")
+        self.assertEqual(flat, "DFD — Cardholder > ledger — renters --> Stripe — card")
 
 
 class SearchEvalRegressionTest(unittest.TestCase):
-    def test_tuition_entity_matches_flattened_node(self):
-        tokens = mi._entity_search_tokens("TProg", "Tuition Program")
+    def test_coverage_entity_matches_flattened_node(self):
+        tokens = mi._entity_search_tokens("TProg", "Coverage Program")
         content = (
             mi.node_flatten_text(
                 "DFD — Standard Data Flow",
-                "GradGuard",
+                "Acme",
                 "TProg",
-                "Tuition Program",
+                "Coverage Program",
             )
             + " · "
             + tokens
@@ -205,7 +205,7 @@ class SearchEvalRegressionTest(unittest.TestCase):
             results,
             expect=["diagrams/mermaid-catalog/standard-data-flow/diagram.mmd"],
             expect_chunk_kind="mermaid_node",
-            expect_entity="Tuition",
+            expect_entity="Coverage",
             cut=3,
         )
         self.assertEqual(rank, 1)
@@ -215,7 +215,7 @@ class SearchEvalRegressionTest(unittest.TestCase):
             {
                 "source": "d.mmd",
                 "chunk_kind": "mermaid_header",
-                "content": "DFD > subgraphs: GradGuard, PROC",
+                "content": "DFD > subgraphs: Acme, PROC",
             }
         ]
         rank, hit = _score_hit(

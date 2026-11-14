@@ -93,7 +93,7 @@ class HookHealthTracker:
                 "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
             snapshot = dict(self._state)
-        self._maybe_write(snapshot, force=True)
+        self._maybe_write(snapshot, force=False)
 
     def record_noop(self, hook: str, *, seconds: float) -> None:
         """Record a healthy no-op unless it follows an unresolved failure."""

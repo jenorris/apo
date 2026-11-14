@@ -14,7 +14,7 @@ Mnemosyne and drops episodic lifecycle hooks Apo does not implement.
 ## Process isolation
 
 When the Hermes process should not own the stdio MCP subprocess (Grid /
-Desma), prefer **`apo-mcp`'s HTTP transport** (FastMCP, default `:8878`) or
+Portal), prefer **`apo-mcp`'s HTTP transport** (FastMCP, default `:8878`) or
 **`apo-local`** for in-process/no-daemon calls. Cursor and Claude Code keep
 stdio MCP.
 

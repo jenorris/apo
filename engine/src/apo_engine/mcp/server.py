@@ -218,7 +218,7 @@ def _top_level_dirs(v: Vault) -> list[str]:
 # APO_MCP_AUTH unset (the default for stdio/loopback clients — Claude Code,
 # Cursor, each Hermes gateway) -> build_auth_provider_from_env() returns None
 # and this is byte-identical to no auth= kwarg at all. Only a dedicated
-# instance with APO_MCP_AUTH=google (the public desma endpoint) pays for or
+# instance with APO_MCP_AUTH=google (the public portal endpoint) pays for or
 # is gated by auth.
 _AUTH_PROVIDER = build_auth_provider_from_env()
 mcp = FastMCP("Apo", instructions=_MCP_INSTRUCTIONS, auth=_AUTH_PROVIDER)
@@ -1131,6 +1131,10 @@ async def apo_admin(
 @mcp.resource("note://{vault}/{path*}", mime_type="text/markdown")
 def note_resource(vault: str, path: str) -> str:
     """Raw markdown via MCP resource URI note://<vault>/<relative-path>. Prefer read_note for agents."""
+    from apo_engine.note_format import is_exposed_note_rel
+
+    if not is_exposed_note_rel(path):
+        raise ValueError(f"path is not a note: {path}")
     v = _vault(vault)
     full = _safe_resolve(v, path)
     if not full.is_file():
