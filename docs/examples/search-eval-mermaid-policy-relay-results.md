@@ -16,7 +16,7 @@
 
 ## Verdict on stringification
 
-Flattened `chunks.text` **successfully relays** architecture entities (Stripe, skypad, faber, ECS, CDE, RAPI, Tuition) for **catalog-scoped** search. Diagnostic dump shows zero raw Mermaid syntax in `mermaid_node` rows; catalog prefix + entity tokens are present.
+Flattened `chunks.text` **successfully relays** architecture entities (Stripe, ledger, faber, ECS, CDE, RAPI, Tuition) for **catalog-scoped** search. Diagnostic dump shows zero raw Mermaid syntax in `mermaid_node` rows; catalog prefix + entity tokens are present.
 
 **Vault-wide policy relay** initially failed (50%) because policy/`pages` outranked `.mmd` without `folder=`. A query-gated vault-wide boost (2026-08-24) lifts Tier D to **60%** (gate pass). Remaining misses are mostly wrong diagram family or diagrams absent from the fused pool entirely — not missing flatten tokens.
 
@@ -34,7 +34,7 @@ Catalog-scoped multipliers unchanged (1.18 / 1.10 / 0.82 / 0.75).
 
 | Query | Failure mode | Notes |
 |-------|--------------|-------|
-| GradGuard renters program billing API | Wrong diagram family + entity | Path at rank 3; `expect_entity: RAPI` / `mermaid_node` not in top-3 scoring |
+| Acme renters program billing API | Wrong diagram family + entity | Path at rank 3; `expect_entity: RAPI` / `mermaid_node` not in top-3 scoring |
 | tuition program billing in standard flow | Entity/chunk-kind | Correct path dominates top-3, but no top hit satisfies `mermaid_node` + `Tuition` together |
 | RAPI to Stripe payment edge | Wrong diagram / chunk-kind | Expected `mermaid_edge`; enrollment + cardholder outrank |
 
@@ -49,7 +49,7 @@ Catalog-scoped multipliers unchanged (1.18 / 1.10 / 0.82 / 0.75).
 
 | Query | Top-3 composition | Failure mode |
 |-------|-------------------|--------------|
-| how does GradGuard transmit cardholder data… | 3× policies | Diagrams never entered fused top-48 |
+| how does Acme transmit cardholder data… | 3× policies | Diagrams never entered fused top-48 |
 | what AWS resources are in the CDE | cardholder-data-flow ×2 + policy | Wrong diagram family (want PCI network) |
 | no CHD storage payment processor architecture | integrated flows + policy | Wrong diagram family (want standard-data-flow) |
 | agency cortana call center agent data flow | cardholder-data-flow ×3 | Wrong diagram (cortana node also on CHD flow); pages demoted ✓ |

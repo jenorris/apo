@@ -60,7 +60,7 @@ retries by heading and returns a soft `tip` to re-search.
 ```
 
 ```json
-{"op": "set_field", "field": "todos[id=skypad-resolver].status", "value": "completed"}
+{"op": "set_field", "field": "todos[id=item-resolver].status", "value": "completed"}
 ```
 
 ```json
@@ -115,7 +115,7 @@ canonical shape per op.
 |---------|---------|---------|
 | map key | Nested object key | `meta.owner` |
 | list index | Element when parent is a list | `todos.0.status` |
-| id selector | First list dict with matching field | `todos[id=skypad-resolver].status` |
+| id selector | First list dict with matching field | `todos[id=item-resolver].status` |
 
 Markdown notes: frontmatter is **parsed → mutated → `yaml.safe_dump`'d** back into
 the `---` fence (body unchanged). Multi-line keys like `todos:` update as a

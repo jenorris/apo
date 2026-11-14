@@ -97,14 +97,9 @@ def clear_architecture_vocab_cache() -> None:
         _arch_vocab_cache.clear()
 
 
-_TICKET_PREFIXES = frozenset(
-    {"itops", "plat", "dv", "qa", "harmon", "core-api", "ngi", "devops"}
-)
-_TICKET_ID_RE = re.compile(r"\b([a-z][a-z0-9-]*?)[-\s]+(\d{2,6})\b", re.I)
+_TICKET_ID_RE = re.compile(r"\b([a-z]{2,10})-(\d{2,6})\b", re.I)
 _EVAL_ARTIFACT_STEMS = frozenset({"apo-qmd-retrieval-pilot", "search-eval"})
-_STEM_PHRASE_STOP = frozenset(
-    {"core", "api", "thread", "plat", "the", "and", "for", "gradguard", "integration", "feasibility"}
-)
+_STEM_PHRASE_STOP = frozenset({"core", "api", "thread", "the", "and", "for"})
 
 
 def _phrase_stem_boost(path: str, query: str) -> float:
@@ -237,10 +232,8 @@ def _slug_ticket_boost(path: str, query: str) -> float:
     q = (query or "").lower()
     best = 1.0
     for m in _TICKET_ID_RE.finditer(q):
-        prefix = m.group(1).lower().rstrip("-")
+        prefix = m.group(1).lower()
         num = m.group(2)
-        if prefix not in _TICKET_PREFIXES and not any(prefix.startswith(p) for p in _TICKET_PREFIXES):
-            continue
         needle = f"{prefix}-{num}"
         if needle in stem or stem.startswith(needle + "-") or stem == needle:
             best = max(best, 1.38)
@@ -553,7 +546,10 @@ def _inject_phrase_stem_hits(
     if added_texts and full_texts is not None:
         full_texts = full_texts + added_texts
     if added_texts:
-        hits.sort(key=lambda h: h.score, reverse=True)
+        order = sorted(range(len(hits)), key=lambda i: hits[i].score, reverse=True)
+        hits = [hits[i] for i in order]
+        if full_texts is not None:
+            full_texts = [full_texts[i] for i in order]
     return hits, full_texts
 
 
@@ -638,8 +634,6 @@ def _neighbor_rank_boost(
             h.explain = h.explain or {}
             h.explain["neighbor_boost"] = mult
         boosted = True
-    if boosted:
-        hits.sort(key=lambda x: x.score, reverse=True)
     return hits
 
 
@@ -667,6 +661,7 @@ def _apply_path_boosts_to_hits(
     hits.sort(key=lambda x: x.score, reverse=True)
     if neighbor:
         hits = _neighbor_rank_boost(hits, query, explain=explain)
+        hits.sort(key=lambda x: x.score, reverse=True)
     return hits
 
 

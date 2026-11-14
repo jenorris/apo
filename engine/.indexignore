@@ -5,6 +5,7 @@
 
 .obsidian/*
 .trash/*
+.apo/*
 templates/*
 
 # Example: exclude sensitive or noisy areas from the index entirely.

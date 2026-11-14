@@ -17,7 +17,7 @@ from apo_engine import config, ranking
 from apo_engine.ranking import _catalog_retrieval_boost, _is_architecture_query
 
 # Mirrors the vocabulary the old hardcoded _ARCH_QUERY_RE carried for the
-# GradGuard ("Work") vault, now expected to live in that vault's own
+# Acme ("Work") vault, now expected to live in that vault's own
 # search-contract.schema.yaml under boost_vocab.
 _ARCH_VOCAB = [
     "cde",
@@ -27,7 +27,7 @@ _ARCH_VOCAB = [
     "cardholder",
     "stripe",
     "ecs",
-    "skypad",
+    "ledger",
     "faber",
     "cortana",
     "starrez",
@@ -206,7 +206,7 @@ class CatalogBoostVaultWideNoVocabTest(unittest.TestCase):
             "diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd",
             "mermaid_node",
             "",
-            query="cardholder data flow Stripe skypad faber",
+            query="cardholder data flow Stripe ledger faber",
         )
         self.assertEqual(b, 1.0)
 

@@ -41,7 +41,7 @@ queries:
     expect_chunk_kind: mermaid_node
     expect_entity: Stripe
 
-  - query: GradGuard renters program billing API
+  - query: Acme renters program billing API
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/standard-data-flow/standard-data-flow.md]
     expect_chunk_kind: mermaid_node

@@ -102,6 +102,36 @@ def _ensure_chunk_columns(db: sqlite3.Connection) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS chunks_hash ON chunks(chunk_hash)")
     db.execute("CREATE INDEX IF NOT EXISTS chunks_content_hash ON chunks(content_hash)")
     db.execute("CREATE INDEX IF NOT EXISTS chunks_table ON chunks(table_id)")
+    _dedupe_chunk_rows(db)
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS chunks_path_ord ON chunks(path, ord)"
+    )
+
+
+def _dedupe_chunk_rows(db: sqlite3.Connection) -> int:
+    """Drop extra ``chunks`` rows that share ``(path, ord)``, and their vec/fts twins.
+
+    Keeps ``MIN(id)``. Safe to run on every open: a clean index deletes nothing.
+    """
+    doomed = [
+        row[0]
+        for row in db.execute(
+            """
+            SELECT id FROM chunks
+            WHERE id NOT IN (SELECT MIN(id) FROM chunks GROUP BY path, ord)
+            """
+        )
+    ]
+    if not doomed:
+        return 0
+    qs = ",".join("?" * len(doomed))
+    for table in ("vec_chunks", "chunks_fts"):
+        try:
+            db.execute(f"DELETE FROM {table} WHERE rowid IN ({qs})", doomed)
+        except sqlite3.OperationalError:
+            pass
+    db.execute(f"DELETE FROM chunks WHERE id IN ({qs})", doomed)
+    return len(doomed)
 
 
 def _health_key(index: Path | None = None) -> str:
@@ -699,9 +729,9 @@ def _ensure_vec_table(db: sqlite3.Connection, dim: int) -> None:
 
 
 def _load_ignore() -> list[str]:
-    from apo_engine.note_format import DEFAULT_YAML_IGNORE
+    from apo_engine.note_format import DEFAULT_YAML_IGNORE, ENGINE_STATE_GLOBS
 
-    patterns = [".git/*", ".obsidian/*", "*.excalidraw.md", *DEFAULT_YAML_IGNORE]
+    patterns = [".git/*", ".obsidian/*", *ENGINE_STATE_GLOBS, "*.excalidraw.md", *DEFAULT_YAML_IGNORE]
     # Engine-level ignore file (APO_IGNORE) plus a vault-root .indexignore, if present.
     for ignore_file in (config.IGNORE_FILE, vaults.notes_root() / ".indexignore"):
         if ignore_file.exists():
@@ -714,7 +744,7 @@ def _load_ignore() -> list[str]:
 
 def _prune_dir_names(ignore: list[str]) -> set[str]:
     """Directory basenames to drop during ``os.walk`` (from ``name/*`` ignore patterns)."""
-    names = {".git", ".obsidian", ".trash"}
+    names = {".git", ".obsidian", ".trash", ".apo"}
     for raw in ignore:
         pat = raw.replace("\\", "/").strip()
         if pat.endswith("/*") and "/" not in pat[:-2] and not any(c in pat[:-2] for c in "*?["):
@@ -1282,6 +1312,13 @@ def index_health() -> dict[str, Any]:
         else 0
     )
     quarantined = _count("SELECT COUNT(*) FROM files WHERE embed_quarantined=1")
+    duplicate_chunks = _count(
+        """
+        SELECT COALESCE(SUM(c - 1), 0) FROM (
+            SELECT COUNT(*) AS c FROM chunks GROUP BY path, ord HAVING COUNT(*) > 1
+        )
+        """
+    )
 
     # Watch-loop hook health (git-sync / optima-merge / desk-reprojection) —
     # a small persisted heartbeat the watcher writes per vault; see
@@ -1303,6 +1340,8 @@ def index_health() -> dict[str, Any]:
         flags.append("wal_over_limit")
     if quarantined > 0:
         flags.append("embed_quarantined")
+    if duplicate_chunks > 0:
+        flags.append("duplicate_chunks")
     flags.extend(watch_health.hook_health_flags(hooks))
 
     return {
@@ -1319,6 +1358,7 @@ def index_health() -> dict[str, Any]:
         "vec_chunks_orphans": vec_chunks_orphans,
         "fts_orphans": fts_orphans,
         "quarantined": quarantined,
+        "duplicate_chunks": duplicate_chunks,
         "hooks": hooks,
         "flags": flags,
     }

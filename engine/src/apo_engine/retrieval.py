@@ -888,6 +888,40 @@ def _search_lex_boosted(
     return hits
 
 
+def _collapse_same_chunk(
+    hits: list[Hit], full_texts: list[str] | None = None
+) -> tuple[list[Hit], list[str] | None]:
+    """Keep the higher-scoring copy when one ``(path, chunk_hash)`` was stored twice."""
+    chosen: dict[tuple[str, str], int] = {}
+    for i, hit in enumerate(hits):
+        if not hit.chunk_hash:
+            continue
+        key = (hit.path, hit.chunk_hash)
+        prev = chosen.get(key)
+        if prev is None or hit.score > hits[prev].score:
+            chosen[key] = i
+    if not chosen or len(chosen) == sum(1 for h in hits if h.chunk_hash):
+        return hits, full_texts
+    out_hits: list[Hit] = []
+    out_texts: list[str] = []
+    emitted: set[tuple[str, str]] = set()
+    for i, hit in enumerate(hits):
+        if not hit.chunk_hash:
+            out_hits.append(hit)
+            if full_texts is not None:
+                out_texts.append(full_texts[i] if i < len(full_texts) else hit.text)
+            continue
+        key = (hit.path, hit.chunk_hash)
+        if key in emitted:
+            continue
+        j = chosen[key]
+        out_hits.append(hits[j])
+        if full_texts is not None:
+            out_texts.append(full_texts[j] if j < len(full_texts) else hits[j].text)
+        emitted.add(key)
+    return out_hits, (out_texts if full_texts is not None else None)
+
+
 def search(
     query: str,
     k: int = 8,
@@ -918,14 +952,16 @@ def search(
     _search_degraded.set(None)
     _search_rerank.set(None)
     if not hybrid:
-        return _search_lex_boosted(
-            query,
-            k,
-            exclude=exclude,
-            folder=folder,
-            snippet_chars=snippet_chars,
-            explain=explain,
-        )
+        return _collapse_same_chunk(
+            _search_lex_boosted(
+                query,
+                k,
+                exclude=exclude,
+                folder=folder,
+                snippet_chars=snippet_chars,
+                explain=explain,
+            )
+        )[0]
     db = reader_connect()
     if db.execute("SELECT value FROM meta WHERE key='dim'").fetchone() is None:
         raise SystemExit("Index is empty — run `apo-engine index` first.")
@@ -1175,7 +1211,12 @@ def search(
         if vault_wide_arch and not rerank_on and k > 0:
             hits = hits[:k]
             full_texts = full_texts[:k]
+    hits, full_texts = _collapse_same_chunk(hits, full_texts)
     hits = ranking._neighbor_rank_boost(hits, query, explain=explain)
+    if hits and full_texts is not None and len(full_texts) == len(hits):
+        paired = sorted(zip(hits, full_texts), key=lambda p: p[0].score, reverse=True)
+        hits = [p[0] for p in paired]
+        full_texts = [p[1] for p in paired]
     if rerank_on and hits:
         # Position-aware blend, not a full override — see docs/search-quality.md for
         # the eval (0.795 -> 0.826 MRR@5 vs. the old rerank.rerank_hits() reorder).

@@ -1,21 +1,8 @@
-"""Multi-persona Google OIDC auth for a public desma MCP endpoint.
+"""Google OIDC auth for a public Apo MCP endpoint.
 
-Two people (Jeremy and Fotini) each have their own Google OAuth client
-registration in a shared GCP project. Rather than run this server as a
-FastMCP ``OAuthProxy`` (which is built around exactly one upstream
-client_id/secret — see ``GoogleProvider`` — and so can't natively serve two
-client registrations from one ``/authorize`` redirect), this module makes
-the server a plain OAuth *resource* server (``RemoteAuthProvider``): Google
-itself is the authorization server the MCP client talks to directly (using
-whichever persona's client_id/secret it was configured with), and this
-module only verifies the bearer ID token FastMCP receives on every tool
-call, mapping it to a persona via the client_id in its ``aud`` claim.
-
-That split is what makes "two Google OAuth clients, one endpoint" possible
-without forking FastMCP's OAuth server code, and it's why every check here
-is expressible as pure JWT validation — testable with a mocked JWKS
-endpoint, no network or real GCP registration required (see
-tests/test_mcp_auth_google.py).
+Each persona has its own Google OAuth client registration. This server is a
+resource server (``RemoteAuthProvider``): the identity provider is the
+authorization server, and this module verifies the bearer token on each call.
 """
 
 from __future__ import annotations
@@ -68,7 +55,7 @@ class AuthSettings:
 def load_persona_config(config_path: Path) -> AuthSettings:
     """Load and validate the ``~/.apo/mcp-auth.json``-shaped persona config.
 
-    See ``docs/systemd/apo-desma-mcp.service.example`` for the schema with
+    See ``docs/systemd/apo-mcp.service.example`` for the schema with
     placeholder values — real client secrets never belong in this repo.
     """
     try:
@@ -186,7 +173,7 @@ def build_auth_provider(
     jwks_uri_override: str | None = None,
     http_client: httpx.AsyncClient | None = None,
 ) -> RemoteAuthProvider:
-    """Build the FastMCP ``auth=`` provider for the desma MCP endpoint.
+    """Build the FastMCP ``auth=`` provider for the portal MCP endpoint.
 
     ``issuer_override``/``jwks_uri_override``/``http_client`` exist so tests
     (and, if ever needed, a non-Google dev IdP) can point verification at a
@@ -207,7 +194,7 @@ def build_auth_provider(
         token_verifier=verifier,
         authorization_servers=[AnyHttpUrl(_metadata_issuer(issuer))],
         base_url=base_url,
-        resource_name="Apo Desma MCP",
+        resource_name=os.environ.get("APO_MCP_RESOURCE_NAME", "Apo MCP"),
     )
 
 
@@ -297,7 +284,7 @@ def load_token_scopes(tokens_path: Path) -> dict[str, dict]:
 def build_auth_provider_from_env() -> AuthProvider | None:
     """Construct the auth provider from ``APO_MCP_AUTH`` and its config env.
 
-    ``APO_MCP_AUTH=google`` (+ ``APO_MCP_AUTH_CONFIG``) is the public desma
+    ``APO_MCP_AUTH=google`` (+ ``APO_MCP_AUTH_CONFIG``) is the public portal
     endpoint; ``APO_MCP_AUTH=token`` (+ ``APO_MCP_TOKENS_FILE``) is static
     bearer auth for machine clients reaching a tailnet-exposed instance.
 

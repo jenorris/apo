@@ -1,0 +1,20 @@
+# Example user unit for an authenticated Apo MCP server.
+# Copy, then set the paths and the auth config for your own host.
+# Do not bind 0.0.0.0 without authentication. A watcher process is separate:
+# this unit only runs apo-mcp.
+
+[Unit]
+Description=Apo MCP server
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=APO_MCP_TRANSPORT=http
+Environment=APO_MCP_HOST=127.0.0.1
+Environment=APO_MCP_PORT=8878
+Environment=APO_MCP_RESOURCE_NAME=Apo MCP
+ExecStart=/usr/local/bin/apo-mcp
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

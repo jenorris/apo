@@ -1,17 +1,17 @@
 flowchart LR
   subgraph p1 [Phase 1 — now]
-    F1[Floci]
+    F1[Indexer]
     H1[Env harness QA/UAT/prod]
     E1[environments/* modules]
     F1 --> H1 --> E1
   end
   subgraph p2 [Phase 2]
-    F2[Floci]
-    R2[Root platform subset on Floci]
+    F2[Indexer]
+    R2[Root platform subset on Indexer]
     R2 --> E2[Native module refs]
   end
   subgraph p3 [Phase 3]
-    F3[Floci]
+    F3[Indexer]
     R3[Root emulation plan]
     R3 --> QA[module.quality_assurance]
     R3 --> UAT[module.user_acceptance_testing]

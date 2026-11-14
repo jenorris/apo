@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from apo_engine import core, vaults
-from apo_engine.markdown_patch import _HEADING_RE, _normalize_heading, normalize_lines
+from apo_engine.markdown_patch import _normalize_heading, normalize_lines
 
 STALE_HASH_TIP = (
     "chunk_hash was stale (not in index); "
@@ -28,15 +28,24 @@ def format_chunk_heading(title: str, level: int) -> str:
 
 
 def _innermost_heading(lines: list[str], probe_line: int) -> str:
-    """Nearest markdown heading at or above ``probe_line`` (1-based)."""
+    """Nearest markdown heading at or above ``probe_line`` (1-based).
+
+    Uses the fence-aware heading scan so a ``#`` inside a code fence is not a heading.
+    """
+    from apo_engine.markdown_sections import find_headings
+
     if probe_line < 1:
         probe_line = 1
-    idx = min(probe_line, len(lines)) - 1
-    for i in range(idx, -1, -1):
-        m = _HEADING_RE.match(lines[i])
-        if m:
-            return format_chunk_heading(m.group(2).strip(), len(m.group(1)))
-    return ""
+    probe0 = min(probe_line, len(lines)) - 1
+    chosen = None
+    for heading in find_headings(lines):
+        if heading.line <= probe0:
+            chosen = heading
+        else:
+            break
+    if chosen is None:
+        return ""
+    return format_chunk_heading(chosen.title, chosen.level)
 
 
 def resolve_chunk_anchor(
@@ -92,7 +101,7 @@ def resolve_chunk_anchor(
             full = binding.resolved().root / chunk_path
             if full.is_file():
                 lines = normalize_lines(full.read_text(encoding="utf-8"))
-                probe = int(chunk.get("end_line") or chunk.get("start_line") or 1)
+                probe = int(chunk.get("start_line") or 1)
                 refined = _innermost_heading(lines, probe)
                 if refined:
                     heading = refined

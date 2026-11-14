@@ -1,6 +1,7 @@
 """Vault watcher — filesystem events + deferred queue consumer (sole index writer)."""
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import queue
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config, core, deferred, git_sync, watch_health, watch_hooks
-from .note_format import is_note_path
+from .note_format import ENGINE_STATE_DIR, is_note_path
 
 # Every watcher log line — and, via the "apo" logger hierarchy, `core.py`'s
 # `logging.getLogger("apo.index")` warnings — goes through this handler once
@@ -27,6 +28,7 @@ _LOG_MAX_BYTES = 50 * 1024 * 1024
 _LOG_BACKUP_COUNT = 3
 
 logger = logging.getLogger("apo.watch")
+_watch_lock_fd: object | None = None
 
 # Longest an idle watch cycle goes without waking the hook workers.
 HOOK_HEARTBEAT_S = 5.0
@@ -168,7 +170,7 @@ def _event_path_noise(raw: str, root: Path, ignore_res: list) -> bool:
         # May still be under root via unresolved path — let _note_path decide.
         return False
     for part in rel.split("/"):
-        if part in {".git", ".obsidian", ".trash"}:
+        if part in {".git", ".obsidian", ".trash", ENGINE_STATE_DIR}:
             return True
     return bool(core._is_ignored(rel, ignore_res))
 
@@ -255,6 +257,30 @@ def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
 HookFactory = Callable[[Any, bool], Iterable[tuple[str, Callable[..., Any]]]]
 
 
+def watch_lock_path() -> Path:
+    """Exclusive lock for the one ``apo-engine watch`` process on this machine."""
+    raw = os.environ.get("WATCH_PID_DIR") or os.environ.get("APO_WATCH_PID_DIR")
+    base = Path(raw) if raw else Path.home() / ".apo"
+    return base / "watch.lock"
+
+
+def _acquire_watch_lock() -> bool:
+    """Take ``watch.lock`` for this process. A second process gets False."""
+    global _watch_lock_fd
+    if _watch_lock_fd is not None:
+        return True
+    path = watch_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = open(path, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fd.close()
+        return False
+    _watch_lock_fd = fd
+    return True
+
+
 def run_watch(
     interval: float | None = None,
     *,
@@ -273,6 +299,11 @@ def run_watch(
     from . import vaults
 
     _configure_logging(verbose)
+    if not _acquire_watch_lock():
+        logger.warning(
+            "another apo-engine watch holds %s; exiting", watch_lock_path()
+        )
+        raise SystemExit(0)
     hook_factories = tuple(hook_factories)
 
     _default, bindings = vaults.load_bindings()

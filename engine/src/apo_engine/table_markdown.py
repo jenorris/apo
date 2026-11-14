@@ -54,7 +54,7 @@ def _split_row(line: str) -> list[str]:
     escaped = False
     for ch in s:
         if escaped:
-            buf.append(ch if ch == "|" else "\\" + ch)
+            buf.append(ch)
             escaped = False
         elif ch == "\\":
             escaped = True

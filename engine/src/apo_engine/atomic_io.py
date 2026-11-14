@@ -53,6 +53,8 @@ def _fsync_parent_directory(parent: Path) -> None:
 def atomic_write_bytes(path: Path, data: bytes) -> None:
     """Write bytes durably, then atomically replace ``path``."""
     path = Path(path)
+    if path.is_symlink():
+        raise OSError(errno.EPERM, f"refusing to replace symlink {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         mode = stat.S_IMODE(path.stat().st_mode)

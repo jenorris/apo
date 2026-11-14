@@ -314,7 +314,7 @@ class TestPatch(unittest.TestCase):
 title: Plan
 okf_type: Plan
 todos:
-  - id: skypad-resolver
+  - id: item-resolver
     content: Do thing
     status: pending
   - id: other
@@ -326,13 +326,13 @@ todos:
 """
         result = apply_patch(
             src,
-            [{"op": "set_field", "field": "todos[id=skypad-resolver].status", "value": "completed"}],
+            [{"op": "set_field", "field": "todos[id=item-resolver].status", "value": "completed"}],
         )
         self.assertTrue(result.ok)
         self.assertIn("status: completed", result.content)
         self.assertIn("id: other", result.content)
         fm = result.content.split("---")[1]
-        self.assertIn("skypad-resolver", fm)
+        self.assertIn("item-resolver", fm)
         self.assertEqual(fm.count("status: pending"), 1)
         self.assertEqual(fm.count("status: completed"), 1)
 

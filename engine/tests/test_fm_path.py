@@ -28,12 +28,12 @@ class TestSplitPath(unittest.TestCase):
         self.assertEqual(parts, [MapKey("todos"), ListIndex(0), MapKey("status")])
 
     def test_id_selector(self):
-        parts = split_path("todos[id=skypad-resolver].status")
+        parts = split_path("todos[id=item-resolver].status")
         self.assertEqual(
             parts,
             [
                 MapKey("todos"),
-                IdSelector("id", "skypad-resolver"),
+                IdSelector("id", "item-resolver"),
                 MapKey("status"),
             ],
         )

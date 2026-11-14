@@ -1,4 +1,4 @@
-"""Google multi-persona auth for the desma MCP endpoint — mocked OIDC, no network.
+"""Google multi-persona auth for the portal MCP endpoint — mocked OIDC, no network.
 
 Exercises ``apo_engine.mcp_auth.PersonaGoogleTokenVerifier`` directly
 (signature / issuer / audience / expiry / email-allowlist) against a
@@ -34,8 +34,8 @@ from test_patch_note_schema import _list_tools_lean
 
 JEREMY_CLIENT_ID = "jeremy-client.apps.googleusercontent.com"
 FOTINI_CLIENT_ID = "fotini-client.apps.googleusercontent.com"
-JEREMY_EMAIL = "jeremy.desma@gmail.com"
-FOTINI_EMAIL = "fotini.desma@gmail.com"
+JEREMY_EMAIL = "ada@example.com"
+FOTINI_EMAIL = "bao@example.com"
 KID = "test-key-1"
 
 
@@ -195,7 +195,7 @@ class PersonaConfigTest(unittest.TestCase):
                             }
                         ],
                         "issuer": "https://accounts.google.com",
-                        "base_url": "https://desma-mcp.example.ts.net",
+                        "base_url": "https://mcp.example.com",
                     }
                 )
             )
@@ -224,7 +224,7 @@ class PersonaConfigTest(unittest.TestCase):
                             },
                         ],
                         "issuer": "https://accounts.google.com",
-                        "base_url": "https://desma-mcp.example.ts.net",
+                        "base_url": "https://mcp.example.com",
                     }
                 )
             )
@@ -276,7 +276,7 @@ class UnauthenticatedMutationGateTest(unittest.TestCase):
                         },
                     ],
                     "issuer": "https://accounts.google.com",
-                    "base_url": "https://desma-mcp.example.ts.net",
+                    "base_url": "https://mcp.example.com",
                 }
             )
         )

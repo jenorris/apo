@@ -3,9 +3,9 @@
 Segments:
 - map key: ``owner``
 - list index: ``0`` (when parent is a list)
-- id selector: ``[id=skypad-resolver]`` (first matching list element)
+- id selector: ``[id=item-resolver]`` (first matching list element)
 
-Examples: ``todos``, ``todos.0.status``, ``todos[id=skypad-resolver].status``.
+Examples: ``todos``, ``todos.0.status``, ``todos[id=item-resolver].status``.
 """
 
 from __future__ import annotations

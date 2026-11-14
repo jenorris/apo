@@ -50,7 +50,7 @@ queries:
     expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
     expect_entity: Authorize
 
-  - query: renters program skypad payment
+  - query: renters program ledger payment
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
     expect_entity: SKY
@@ -77,7 +77,7 @@ queries:
     expect: [diagrams/mermaid-catalog/starrez-renters-portal-integration-data-flow/starrez-renters-portal-integration-data-flow.md]
 
   # --- Tier D: vault-wide (no folder=) — diagram must still rank ≤3 ---
-  - query: how does GradGuard transmit cardholder data to payment processors
+  - query: how does Acme transmit cardholder data to payment processors
     expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
 
   - query: what AWS resources are in the cardholder data environment
@@ -91,7 +91,7 @@ queries:
   - query: no CHD storage payment processor architecture
     expect: [diagrams/mermaid-catalog/standard-data-flow/standard-data-flow.md]
 
-  - query: cardholder data flow Stripe Authorize.net skypad faber
+  - query: cardholder data flow Stripe Authorize.net ledger faber
     expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
 
   - query: PCI CDE network segmentation diagram architecture

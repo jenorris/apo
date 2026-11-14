@@ -167,10 +167,32 @@ cmd_stop() {
     [[ -f "$PID_FILE" ]] && rm -f "$PID_FILE"
     return
   fi
-  local pid
+  local pid cmd
   pid="$(cat "$PID_FILE")"
-  kill "$pid" 2>/dev/null && success "Watcher stopped (PID $pid)" || warn "Could not kill PID $pid"
-  rm -f "$PID_FILE"
+  if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+    warn "refusing to signal non-numeric pid from $PID_FILE"
+    return 1
+  fi
+  cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  if [[ "$cmd" != *apo-engine* || "$cmd" != *watch* ]]; then
+    warn "refusing to signal pid $pid (not apo-engine watch)"
+    return 1
+  fi
+  if ! kill "$pid" 2>/dev/null; then
+    warn "Could not kill PID $pid"
+    return 1
+  fi
+  local _
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    if ! ps -p "$pid" >/dev/null 2>&1; then
+      rm -f "$PID_FILE"
+      success "Watcher stopped (PID $pid)"
+      return 0
+    fi
+    sleep 0.2
+  done
+  warn "pid $pid still running; leaving $PID_FILE"
+  return 1
 }
 
 cmd_status() {

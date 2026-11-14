@@ -82,6 +82,22 @@ class VaultScopeMiddleware(Middleware):
         for key in PREFIXABLE_ARGS:
             if (v := self._prefixed_vault(args.get(key))) is not None:
                 named.add(v)
+        for op in args.get("ops") or []:
+            if not isinstance(op, dict):
+                continue
+            op_name = str(op.get("op") or "").strip().lower()
+            for key in ("src", "dst", "path", "to"):
+                raw = op.get(key)
+                if not isinstance(raw, str) or not raw.strip():
+                    continue
+                if op_name == "place" and key in ("src", "dst"):
+                    text = raw.strip()
+                    if text.startswith("~") or text.startswith("/") or (len(text) > 2 and text[1] == ":"):
+                        raise ToolError(
+                            "vault_out_of_scope: place src and dst must name a vault, not a host path"
+                        )
+                if (v := self._prefixed_vault(raw)) is not None:
+                    named.add(v)
         for f in args.get("folders") or []:
             if (v := self._prefixed_vault(f)) is not None:
                 named.add(v)

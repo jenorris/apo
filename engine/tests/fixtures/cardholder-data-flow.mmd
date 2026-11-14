@@ -1,19 +1,19 @@
 flowchart LR
     subgraph WEB["Customer sites"]
         C["Public Customers"]
-        GG["gradguard.com"]
+        GG["acme.com"]
         RW["renterswidget"]
-        AC["account.gradguard.com"]
+        AC["account.acme.com"]
     end
     subgraph ADMIN["Policy admin"]
         A["Call Center Agent"]
     end
     subgraph AGY["Agency"]
-        COR["cortana.gradguard.com"]
+        COR["cortana.acme.com"]
     end
-    subgraph API["api.gradguard.com"]
+    subgraph API["api.acme.com"]
         API1["Core API"]
-        SKY["skypad — renters"]
+        SKY["ledger — renters"]
         FAB["faber — tuition"]
     end
     subgraph PAY["Payment providers"]

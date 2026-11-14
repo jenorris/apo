@@ -22,7 +22,7 @@ class MermaidParseTest(unittest.TestCase):
         self.assertTrue(d.ok)
         self.assertEqual(len(d.nodes), 7)
         self.assertEqual(len(d.edges), 6)
-        self.assertIn("GradGuard", d.subgraphs)
+        self.assertIn("Acme", d.subgraphs)
         stripe = next(n for n in d.nodes if n.node_id == "P")
         self.assertEqual(stripe.label, "Stripe")
 
@@ -89,11 +89,11 @@ class RealFenceRegressionTest(unittest.TestCase):
     def test_unquoted_subgraph_label_and_chained_edges(self):
         # `subgraph p1 [Phase 1 — now]` (unquoted bracket label) and
         # `F1 --> H1 --> E1` (a 3-node chain meaning 2 edges).
-        d = _parse_fixture("real-floci-phases.mmd")
+        d = _parse_fixture("real-indexer-phases.mmd")
         self.assertTrue(d.ok, d.parse_error)
         self.assertEqual(d.subgraphs, ["Phase 1 — now", "Phase 2", "Phase 3"])
         by_id = {n.node_id: n for n in d.nodes}
-        self.assertEqual(by_id["F1"].label, "Floci")
+        self.assertEqual(by_id["F1"].label, "Indexer")
         self.assertEqual(by_id["F1"].subgraph, "Phase 1 — now")
         edge_pairs = [(e.from_id, e.to_id) for e in d.edges]
         self.assertIn(("F1", "H1"), edge_pairs)

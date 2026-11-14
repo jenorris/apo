@@ -40,7 +40,7 @@ Surfaces:
 
 A stay-put `archived: true` index flag is possible later, but **move-to-`archives/`** matches PARA, git history, Obsidian folders, and today’s search-contract.
 
-## Minimal GradGuard Work example
+## Minimal Acme Work example
 
 ```yaml
 archival_contract_version: "0.1"

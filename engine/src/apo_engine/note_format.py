@@ -16,6 +16,9 @@ from typing import Any
 import yaml
 
 NOTE_SUFFIXES = frozenset({".md", ".yaml", ".yml", ".mmd", ".json"})
+# Watcher heartbeat and git-sync status. Not notes, even though ``.json`` is a note suffix.
+ENGINE_STATE_DIR = ".apo"
+ENGINE_STATE_GLOBS = (".apo/*",)
 YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 JSON_SUFFIXES = frozenset({".json"})
 MARKDOWN_SUFFIXES = frozenset({".md"})
@@ -74,6 +77,26 @@ def is_contract_schema_path(path: str | Path) -> bool:
 
 def is_note_path(path: str | Path) -> bool:
     return suffix_of(path) in NOTE_SUFFIXES
+
+
+def has_blocked_dot_segment(rel: str) -> bool:
+    """True for ``.git``, ``.env``, or ``.apo`` path segments.
+
+    ``..`` is left to lexical normalization so a contract-schema alias still
+    reaches the protected-control-plane check.
+    """
+    parts = [p for p in rel.replace("\\", "/").split("/") if p not in ("", ".")]
+    return any(p in {".git", ".env", ENGINE_STATE_DIR} or p.startswith(".env") for p in parts)
+
+
+def is_exposed_note_rel(rel: str) -> bool:
+    """True when a vault-relative path is a note and not under a dot-segment."""
+    if has_blocked_dot_segment(rel):
+        return False
+    parts = [p for p in rel.replace("\\", "/").split("/") if p not in ("", ".")]
+    if not parts:
+        return False
+    return is_note_path(parts[-1])
 
 
 def is_yaml_note(path: str | Path) -> bool:
