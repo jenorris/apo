@@ -11,7 +11,7 @@
 # migration as search-eval-mermaid-compliance.yaml (see that file's header for
 # the full rename table). `network-diagram-pci` → `cde-network-diagram-pci-edition`
 # (still `diagram.mmd`, unfenced); `standard-data-flow`, `agency-data-flow`,
-# `delegated-tuition` → `delegated-tuition-data-flow`, and
+# `delegated-coverage` → `delegated-coverage-data-flow`, and
 # `enrollment-renters-portal-starrez` → `starrez-renters-portal-integration-data-flow`
 # each renamed `diagram.mmd` → `<slug>.md` (fenced). `cardholder-data-flow` is
 # unchanged and still a real path (role now `deprecated` in catalog.yaml, but the
@@ -55,7 +55,7 @@ queries:
     expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
     expect_entity: SKY
 
-  - query: tuition faber payment processor
+  - query: coverage cashier payment processor
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
     expect_entity: FAB
@@ -64,13 +64,13 @@ queries:
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/cde-network-diagram-pci-edition/diagram.mmd]
 
-  - query: cortana agency policy admin data flow
+  - query: console agency policy admin data flow
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/agency-data-flow/agency-data-flow.md]
 
-  - query: delegated tuition billing only
+  - query: delegated coverage billing only
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/delegated-tuition-data-flow/delegated-tuition-data-flow.md]
+    expect: [diagrams/mermaid-catalog/delegated-coverage-data-flow/delegated-coverage-data-flow.md]
 
   - query: StarRez housing portal enrollment
     folder: diagrams/mermaid-catalog
@@ -91,20 +91,20 @@ queries:
   - query: no CHD storage payment processor architecture
     expect: [diagrams/mermaid-catalog/standard-data-flow/standard-data-flow.md]
 
-  - query: cardholder data flow Stripe Authorize.net ledger faber
+  - query: cardholder data flow Stripe Authorize.net ledger cashier
     expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
 
   - query: PCI CDE network segmentation diagram architecture
     expect: [diagrams/mermaid-catalog/cde-network-diagram-pci-edition/diagram.mmd]
 
-  - query: agency cortana call center agent data flow diagram
+  - query: agency console call center agent data flow diagram
     expect: [diagrams/mermaid-catalog/agency-data-flow/agency-data-flow.md]
 
   - query: StarRez renters enrollment portal integration architecture
     expect: [diagrams/mermaid-catalog/starrez-renters-portal-integration-data-flow/starrez-renters-portal-integration-data-flow.md]
 
-  - query: delegated tuition only billing architecture flow
-    expect: [diagrams/mermaid-catalog/delegated-tuition-data-flow/delegated-tuition-data-flow.md]
+  - query: delegated coverage only billing architecture flow
+    expect: [diagrams/mermaid-catalog/delegated-coverage-data-flow/delegated-coverage-data-flow.md]
 
-  - query: standard data flow renters tuition Stripe payment processor
+  - query: standard data flow renters coverage Stripe payment processor
     expect: [diagrams/mermaid-catalog/standard-data-flow/standard-data-flow.md]

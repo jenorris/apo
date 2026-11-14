@@ -108,23 +108,23 @@ class EntityTokensTest(unittest.TestCase):
         self.assertIn("Stripe", tokens)
         self.assertIn("card", tokens)
 
-    def test_tuition_program_yields_tuition_token(self):
-        tokens = mi._entity_search_tokens("TProg", "Tuition Program")
-        self.assertIn("Tuition", tokens)
+    def test_coverage_program_yields_coverage_token(self):
+        tokens = mi._entity_search_tokens("TProg", "Coverage Program")
+        self.assertIn("Coverage", tokens)
         self.assertIn("Program", tokens)
-        # expect_entity: Tuition must match flattened node text
+        # expect_entity: Coverage must match flattened node text
         flat = (
             mi.node_flatten_text(
                 "DFD — Standard Data Flow",
                 "Acme",
                 "TProg",
-                "Tuition Program",
+                "Coverage Program",
                 template="{title} > {subgraph} > {node} — {label}",
             )
             + " · "
             + tokens
         )
-        self.assertIn("tuition", flat.lower())
+        self.assertIn("coverage", flat.lower())
 
 
 class CatalogPrefixTest(unittest.TestCase):
@@ -182,14 +182,14 @@ class FileHeaderEdgeFlattenTest(unittest.TestCase):
 
 
 class SearchEvalRegressionTest(unittest.TestCase):
-    def test_tuition_entity_matches_flattened_node(self):
-        tokens = mi._entity_search_tokens("TProg", "Tuition Program")
+    def test_coverage_entity_matches_flattened_node(self):
+        tokens = mi._entity_search_tokens("TProg", "Coverage Program")
         content = (
             mi.node_flatten_text(
                 "DFD — Standard Data Flow",
                 "Acme",
                 "TProg",
-                "Tuition Program",
+                "Coverage Program",
             )
             + " · "
             + tokens
@@ -205,7 +205,7 @@ class SearchEvalRegressionTest(unittest.TestCase):
             results,
             expect=["diagrams/mermaid-catalog/standard-data-flow/diagram.mmd"],
             expect_chunk_kind="mermaid_node",
-            expect_entity="Tuition",
+            expect_entity="Coverage",
             cut=3,
         )
         self.assertEqual(rank, 1)

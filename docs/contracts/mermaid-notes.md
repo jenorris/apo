@@ -26,7 +26,7 @@ Fenced diagrams in `.md` use the same chunk kinds; no catalog filter unless path
 Paths matching `diagrams/mermaid-catalog/<slug>/diagram.mmd` merge [catalog.yaml](catalog.yaml) at index time:
 
 - `diagram_id` := catalog `slug`
-- `title`, `type`, `confluence_page_id`, `lucid_id` from catalog entry
+- `title`, `type`, `confluence_page_id`, `source_id` from catalog entry
 
 Optional YAML frontmatter at top of `.mmd` overrides catalog fields.
 
@@ -70,7 +70,7 @@ Post-reindex benchmark (2026-08-24, k=3): compliance catalog **86.36%** hit@3 (g
 | Mode | Example | Cause |
 |---|---|---|
 | Page beats `.mmd` | “renters pro API data flow” | `pages/*.md` Confluence bodies share slug/title tokens; table rows and prose rank above `diagram.mmd` node chunks |
-| Entity substring | `expect_entity: Tuition` on standard-data-flow | Flattened node text uses `Tuition Program` / `TAPI`, not bare `Tuition` |
+| Entity substring | `expect_entity: Coverage` on standard-data-flow | Flattened node text uses `Coverage Program` / `TAPI`, not bare `Coverage` |
 | Chunk-kind strictness | `expect_chunk_kind: mermaid_file` | Top hit is often `mermaid_header` or `mermaid_node`; whole-file chunk is lower rank |
 | Wrong diagram family | “AWS network diagram” | PCI edition (`network-diagram-pci`) scores above non-PCI `network-diagram` |
 

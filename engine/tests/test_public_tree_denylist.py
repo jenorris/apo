@@ -10,7 +10,22 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-TOKENS = ("gradguard", "skypad", "floci", "desma", ".ts.net")
+TOKENS = (
+    "gradguard",
+    "skypad",
+    "floci",
+    "desma",
+    ".ts.net",
+    "faber",
+    "tuition",
+    "cortana",
+    "bossman",
+    "lucid",
+    "amtrust",
+    "harmon",
+    "markel",
+    "allianz",
+)
 
 
 class PublicTreeDenylistTest(unittest.TestCase):

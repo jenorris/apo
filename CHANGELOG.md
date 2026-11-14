@@ -503,7 +503,7 @@ the same class of drift 0.29.0 chased across tool surfaces.
 - `search-contract.schema.yaml` gains `boost_vocab`: the architecture/system
   vocabulary that biases ranking toward infra-flavored results used to be a
   hardcoded regex in engine source — literal employer system names
-  (`ledger`, `faber`, `cortana`, `starrez`, …) shipping in a general-purpose
+  shipping in a general-purpose
   local tool, applied identically to every vault including personal ones with
   no relation to that vocabulary. Now empty by default (no boost, not a
   crash) and set per-vault; the `work` vault's contract now carries the exact

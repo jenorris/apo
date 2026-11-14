@@ -174,7 +174,7 @@ def catalog_search_prefix(cat: dict[str, Any]) -> str:
 
 
 def _entity_search_tokens(node_id: str, label: str) -> str:
-    """Extra recall tokens for entity-style queries (RAPI, Tuition, …)."""
+    """Extra recall tokens for entity-style queries (RAPI, Coverage, …)."""
     tokens: list[str] = []
     if node_id:
         tokens.append(node_id)

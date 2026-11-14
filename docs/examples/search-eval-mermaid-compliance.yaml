@@ -12,16 +12,16 @@
 #   standard-data-flow, agency-data-flow: slug unchanged, file renamed diagram.mmd → <slug>.md
 #   network-diagram-pci → cde-network-diagram-pci-edition (still diagram.mmd, not fenced)
 #   network-diagram → aws-network-diagram (still diagram.mmd, not fenced)
-#   integrated-api-v2, renters-pro-api, tuition-pro-api, delegated-tuition,
+#   integrated-api-v2, renters-pro-api, coverage-pro-api, delegated-coverage,
 #     nelnet-integration-v2, touchnet-integration, coverage-confirmation-pro,
 #     integrated-data-flow → each renamed to `<name>-data-flow` (or `-legacy`),
 #     file renamed diagram.mmd → <new-slug>.md
 #   enrollment-renters-portal-starrez → starrez-renters-portal-integration-data-flow
-#   enrollment-tuition-retail → tuition-retail-enrollment-ux-flow
+#   enrollment-coverage-retail → coverage-retail-enrollment-ux-flow
 #   enrollment-renters-retail → renters-retail-enrollment-ux-flow
-#   enrollment-tuition-pro-api → tuition-pro-api-enrollment-ux-flow
+#   enrollment-coverage-pro-api → coverage-pro-api-enrollment-ux-flow
 #   enrollment-renters-pro-api → renters-pro-api-enrollment-ux-flow
-#   enrollment-tuition-integrated → transact-campus-tuition-integration-data-flow
+#   enrollment-coverage-integrated → transact-campus-coverage-integration-data-flow
 #     (catalog.yaml former_slug confirms this one directly)
 #   cardholder-data-flow: unchanged path — role now `deprecated` (superseded by the
 #     per-channel diagrams above; DEPRECATED.md notes the stub diagram.mmd stays for
@@ -47,11 +47,11 @@ queries:
     expect_chunk_kind: mermaid_node
     expect_entity: RAPI
 
-  - query: tuition program billing in standard flow
+  - query: coverage program billing in standard flow
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/standard-data-flow/standard-data-flow.md]
     expect_chunk_kind: mermaid_node
-    expect_entity: Tuition
+    expect_entity: Coverage
 
   - query: CDE network PCI diagram
     folder: diagrams/mermaid-catalog
@@ -70,17 +70,17 @@ queries:
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/renters-pro-api-data-flow/renters-pro-api-data-flow.md]
 
-  - query: tuition pro API data flow
+  - query: coverage pro API data flow
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/tuition-pro-api-data-flow/tuition-pro-api-data-flow.md]
+    expect: [diagrams/mermaid-catalog/coverage-pro-api-data-flow/coverage-pro-api-data-flow.md]
 
   - query: agency data flow diagram
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/agency-data-flow/agency-data-flow.md]
 
-  - query: delegated tuition only flow
+  - query: delegated coverage only flow
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/delegated-tuition-data-flow/delegated-tuition-data-flow.md]
+    expect: [diagrams/mermaid-catalog/delegated-coverage-data-flow/delegated-coverage-data-flow.md]
 
   - query: cardholder data flow scenarios
     folder: diagrams/mermaid-catalog
@@ -90,9 +90,9 @@ queries:
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/starrez-renters-portal-integration-data-flow/starrez-renters-portal-integration-data-flow.md]
 
-  - query: enrollment tuition retail flow
+  - query: enrollment coverage retail flow
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/tuition-retail-enrollment-ux-flow/tuition-retail-enrollment-ux-flow.md]
+    expect: [diagrams/mermaid-catalog/coverage-retail-enrollment-ux-flow/coverage-retail-enrollment-ux-flow.md]
 
   - query: enrollment renters retail
     folder: diagrams/mermaid-catalog
@@ -114,17 +114,17 @@ queries:
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/integrated-data-flow-legacy/integrated-data-flow-legacy.md]
 
-  - query: enrollment tuition pro API
+  - query: enrollment coverage pro API
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/tuition-pro-api-enrollment-ux-flow/tuition-pro-api-enrollment-ux-flow.md]
+    expect: [diagrams/mermaid-catalog/coverage-pro-api-enrollment-ux-flow/coverage-pro-api-enrollment-ux-flow.md]
 
   - query: enrollment renters pro API
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/renters-pro-api-enrollment-ux-flow/renters-pro-api-enrollment-ux-flow.md]
 
-  - query: enrollment tuition integrated campus
+  - query: enrollment coverage integrated campus
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/transact-campus-tuition-integration-data-flow/transact-campus-tuition-integration-data-flow.md]
+    expect: [diagrams/mermaid-catalog/transact-campus-coverage-integration-data-flow/transact-campus-coverage-integration-data-flow.md]
 
   - query: RAPI to Stripe payment edge
     folder: diagrams/mermaid-catalog

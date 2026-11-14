@@ -28,8 +28,8 @@ _ARCH_VOCAB = [
     "stripe",
     "ecs",
     "ledger",
-    "faber",
-    "cortana",
+    "cashier",
+    "console",
     "starrez",
     "authorize.net",
     "segmentation",
@@ -170,7 +170,7 @@ class CatalogBoostVaultWideTest(_VaultVocabCase):
             "diagrams/mermaid-catalog/pages/agency-data-flow.md",
             "table_row",
             "",
-            query="agency cortana data flow diagram",
+            query="agency console data flow diagram",
         )
         self.assertLess(b, 0.5)
 
@@ -206,7 +206,7 @@ class CatalogBoostVaultWideNoVocabTest(unittest.TestCase):
             "diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd",
             "mermaid_node",
             "",
-            query="cardholder data flow Stripe ledger faber",
+            query="cardholder data flow Stripe ledger cashier",
         )
         self.assertEqual(b, 1.0)
 
