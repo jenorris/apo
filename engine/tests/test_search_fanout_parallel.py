@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from apo_engine import config, core, ops, vaults
+from apo_engine import config, core, index_db, ops, vaults
 
 from test_search_vaults_fanout import _fake_embed
 
@@ -58,6 +58,7 @@ class SearchFanoutParallelTests(unittest.TestCase):
             p.start()
         core.clear_query_embed_cache()
         _default, bindings = vaults.load_bindings()
+        self.bindings = bindings
         for name in ("alpha", "beta"):
             with vaults.bind(bindings[name]):
                 core.index_vault(rebuild=True, verbose=False)
@@ -69,6 +70,7 @@ class SearchFanoutParallelTests(unittest.TestCase):
         core.clear_query_embed_cache()
         core.writer_close()
         core.reader_close()
+        ops._reset_search_fanout_pool()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _search(self, **kw):
@@ -142,6 +144,31 @@ class SearchFanoutParallelTests(unittest.TestCase):
             out = ops.search("parallelzzz", vault="alpha", limit=5)
         self.assertTrue(out["ok"], out)
         self.assertEqual(tids, [threading.get_ident()])
+
+    def test_workers_reuse_thread_local_readers_across_fanouts(self):
+        binding = self.bindings["alpha"]
+        pairs = [(binding, folder) for folder in ("one", "two", "three")]
+
+        def run_once():
+            barrier = threading.Barrier(3)
+
+            def connect(b, folder):
+                with vaults.bind(b):
+                    barrier.wait()
+                    core.reader_connect()
+                return folder, None
+
+            return ops._run_search_pairs(pairs, connect)
+
+        with mock.patch.object(index_db, "connect", wraps=index_db.connect) as connect:
+            self.assertEqual([name for name, _ in run_once()], ["one", "two", "three"])
+            self.assertEqual(connect.call_count, 3)
+            connect.reset_mock()
+            self.assertEqual([name for name, _ in run_once()], ["one", "two", "three"])
+            connect.assert_not_called()
+            ops._reset_search_fanout_pool()
+            self.assertEqual([name for name, _ in run_once()], ["one", "two", "three"])
+            self.assertEqual(connect.call_count, 3)
 
     def test_failure_warnings_follow_pair_order(self):
         real = ops._search_one_vault

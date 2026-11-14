@@ -6,11 +6,13 @@ import hashlib
 import re
 import shutil
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
-from apo_engine import config, core, ops, ranking, vaults
+from apo_engine import config, core, embeddings, ops, ranking, vaults
 
 
 _DIM = 16
@@ -87,6 +89,79 @@ class SearchPerfTest(unittest.TestCase):
         for a, b in zip(first, second):
             self.assertAlmostEqual(a, b, places=6)  # sidecar stores float32
         self.assertEqual(emb.call_count, 1)
+
+    def test_concurrent_query_embed_misses_share_one_backend_call(self):
+        core.clear_query_embed_cache()
+        workers = 8
+        barrier = threading.Barrier(workers)
+        backend_started = threading.Event()
+        release_backend = threading.Event()
+        calls = 0
+        calls_lock = threading.Lock()
+
+        def blocked_embed(texts, **kwargs):
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+            backend_started.set()
+            self.assertTrue(release_backend.wait(1.0))
+            return _fake_embed(texts, **kwargs)
+
+        def query():
+            barrier.wait()
+            return core.query_embed("one concurrent query")
+
+        with mock.patch.object(core, "embed", blocked_embed):
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(query) for _ in range(workers)]
+                self.assertTrue(backend_started.wait(1.0))
+                release_backend.set()
+                results = [future.result() for future in futures]
+
+        self.assertEqual(calls, 1)
+        self.assertTrue(all(result == results[0] for result in results[1:]))
+
+    def test_failed_query_embed_flight_reaches_waiters_and_is_retryable(self):
+        core.clear_query_embed_cache()
+        workers = 8
+        barrier = threading.Barrier(workers)
+        release_backend = threading.Event()
+        all_flight_lookups = threading.Event()
+        lookup_lock = threading.Lock()
+
+        class CountingFlights(dict):
+            lookups = 0
+
+            def get(self, key, default=None):
+                with lookup_lock:
+                    self.lookups += 1
+                    if self.lookups == workers:
+                        all_flight_lookups.set()
+                return super().get(key, default)
+
+        def failing_embed(*args, **kwargs):
+            self.assertTrue(release_backend.wait(1.0))
+            raise RuntimeError("backend down")
+
+        def query():
+            barrier.wait()
+            return core.query_embed("retry after failure")
+
+        with (
+            mock.patch.object(embeddings, "_query_embed_inflight", CountingFlights()),
+            mock.patch.object(core, "embed", failing_embed),
+            ThreadPoolExecutor(max_workers=workers) as pool,
+        ):
+            futures = [pool.submit(query) for _ in range(workers)]
+            self.assertTrue(all_flight_lookups.wait(1.0))
+            release_backend.set()
+            for future in futures:
+                with self.assertRaisesRegex(RuntimeError, "backend down"):
+                    future.result()
+
+        with mock.patch.object(core, "embed", wraps=_fake_embed) as embed:
+            self.assertTrue(core.query_embed("retry after failure"))
+        self.assertEqual(embed.call_count, 1)
 
     def test_prefetch_path_boost_data_warms_caches(self):
         path = "areas/threads/alpha-note.md"

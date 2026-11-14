@@ -43,6 +43,11 @@ tool-reinstall:
 test *ARGS:
     cd engine && PYTHONPATH=src .venv/bin/python -m pytest tests $(.venv/bin/python -c 'import xdist' 2>/dev/null && echo '-n auto') {{ARGS}}
 
+# Hermetic interactive-search benchmark. Pass benchmark flags after `--`,
+# for example: `just benchmark-search -- --samples 100 --output /tmp/apo.json`.
+benchmark-search *ARGS:
+    cd engine && PYTHONPATH=src .venv/bin/python benchmarks/interactive_search.py {{ARGS}}
+
 ollama:
     @command -v ollama >/dev/null 2>&1 || { echo "ollama not found on PATH — install it first (e.g. brew install ollama)"; exit 1; }
     @curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && echo "ollama already up" || (OLLAMA_KEEP_ALIVE=0 ollama serve &)
