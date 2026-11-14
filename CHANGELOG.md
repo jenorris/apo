@@ -4,6 +4,10 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.37.0] — 2026-11-14
+
+The watcher no longer indexes its own state, and search returns one hit per chunk.
+
 ### Added
 
 - Top-level JSON objects are first-class catalog records. The watcher, direct
@@ -28,6 +32,19 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
   longer write `index.db`. Legacy `qemb:*` meta rows are ignored and cleared
   by `clear_query_embed_cache()`.
 
+### Fixed
+
+- The watcher ignores `.apo`, holds one lock, and writes each note's chunks in
+  a single transaction. Search keeps one hit when the same chunk was stored
+  twice. Opening an index removes duplicate `(path, ord)` rows.
+- Section anchors use the chunk start line. Table cells keep a single
+  backslash. Rerank text stays paired with its hit.
+- `place` reads no host path unless `APO_SEND_ALLOW_ROOTS` is set. A
+  vault-scoped token cannot place an absolute path. Symlink replacement is
+  refused. `read_note` and `note://` reject `.git`, `.env`, and `.apo`. Git
+  ref names are checked, and network git commands use `--end-of-options`.
+- The container image binds loopback and copies the package readme.
+
 ### Migration
 
 - `APO_COLLECTION_ROOT` / `--collection-root`, `APO_COLLECTION`,
@@ -37,6 +54,10 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
   fail instead of choosing one silently.
 - Active documentation and code comments now use MCP vocabulary. Historical
   transport details remain in this changelog and `docs/local-rpc.md`.
+- Unset `APO_SEND_ALLOW_ROOTS` allows no host path. Set it explicitly to
+  restore the old `$HOME` default.
+- After install, restart the watcher and rebuild each vault index once so
+  `.apo` rows and duplicate chunks are dropped.
 
 ## [0.36.0] — 2026-11-05
 
