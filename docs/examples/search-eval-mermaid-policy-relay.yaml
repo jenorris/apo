@@ -12,7 +12,7 @@
 # the full rename table). `network-diagram-pci` → `cde-network-diagram-pci-edition`
 # (still `diagram.mmd`, unfenced); `standard-data-flow`, `agency-data-flow`,
 # `delegated-coverage` → `delegated-coverage-data-flow`, and
-# `enrollment-renters-portal-starrez` → `starrez-renters-portal-integration-data-flow`
+# `enrollment-renters-portal-campus` → `campus-renters-portal-integration-data-flow`
 # each renamed `diagram.mmd` → `<slug>.md` (fenced). `cardholder-data-flow` is
 # unchanged and still a real path (role now `deprecated` in catalog.yaml, but the
 # stub `diagram.mmd` stays on disk for audit trail — not stale).
@@ -72,9 +72,9 @@ queries:
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/delegated-coverage-data-flow/delegated-coverage-data-flow.md]
 
-  - query: StarRez housing portal enrollment
+  - query: Campus housing portal enrollment
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/starrez-renters-portal-integration-data-flow/starrez-renters-portal-integration-data-flow.md]
+    expect: [diagrams/mermaid-catalog/campus-renters-portal-integration-data-flow/campus-renters-portal-integration-data-flow.md]
 
   # --- Tier D: vault-wide (no folder=) — diagram must still rank ≤3 ---
   - query: how does Acme transmit cardholder data to payment processors
@@ -100,8 +100,8 @@ queries:
   - query: agency console call center agent data flow diagram
     expect: [diagrams/mermaid-catalog/agency-data-flow/agency-data-flow.md]
 
-  - query: StarRez renters enrollment portal integration architecture
-    expect: [diagrams/mermaid-catalog/starrez-renters-portal-integration-data-flow/starrez-renters-portal-integration-data-flow.md]
+  - query: Campus renters enrollment portal integration architecture
+    expect: [diagrams/mermaid-catalog/campus-renters-portal-integration-data-flow/campus-renters-portal-integration-data-flow.md]
 
   - query: delegated coverage only billing architecture flow
     expect: [diagrams/mermaid-catalog/delegated-coverage-data-flow/delegated-coverage-data-flow.md]

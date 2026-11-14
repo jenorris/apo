@@ -25,6 +25,7 @@ TOKENS = (
     "harmon",
     "markel",
     "allianz",
+    "starrez",
 )
 
 

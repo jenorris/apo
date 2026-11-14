@@ -30,7 +30,7 @@ _ARCH_VOCAB = [
     "ledger",
     "cashier",
     "console",
-    "starrez",
+    "campus",
     "authorize.net",
     "segmentation",
     "architecture",

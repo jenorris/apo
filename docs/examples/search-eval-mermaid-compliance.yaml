@@ -16,7 +16,7 @@
 #     nelnet-integration-v2, touchnet-integration, coverage-confirmation-pro,
 #     integrated-data-flow → each renamed to `<name>-data-flow` (or `-legacy`),
 #     file renamed diagram.mmd → <new-slug>.md
-#   enrollment-renters-portal-starrez → starrez-renters-portal-integration-data-flow
+#   enrollment-renters-portal-campus → campus-renters-portal-integration-data-flow
 #   enrollment-coverage-retail → coverage-retail-enrollment-ux-flow
 #   enrollment-renters-retail → renters-retail-enrollment-ux-flow
 #   enrollment-coverage-pro-api → coverage-pro-api-enrollment-ux-flow
@@ -86,9 +86,9 @@ queries:
     folder: diagrams/mermaid-catalog
     expect: [diagrams/mermaid-catalog/cardholder-data-flow/diagram.mmd]
 
-  - query: StarRez renters portal integration
+  - query: Campus renters portal integration
     folder: diagrams/mermaid-catalog
-    expect: [diagrams/mermaid-catalog/starrez-renters-portal-integration-data-flow/starrez-renters-portal-integration-data-flow.md]
+    expect: [diagrams/mermaid-catalog/campus-renters-portal-integration-data-flow/campus-renters-portal-integration-data-flow.md]
 
   - query: enrollment coverage retail flow
     folder: diagrams/mermaid-catalog
