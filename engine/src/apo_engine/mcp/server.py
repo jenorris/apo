@@ -339,8 +339,10 @@ def _reload_config_sync() -> dict:
 
 
 
-def _delete_note_sync(path: str, vault: str = "") -> dict:
-    return apo_ops.delete_note(path, vault=vault)
+def _delete_note_sync(
+    path: str, vault: str = "", expected_mtime: float | None = None
+) -> dict:
+    return apo_ops.delete_note(path, vault=vault, expected_mtime=expected_mtime)
 
 
 def _memory_status_sync() -> dict:
@@ -392,7 +394,12 @@ def _delete_note_admin(params: dict[str, Any], *, vault: str = "") -> dict:
     if not isinstance(path, str) or not path.strip():
         return _err(error="bad_request", message="parameters.path string required")
     v = vault or str(params.get("vault") or "")
-    return _delete_note_sync(path.strip(), vault=v)
+    expected = params.get("expected_mtime")
+    if expected is not None and (
+        isinstance(expected, bool) or not isinstance(expected, (int, float))
+    ):
+        return _err(error="bad_request", message="parameters.expected_mtime must be a number")
+    return _delete_note_sync(path.strip(), vault=v, expected_mtime=expected)
 
 
 def _reindex_admin(params: dict[str, Any], *, vault: str = "") -> dict:

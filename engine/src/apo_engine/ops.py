@@ -45,7 +45,7 @@ from apo_engine.agent_args import (
     resolve_where,
     shape_note_read,
 )
-from apo_engine.atomic_io import atomic_write_bytes, atomic_write_text
+from apo_engine.atomic_io import atomic_write_bytes, atomic_write_text, note_write_lock
 from apo_engine.markdown_patch import (
     PatchError,
     apply_append,
@@ -342,7 +342,8 @@ def _guard_write(
     if not full.exists():
         return None
     actual = full.stat().st_mtime
-    touch = _recent_touches.get(_write_key(vault, path))
+    with _touches_lock:
+        touch = _recent_touches.get(_write_key(vault, path))
     err = check_write_precondition(
         path=path,
         actual_mtime=actual,
@@ -398,6 +399,10 @@ _MTIME_TIP = (
 # Touches from read_note / expand_chunk / successful writes drive soft mtime tips
 # and FM/body/section precondition fallbacks when expected_mtime is stale.
 _recent_touches: dict[str, PathTouch] = {}
+# Guards every read-modify-write of ``_recent_touches``. The per-note flock does not
+# cover it: reads (read_note) touch the map without taking a note lock, and prune
+# iterates the whole map. RLock because ``_record_path_touch`` calls the prune.
+_touches_lock = threading.RLock()
 _RECENT_TOUCH_TTL_S = 300.0
 # Back-compat alias for tests that clear the habit map.
 _recent_writes = _recent_touches
@@ -446,11 +451,14 @@ def _build_toc_from_blob(text: str, file_bytes: int) -> dict[str, Any]:
 
 def _prune_recent_touches(now: float | None = None) -> None:
     now = time.monotonic() if now is None else now
-    stale = [
-        k for k, touch in _recent_touches.items() if now - touch.mono > _RECENT_TOUCH_TTL_S
-    ]
-    for k in stale:
-        del _recent_touches[k]
+    with _touches_lock:
+        stale = [
+            k
+            for k, touch in _recent_touches.items()
+            if now - touch.mono > _RECENT_TOUCH_TTL_S
+        ]
+        for k in stale:
+            _recent_touches.pop(k, None)
 
 
 def _record_path_touch(
@@ -463,20 +471,21 @@ def _record_path_touch(
 ) -> None:
     """Record a successful read/expand/write so a follow-up write can tip expected_mtime."""
     now = time.monotonic()
-    _prune_recent_touches(now)
-    key = _write_key(vault, path)
-    if content is not None:
-        _recent_touches[key] = snapshot_from_content(
-            now, file_mtime, content, heading=heading
-        )
-        return
-    prior = _recent_touches.get(key)
-    if prior is not None:
-        prior.mono = now
-        if file_mtime is not None:
-            prior.mtime = file_mtime
-        return
-    _recent_touches[key] = PathTouch(mono=now, mtime=file_mtime)
+    with _touches_lock:
+        _prune_recent_touches(now)
+        key = _write_key(vault, path)
+        if content is not None:
+            _recent_touches[key] = snapshot_from_content(
+                now, file_mtime, content, heading=heading
+            )
+            return
+        prior = _recent_touches.get(key)
+        if prior is not None:
+            prior.mono = now
+            if file_mtime is not None:
+                prior.mtime = file_mtime
+            return
+        _recent_touches[key] = PathTouch(mono=now, mtime=file_mtime)
 
 
 def _attach_tip(out: dict[str, Any], tip: str) -> dict[str, Any]:
@@ -545,40 +554,41 @@ def _attach_mtime_tip(
     content: str | None = None,
 ) -> dict[str, Any]:
     """Tip when a follow-up write omits ``expected_mtime`` after a recent read/write."""
-    now = time.monotonic()
-    _prune_recent_touches(now)
+    with _touches_lock:
+        now = time.monotonic()
+        _prune_recent_touches(now)
 
-    key = _write_key(vault or str(out.get("vault") or ""), path)
-    prior = _recent_touches.get(key)
-    if (
-        expected_mtime is None
-        and prior is not None
-        and (now - prior.mono) <= _RECENT_TOUCH_TTL_S
-    ):
-        stored_mtime = prior.mtime
-        if stored_mtime is not None:
-            tip = f"pass expected_mtime={stored_mtime} to avoid stale_write"
-        else:
-            tip = _MTIME_TIP
-        out = _attach_tip(out, tip)
-    if out.get("ok"):
-        new_mtime = out.get("mtime")
-        file_mtime = float(new_mtime) if isinstance(new_mtime, (int, float)) else (
-            prior.mtime if prior else None
-        )
-        if content is not None:
-            _recent_touches[key] = snapshot_from_content(now, file_mtime, content)
-        elif prior is not None:
-            prior.mono = now
-            prior.mtime = file_mtime
-            fm = out.get("frontmatter_hash")
-            body = out.get("body_hash")
-            if isinstance(fm, str):
-                prior.frontmatter_hash = fm
-            if isinstance(body, str):
-                prior.body_hash = body
-        else:
-            _recent_touches[key] = PathTouch(mono=now, mtime=file_mtime)
+        key = _write_key(vault or str(out.get("vault") or ""), path)
+        prior = _recent_touches.get(key)
+        if (
+            expected_mtime is None
+            and prior is not None
+            and (now - prior.mono) <= _RECENT_TOUCH_TTL_S
+        ):
+            stored_mtime = prior.mtime
+            if stored_mtime is not None:
+                tip = f"pass expected_mtime={stored_mtime} to avoid stale_write"
+            else:
+                tip = _MTIME_TIP
+            out = _attach_tip(out, tip)
+        if out.get("ok"):
+            new_mtime = out.get("mtime")
+            file_mtime = float(new_mtime) if isinstance(new_mtime, (int, float)) else (
+                prior.mtime if prior else None
+            )
+            if content is not None:
+                _recent_touches[key] = snapshot_from_content(now, file_mtime, content)
+            elif prior is not None:
+                prior.mono = now
+                prior.mtime = file_mtime
+                fm = out.get("frontmatter_hash")
+                body = out.get("body_hash")
+                if isinstance(fm, str):
+                    prior.frontmatter_hash = fm
+                if isinstance(body, str):
+                    prior.body_hash = body
+            else:
+                _recent_touches[key] = PathTouch(mono=now, mtime=file_mtime)
     return out
 
 
@@ -3058,17 +3068,62 @@ def write_note(
                 flaws=mflaws,
             )
 
-    # ``.json`` is always written exactly as supplied: whole-file CAS and no
-    # OKF/frontmatter wrapper. Only top-level objects are catalog records.
-    if is_json_catalog(path):
-        try:
-            json_value = json.loads(content)
-        except json.JSONDecodeError as e:
-            return _err(
+    with note_write_lock(full):
+        # ``.json`` is always written exactly as supplied: whole-file CAS and no
+        # OKF/frontmatter wrapper. Only top-level objects are catalog records.
+        if is_json_catalog(path):
+            try:
+                json_value = json.loads(content)
+            except json.JSONDecodeError as e:
+                return _err(
+                    path=path,
+                    error="validation_failed",
+                    message=f"invalid JSON at line {e.lineno} col {e.colno}: {e.msg}",
+                )
+            prior_text = full.read_text(encoding="utf-8") if full.exists() else None
+            if (
+                guard := _guard_write(
+                    full,
+                    path,
+                    vault=b.name,
+                    regions=WriteRegions(whole_file=True),
+                    expected_mtime=expected_mtime,
+                    expected_frontmatter_hash=expected_frontmatter_hash,
+                    expected_body_hash=expected_body_hash,
+                    expected_content_hash=expected_content_hash,
+                    content=prior_text,
+                )
+            ):
+                return guard
+            existed = full.exists()
+            full.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(full, content)
+            # Enqueue every valid JSON change. The indexer catalogs objects and
+            # purges a formerly indexed object when it becomes an array or scalar.
+            _enqueue_index(b, full)
+            out = {
+                "ok": True,
+                "path": path,
+                "action": "overwrote" if existed else "created",
+                "bytes": full.stat().st_size,
+                "mtime": _mtime(full),
+                "vault": b.name,
+                "catalog_format": "json",
+                "tip": "raw catalog write (no OKF frontmatter wrapper)",
+            }
+            if not isinstance(json_value, dict):
+                out["index_status"] = "unsupported_json_top_level"
+                out["index_reason"] = "only top-level JSON objects are catalog records"
+            attach_region_hashes(out, content)
+            out = _finalize_write(
+                out,
+                vault=b.name,
                 path=path,
-                error="validation_failed",
-                message=f"invalid JSON at line {e.lineno} col {e.colno}: {e.msg}",
+                expected_mtime=expected_mtime,
+                content=content,
             )
+            return out
+
         prior_text = full.read_text(encoding="utf-8") if full.exists() else None
         if (
             guard := _guard_write(
@@ -3084,102 +3139,58 @@ def write_note(
             )
         ):
             return guard
+
         existed = full.exists()
+        parts = Path(path.replace("\\", "/")).parts
+        new_top = len(parts) > 1 and not (root / parts[0]).exists()
+
+        okf_meta: dict[str, Any] = {}
+        okf = apo_okf.process_concept(vault_root=root, rel_path=path, content=content)
+        okf_meta = okf.as_response_fields()
+        if not okf.ok:
+            return _err(
+                path=path,
+                error=okf.error or "okf_validation",
+                message=okf.message or "OKF validation failed",
+                **{k: val for k, val in okf_meta.items() if k != "enforcement"},
+                enforcement=okf.enforcement,
+            )
+        to_write, write_flaws = _prepare_write_content(
+            okf.content, path=path, vault=b.name, okf_result=okf
+        )
+
         full.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(full, content)
-        # Enqueue every valid JSON change. The indexer catalogs objects and
-        # purges a formerly indexed object when it becomes an array or scalar.
+        atomic_write_text(full, to_write)
         _enqueue_index(b, full)
-        out = {
+
+        out: dict[str, Any] = {
             "ok": True,
             "path": path,
             "action": "overwrote" if existed else "created",
             "bytes": full.stat().st_size,
             "mtime": _mtime(full),
             "vault": b.name,
-            "catalog_format": "json",
-            "tip": "raw catalog write (no OKF frontmatter wrapper)",
         }
-        if not isinstance(json_value, dict):
-            out["index_status"] = "unsupported_json_top_level"
-            out["index_reason"] = "only top-level JSON objects are catalog records"
-        attach_region_hashes(out, content)
+        out.update(okf_meta)
+        out = _attach_flaws(out, write_flaws)
+        attach_region_hashes(out, to_write)
+        if new_top:
+            out["warning"] = (
+                f"created new top-level directory {parts[0]!r} — "
+                f"existing top-level dirs: {_top_level_dirs(root)}"
+            )
         out = _finalize_write(
             out,
             vault=b.name,
             path=path,
             expected_mtime=expected_mtime,
-            content=content,
+            content=to_write,
         )
+        if alias_key:
+            out = _attach_tip(
+                out, f"write_note: used {alias_key}= alias; prefer content="
+            )
         return out
-
-    prior_text = full.read_text(encoding="utf-8") if full.exists() else None
-    if (
-        guard := _guard_write(
-            full,
-            path,
-            vault=b.name,
-            regions=WriteRegions(whole_file=True),
-            expected_mtime=expected_mtime,
-            expected_frontmatter_hash=expected_frontmatter_hash,
-            expected_body_hash=expected_body_hash,
-            expected_content_hash=expected_content_hash,
-            content=prior_text,
-        )
-    ):
-        return guard
-
-    existed = full.exists()
-    parts = Path(path.replace("\\", "/")).parts
-    new_top = len(parts) > 1 and not (root / parts[0]).exists()
-
-    okf_meta: dict[str, Any] = {}
-    okf = apo_okf.process_concept(vault_root=root, rel_path=path, content=content)
-    okf_meta = okf.as_response_fields()
-    if not okf.ok:
-        return _err(
-            path=path,
-            error=okf.error or "okf_validation",
-            message=okf.message or "OKF validation failed",
-            **{k: val for k, val in okf_meta.items() if k != "enforcement"},
-            enforcement=okf.enforcement,
-        )
-    to_write, write_flaws = _prepare_write_content(
-        okf.content, path=path, vault=b.name, okf_result=okf
-    )
-
-    full.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(full, to_write)
-    _enqueue_index(b, full)
-
-    out: dict[str, Any] = {
-        "ok": True,
-        "path": path,
-        "action": "overwrote" if existed else "created",
-        "bytes": full.stat().st_size,
-        "mtime": _mtime(full),
-        "vault": b.name,
-    }
-    out.update(okf_meta)
-    out = _attach_flaws(out, write_flaws)
-    attach_region_hashes(out, to_write)
-    if new_top:
-        out["warning"] = (
-            f"created new top-level directory {parts[0]!r} — "
-            f"existing top-level dirs: {_top_level_dirs(root)}"
-        )
-    out = _finalize_write(
-        out,
-        vault=b.name,
-        path=path,
-        expected_mtime=expected_mtime,
-        content=to_write,
-    )
-    if alias_key:
-        out = _attach_tip(
-            out, f"write_note: used {alias_key}= alias; prefer content="
-        )
-    return out
 
 
 def append_note(
@@ -3289,105 +3300,106 @@ def append_note(
             ),
         )
 
-    regions = classify_append_regions(
-        heading=resolved_heading, from_chunk=from_hash
-    )
-    chunk_section = None
-    prior_text: str | None = None
-    if full.exists():
-        prior_text = full.read_text(encoding="utf-8")
-        if from_hash and hash_start is not None:
-            chunk_section = section_from_chunk(
-                normalize_lines(prior_text), hash_start, int(hash_level or 0)
-            )
-        if (
-            guard := _guard_write(
-                full,
-                path,
-                vault=b.name,
-                regions=regions,
-                expected_mtime=expected_mtime,
-                expected_frontmatter_hash=expected_frontmatter_hash,
-                expected_body_hash=expected_body_hash,
-                expected_content_hash=expected_content_hash,
-                content=prior_text,
-                chunk_section=chunk_section,
-            )
-        ):
-            return guard
-
-    if not full.exists():
-        if not create:
-            return _err(
-                path=path,
-                error="not_found",
-                message="note not found (pass create=true to create)",
-            )
-        full.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(full, minimal_note_stub(path))
-        prior_text = full.read_text(encoding="utf-8")
-
-    content = prior_text if prior_text is not None else full.read_text(encoding="utf-8")
-    lines = normalize_lines(content)
-
-    try:
-        anchor_label = "EOF"
-        if from_hash and hash_start is not None:
-            section = chunk_section or section_from_chunk(
-                lines, hash_start, int(hash_level or 0)
-            )
-            anchor_label = section.title or ch or "section"
-            merged, detail = apply_append(lines, text, section=section, position=position)
-        elif resolved_heading:
-            merged, detail = apply_append(
-                lines, text, heading=resolved_heading, position=position
-            )
-            anchor_label = resolved_heading
-        else:
-            merged, detail = apply_append(lines, text, heading=None, position="end")
-    except PatchError as e:
-        return _err(path=path, error=e.code, message=e.message, suggestions=e.suggestions)
-
-    new_content = "\n".join(merged)
-    if content.endswith("\n") and not new_content.endswith("\n"):
-        new_content += "\n"
-    new_content, write_flaws = _prepare_write_content(
-        new_content, path=path, vault=b.name, format_only=True
-    )
-    atomic_write_text(full, new_content)
-    _enqueue_index(b, full)
-
-    out: dict[str, Any] = {
-        "ok": True,
-        "path": path,
-        "anchor": anchor_label,
-        "detail": detail,
-        "lines_added": max(0, len(merged) - len(lines)),
-        "bytes": full.stat().st_size,
-        "mtime": _mtime(full),
-        "vault": b.name,
-    }
-    out = _attach_flaws(out, write_flaws)
-    attach_region_hashes(
-        out,
-        new_content,
-        heading=resolved_heading if not from_hash else None,
-        section=chunk_section if from_hash else None,
-    )
-    out = _finalize_write(
-        out,
-        vault=b.name,
-        path=path,
-        expected_mtime=expected_mtime,
-        content=new_content,
-    )
-    if tip:
-        out = _attach_tip(out, tip)
-    if alias_key:
-        out = _attach_tip(
-            out, f"append_note: used {alias_key}= alias; prefer text="
+    with note_write_lock(full):
+        regions = classify_append_regions(
+            heading=resolved_heading, from_chunk=from_hash
         )
-    return out
+        chunk_section = None
+        prior_text: str | None = None
+        if full.exists():
+            prior_text = full.read_text(encoding="utf-8")
+            if from_hash and hash_start is not None:
+                chunk_section = section_from_chunk(
+                    normalize_lines(prior_text), hash_start, int(hash_level or 0)
+                )
+            if (
+                guard := _guard_write(
+                    full,
+                    path,
+                    vault=b.name,
+                    regions=regions,
+                    expected_mtime=expected_mtime,
+                    expected_frontmatter_hash=expected_frontmatter_hash,
+                    expected_body_hash=expected_body_hash,
+                    expected_content_hash=expected_content_hash,
+                    content=prior_text,
+                    chunk_section=chunk_section,
+                )
+            ):
+                return guard
+
+        if not full.exists():
+            if not create:
+                return _err(
+                    path=path,
+                    error="not_found",
+                    message="note not found (pass create=true to create)",
+                )
+            full.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(full, minimal_note_stub(path))
+            prior_text = full.read_text(encoding="utf-8")
+
+        content = prior_text if prior_text is not None else full.read_text(encoding="utf-8")
+        lines = normalize_lines(content)
+
+        try:
+            anchor_label = "EOF"
+            if from_hash and hash_start is not None:
+                section = chunk_section or section_from_chunk(
+                    lines, hash_start, int(hash_level or 0)
+                )
+                anchor_label = section.title or ch or "section"
+                merged, detail = apply_append(lines, text, section=section, position=position)
+            elif resolved_heading:
+                merged, detail = apply_append(
+                    lines, text, heading=resolved_heading, position=position
+                )
+                anchor_label = resolved_heading
+            else:
+                merged, detail = apply_append(lines, text, heading=None, position="end")
+        except PatchError as e:
+            return _err(path=path, error=e.code, message=e.message, suggestions=e.suggestions)
+
+        new_content = "\n".join(merged)
+        if content.endswith("\n") and not new_content.endswith("\n"):
+            new_content += "\n"
+        new_content, write_flaws = _prepare_write_content(
+            new_content, path=path, vault=b.name, format_only=True
+        )
+        atomic_write_text(full, new_content)
+        _enqueue_index(b, full)
+
+        out: dict[str, Any] = {
+            "ok": True,
+            "path": path,
+            "anchor": anchor_label,
+            "detail": detail,
+            "lines_added": max(0, len(merged) - len(lines)),
+            "bytes": full.stat().st_size,
+            "mtime": _mtime(full),
+            "vault": b.name,
+        }
+        out = _attach_flaws(out, write_flaws)
+        attach_region_hashes(
+            out,
+            new_content,
+            heading=resolved_heading if not from_hash else None,
+            section=chunk_section if from_hash else None,
+        )
+        out = _finalize_write(
+            out,
+            vault=b.name,
+            path=path,
+            expected_mtime=expected_mtime,
+            content=new_content,
+        )
+        if tip:
+            out = _attach_tip(out, tip)
+        if alias_key:
+            out = _attach_tip(
+                out, f"append_note: used {alias_key}= alias; prefer text="
+            )
+        return out
 
 
 class _TableOpError(Exception):
@@ -3840,174 +3852,175 @@ def patch_note(
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
 
-    if not full.exists():
-        return _err(path=path, error="not_found", message="note not found")
+    with note_write_lock(full):
+        if not full.exists():
+            return _err(path=path, error="not_found", message="note not found")
 
-    content = full.read_text(encoding="utf-8")
-    try:
-        dict_ops = ops_to_dicts(ops)
-    except (TypeError, ValueError) as e:
-        return _err(path=path, error="bad_request", message=str(e))
+        content = full.read_text(encoding="utf-8")
+        try:
+            dict_ops = ops_to_dicts(ops)
+        except (TypeError, ValueError) as e:
+            return _err(path=path, error="bad_request", message=str(e))
 
-    if any(o.get("op") == "place" for o in dict_ops):
-        return _err(
-            path=path,
-            error="bad_request",
-            message=(
-                "place op requires place-only patch_note(ops=[{op:place,src,dst}], vault=...) "
-                "without path"
-            ),
-            tip="omit path when using place; path+ops patch does not support place",
-        )
-
-    # Row-keyed table ops take a dedicated, strict path (no markdown section apply).
-    if _table_ops_present(dict_ops):
-        if is_yaml_note(path) or is_json_catalog(path):
-            return _err(path=path, error="unsupported_format", message="table ops are markdown-only")
-        return _apply_table_ops(
-            b, root, full, path, content, dict_ops,
-            strict=strict if strict else True,  # table ops default strict=true
-            dry_run=dry_run,
-            expected_mtime=expected_mtime,
-        )
-
-    materialized = materialize_ops_chunk_hashes(b, path, dict_ops)
-    if not materialized.get("ok"):
-        return _err(**{k: v for k, v in materialized.items() if k != "ok"})
-    dict_ops = materialized["ops"]
-    hash_tips: list[str] = list(materialized.get("tips") or [])
-
-    # Whole-document catalogs (.yaml / .json) CAS on the whole file: no
-    # frontmatter/body/section split to scope the precondition to.
-    catalog = is_yaml_note(path) or is_json_catalog(path)
-    regions = classify_patch_regions(dict_ops, yaml_note=catalog)
-    if (
-        guard := _guard_write(
-            full,
-            path,
-            vault=b.name,
-            regions=regions,
-            expected_mtime=expected_mtime,
-            expected_frontmatter_hash=expected_frontmatter_hash,
-            expected_body_hash=expected_body_hash,
-            expected_content_hash=expected_content_hash,
-            content=content,
-        )
-    ):
-        return guard
-
-    try:
-        if is_yaml_note(path):
-            result = apply_yaml_patch(content, dict_ops, strict=strict)
-        elif is_json_catalog(path):
-            result = apply_json_patch(content, dict_ops, strict=strict)
-        else:
-            result = apply_patch(content, dict_ops, strict=strict)
-    except (TypeError, PatchError) as e:
-        if isinstance(e, PatchError):
+        if any(o.get("op") == "place" for o in dict_ops):
             return _err(
                 path=path,
-                error=e.code,
-                message=e.message,
-                suggestions=e.suggestions,
+                error="bad_request",
+                message=(
+                    "place op requires place-only patch_note(ops=[{op:place,src,dst}], vault=...) "
+                    "without path"
+                ),
+                tip="omit path when using place; path+ops patch does not support place",
             )
-        return _err(path=path, error="bad_request", message=str(e))
 
-    if dry_run:
+        # Row-keyed table ops take a dedicated, strict path (no markdown section apply).
+        if _table_ops_present(dict_ops):
+            if is_yaml_note(path) or is_json_catalog(path):
+                return _err(path=path, error="unsupported_format", message="table ops are markdown-only")
+            return _apply_table_ops(
+                b, root, full, path, content, dict_ops,
+                strict=strict if strict else True,  # table ops default strict=true
+                dry_run=dry_run,
+                expected_mtime=expected_mtime,
+            )
+
+        materialized = materialize_ops_chunk_hashes(b, path, dict_ops)
+        if not materialized.get("ok"):
+            return _err(**{k: v for k, v in materialized.items() if k != "ok"})
+        dict_ops = materialized["ops"]
+        hash_tips: list[str] = list(materialized.get("tips") or [])
+
+        # Whole-document catalogs (.yaml / .json) CAS on the whole file: no
+        # frontmatter/body/section split to scope the precondition to.
+        catalog = is_yaml_note(path) or is_json_catalog(path)
+        regions = classify_patch_regions(dict_ops, yaml_note=catalog)
+        if (
+            guard := _guard_write(
+                full,
+                path,
+                vault=b.name,
+                regions=regions,
+                expected_mtime=expected_mtime,
+                expected_frontmatter_hash=expected_frontmatter_hash,
+                expected_body_hash=expected_body_hash,
+                expected_content_hash=expected_content_hash,
+                content=content,
+            )
+        ):
+            return guard
+
+        try:
+            if is_yaml_note(path):
+                result = apply_yaml_patch(content, dict_ops, strict=strict)
+            elif is_json_catalog(path):
+                result = apply_json_patch(content, dict_ops, strict=strict)
+            else:
+                result = apply_patch(content, dict_ops, strict=strict)
+        except (TypeError, PatchError) as e:
+            if isinstance(e, PatchError):
+                return _err(
+                    path=path,
+                    error=e.code,
+                    message=e.message,
+                    suggestions=e.suggestions,
+                )
+            return _err(path=path, error="bad_request", message=str(e))
+
+        if dry_run:
+            failed = sum(1 for r in result.results if r.get("status") == "error")
+            out_dry: dict[str, Any] = {
+                "ok": result.ok,
+                "path": path,
+                "dry_run": True,
+                "applied": result.applied,
+                "failed": failed,
+                "partial": bool(failed and result.applied),
+                "results": result.results,
+                "vault": b.name,
+            }
+            if result.error is not None:
+                out_dry.update(
+                    flatten_patch_failure_error(
+                        result.error, suggestions=result.suggestions or None
+                    )
+                )
+            elif result.suggestions:
+                out_dry["suggestions"] = result.suggestions
+            for t in hash_tips:
+                out_dry = _attach_tip(out_dry, t)
+            return out_dry
+
+        if not result.ok and (strict or result.applied == 0):
+            return _err(
+                path=path,
+                applied=result.applied,
+                results=result.results,
+                **flatten_patch_failure_error(
+                    result.error, suggestions=result.suggestions or None
+                ),
+            )
+
+        to_write = result.content
+        okf_meta: dict[str, Any] = {}
+        write_flaws: list[dict[str, Any]] = []
+        if is_json_catalog(path):
+            # Raw catalog: no OKF stamp or lint auto-fix. JSON patching only accepts
+            # objects, so every successful mutation remains an indexable record.
+            atomic_write_text(full, to_write)
+            _enqueue_index(b, full)
+        else:
+            okf = apo_okf.process_concept(
+                vault_root=root,
+                rel_path=path,
+                content=result.content,
+                bump_timestamp=True,
+            )
+            okf_meta = okf.as_response_fields()
+            if not okf.ok:
+                return _err(
+                    path=path,
+                    error=okf.error or "okf_validation",
+                    message=okf.message or "OKF validation failed",
+                    applied=result.applied,
+                    results=result.results,
+                    **{k: val for k, val in okf_meta.items() if k != "enforcement"},
+                    enforcement=okf.enforcement,
+                )
+            to_write = okf.content
+            to_write, write_flaws = _prepare_write_content(
+                to_write, path=path, vault=b.name, okf_result=okf
+            )
+
+            atomic_write_text(full, to_write)
+            _enqueue_index(b, full)
+
         failed = sum(1 for r in result.results if r.get("status") == "error")
-        out_dry: dict[str, Any] = {
-            "ok": result.ok,
+        out: dict[str, Any] = {
+            "ok": True,
             "path": path,
-            "dry_run": True,
             "applied": result.applied,
             "failed": failed,
             "partial": bool(failed and result.applied),
+            "bytes": full.stat().st_size,
+            "mtime": _mtime(full),
             "results": result.results,
             "vault": b.name,
         }
-        if result.error is not None:
-            out_dry.update(
-                flatten_patch_failure_error(
-                    result.error, suggestions=result.suggestions or None
-                )
-            )
-        elif result.suggestions:
-            out_dry["suggestions"] = result.suggestions
-        for t in hash_tips:
-            out_dry = _attach_tip(out_dry, t)
-        return out_dry
-
-    if not result.ok and (strict or result.applied == 0):
-        return _err(
+        out.update(okf_meta)
+        out = _attach_flaws(out, write_flaws)
+        attach_region_hashes(out, to_write)
+        if verbose:
+            out["lines_added"] = result.lines_added
+        out = _finalize_write(
+            out,
+            vault=b.name,
             path=path,
-            applied=result.applied,
-            results=result.results,
-            **flatten_patch_failure_error(
-                result.error, suggestions=result.suggestions or None
-            ),
+            expected_mtime=expected_mtime,
+            content=to_write,
         )
-
-    to_write = result.content
-    okf_meta: dict[str, Any] = {}
-    write_flaws: list[dict[str, Any]] = []
-    if is_json_catalog(path):
-        # Raw catalog: no OKF stamp or lint auto-fix. JSON patching only accepts
-        # objects, so every successful mutation remains an indexable record.
-        atomic_write_text(full, to_write)
-        _enqueue_index(b, full)
-    else:
-        okf = apo_okf.process_concept(
-            vault_root=root,
-            rel_path=path,
-            content=result.content,
-            bump_timestamp=True,
-        )
-        okf_meta = okf.as_response_fields()
-        if not okf.ok:
-            return _err(
-                path=path,
-                error=okf.error or "okf_validation",
-                message=okf.message or "OKF validation failed",
-                applied=result.applied,
-                results=result.results,
-                **{k: val for k, val in okf_meta.items() if k != "enforcement"},
-                enforcement=okf.enforcement,
-            )
-        to_write = okf.content
-        to_write, write_flaws = _prepare_write_content(
-            to_write, path=path, vault=b.name, okf_result=okf
-        )
-
-        atomic_write_text(full, to_write)
-        _enqueue_index(b, full)
-
-    failed = sum(1 for r in result.results if r.get("status") == "error")
-    out: dict[str, Any] = {
-        "ok": True,
-        "path": path,
-        "applied": result.applied,
-        "failed": failed,
-        "partial": bool(failed and result.applied),
-        "bytes": full.stat().st_size,
-        "mtime": _mtime(full),
-        "results": result.results,
-        "vault": b.name,
-    }
-    out.update(okf_meta)
-    out = _attach_flaws(out, write_flaws)
-    attach_region_hashes(out, to_write)
-    if verbose:
-        out["lines_added"] = result.lines_added
-    out = _finalize_write(
-        out,
-        vault=b.name,
-        path=path,
-        expected_mtime=expected_mtime,
-        content=to_write,
-    )
-    for t in hash_tips:
-        out = _attach_tip(out, t)
-    return out
+        for t in hash_tips:
+            out = _attach_tip(out, t)
+        return out
 
 
 _PATCH_NOTES_MAX_ITEMS = 20
@@ -4547,38 +4560,39 @@ def move_note(
     except OpsError as e:
         return _err(src=src, dst=dst, error=e.code, message=e.message)
 
-    if not src_full.exists():
-        return _err(src=src, dst=dst, error="not_found", message=f"source note not found: {src}")
-    if (guard := _check_mtime(src_full, expected_mtime, src)):
-        return {**guard, "src": src, "dst": dst}
-    if dst_full.exists() and not overwrite:
-        return _err(
-            src=src,
-            dst=dst,
-            error="destination_exists",
-            message="pass overwrite=true to replace",
+    with note_write_lock(src_full, dst_full):
+        if not src_full.exists():
+            return _err(src=src, dst=dst, error="not_found", message=f"source note not found: {src}")
+        if (guard := _check_mtime(src_full, expected_mtime, src)):
+            return {**guard, "src": src, "dst": dst}
+        if dst_full.exists() and not overwrite:
+            return _err(
+                src=src,
+                dst=dst,
+                error="destination_exists",
+                message="pass overwrite=true to replace",
+            )
+
+        dst_full.parent.mkdir(parents=True, exist_ok=True)
+        src_abs = str(src_full.resolve())
+        os.replace(src_full, dst_full)
+
+        purged = _enqueue_purge(b, Path(src_abs))
+        index_deferred.requeue_move(b.collection, src_abs, str(dst_full.resolve()))
+
+        out: dict[str, Any] = {
+            "ok": True,
+            "src": src,
+            "dst": dst,
+            "index_purged": purged,
+            "mtime": _mtime(dst_full),
+            "vault": b.name,
+        }
+        if not purged:
+            out["warning"] = "purge not queued — watcher may retain stale chunks"
+        return _finalize_write(
+            out, vault=b.name, path=dst, expected_mtime=expected_mtime
         )
-
-    dst_full.parent.mkdir(parents=True, exist_ok=True)
-    src_abs = str(src_full.resolve())
-    os.replace(src_full, dst_full)
-
-    purged = _enqueue_purge(b, Path(src_abs))
-    index_deferred.requeue_move(b.collection, src_abs, str(dst_full.resolve()))
-
-    out: dict[str, Any] = {
-        "ok": True,
-        "src": src,
-        "dst": dst,
-        "index_purged": purged,
-        "mtime": _mtime(dst_full),
-        "vault": b.name,
-    }
-    if not purged:
-        out["warning"] = "purge not queued — watcher may retain stale chunks"
-    return _finalize_write(
-        out, vault=b.name, path=dst, expected_mtime=expected_mtime
-    )
 
 
 def _copy_into_vault(
@@ -4604,94 +4618,95 @@ def _copy_into_vault(
     except OpsError as e:
         return _err(src=src_display, dst=dst, error=e.code, message=e.message)
 
-    if (guard := _check_mtime(dst_full, expected_mtime, dst)):
-        return {**guard, "src": src_display, "dst": dst}
-    if dst_full.exists() and not overwrite:
-        return _err(
-            src=src_display,
-            dst=dst,
-            error="destination_exists",
-            message="pass overwrite=true to replace",
-        )
-
-    try:
-        content = src_full.read_text(encoding="utf-8")
-    except OSError as e:
-        return _err(src=src_display, dst=dst, error="bad_path", message=f"cannot read src: {e}")
-    except UnicodeDecodeError as e:
-        return _err(src=src_display, dst=dst, error="bad_path", message=f"src is not utf-8 text: {e}")
-
-    fields_applied: list[str] = []
-    if fields:
-        if not isinstance(fields, dict):
+    with note_write_lock(dst_full):
+        if (guard := _check_mtime(dst_full, expected_mtime, dst)):
+            return {**guard, "src": src_display, "dst": dst}
+        if dst_full.exists() and not overwrite:
             return _err(
                 src=src_display,
                 dst=dst,
-                error="bad_request",
-                message="fields must be an object of frontmatter key→value",
+                error="destination_exists",
+                message="pass overwrite=true to replace",
             )
-        patch_ops = [
-            {"op": "set_field", "field": str(k), "value": v}
-            for k, v in fields.items()
-        ]
-        result = apply_patch(content, patch_ops, strict=False)
-        if not result.ok and result.applied == 0:
+
+        try:
+            content = src_full.read_text(encoding="utf-8")
+        except OSError as e:
+            return _err(src=src_display, dst=dst, error="bad_path", message=f"cannot read src: {e}")
+        except UnicodeDecodeError as e:
+            return _err(src=src_display, dst=dst, error="bad_path", message=f"src is not utf-8 text: {e}")
+
+        fields_applied: list[str] = []
+        if fields:
+            if not isinstance(fields, dict):
+                return _err(
+                    src=src_display,
+                    dst=dst,
+                    error="bad_request",
+                    message="fields must be an object of frontmatter key→value",
+                )
+            patch_ops = [
+                {"op": "set_field", "field": str(k), "value": v}
+                for k, v in fields.items()
+            ]
+            result = apply_patch(content, patch_ops, strict=False)
+            if not result.ok and result.applied == 0:
+                return _err(
+                    src=src_display,
+                    dst=dst,
+                    applied=result.applied,
+                    results=result.results,
+                    **flatten_patch_failure_error(
+                        result.error, suggestions=result.suggestions or None
+                    ),
+                )
+            content = result.content
+            fields_applied = [str(k) for k in fields]
+
+        existed = dst_full.exists()
+        parts = Path(dst.replace("\\", "/")).parts
+        new_top = len(parts) > 1 and not (root / parts[0]).exists()
+
+        okf = apo_okf.process_concept(vault_root=root, rel_path=dst, content=content)
+        okf_meta = okf.as_response_fields()
+        if not okf.ok:
             return _err(
                 src=src_display,
                 dst=dst,
-                applied=result.applied,
-                results=result.results,
-                **flatten_patch_failure_error(
-                    result.error, suggestions=result.suggestions or None
-                ),
+                error=okf.error or "okf_validation",
+                message=okf.message or "OKF validation failed",
+                **{k: val for k, val in okf_meta.items() if k != "enforcement"},
+                enforcement=okf.enforcement,
             )
-        content = result.content
-        fields_applied = [str(k) for k in fields]
-
-    existed = dst_full.exists()
-    parts = Path(dst.replace("\\", "/")).parts
-    new_top = len(parts) > 1 and not (root / parts[0]).exists()
-
-    okf = apo_okf.process_concept(vault_root=root, rel_path=dst, content=content)
-    okf_meta = okf.as_response_fields()
-    if not okf.ok:
-        return _err(
-            src=src_display,
-            dst=dst,
-            error=okf.error or "okf_validation",
-            message=okf.message or "OKF validation failed",
-            **{k: val for k, val in okf_meta.items() if k != "enforcement"},
-            enforcement=okf.enforcement,
+        to_write = okf.content
+        to_write, write_flaws = _prepare_write_content(
+            to_write, path=dst, vault=b.name, okf_result=okf
         )
-    to_write = okf.content
-    to_write, write_flaws = _prepare_write_content(
-        to_write, path=dst, vault=b.name, okf_result=okf
-    )
 
-    dst_full.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(dst_full, to_write)
-    _enqueue_index(b, dst_full)
+        dst_full.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(dst_full, to_write)
+        _enqueue_index(b, dst_full)
 
-    out: dict[str, Any] = {
-        "ok": True,
-        "src": src_display,
-        "dst": dst,
-        "action": "overwrote" if existed else "created",
-        "bytes": dst_full.stat().st_size,
-        "mtime": _mtime(dst_full),
-        "fields_applied": fields_applied,
-        "vault": b.name,
-    }
-    out.update(okf_meta)
-    out = _attach_flaws(out, write_flaws)
-    if new_top:
-        out["warning"] = (
-            f"created new top-level directory {parts[0]!r} — "
-            f"existing top-level dirs: {_top_level_dirs(root)}"
+        out: dict[str, Any] = {
+            "ok": True,
+            "src": src_display,
+            "dst": dst,
+            "action": "overwrote" if existed else "created",
+            "bytes": dst_full.stat().st_size,
+            "mtime": _mtime(dst_full),
+            "fields_applied": fields_applied,
+            "vault": b.name,
+        }
+        out.update(okf_meta)
+        out = _attach_flaws(out, write_flaws)
+        if new_top:
+            out["warning"] = (
+                f"created new top-level directory {parts[0]!r} — "
+                f"existing top-level dirs: {_top_level_dirs(root)}"
+            )
+        return _finalize_write(
+            out, vault=b.name, path=dst, expected_mtime=expected_mtime, content=to_write
         )
-    return _finalize_write(
-        out, vault=b.name, path=dst, expected_mtime=expected_mtime, content=to_write
-    )
 
 
 def send_note(
@@ -4724,7 +4739,13 @@ def send_note(
     )
 
 
-def delete_note(path: str, *, vault: str = "", ref: str = "") -> dict[str, Any]:
+def delete_note(
+    path: str,
+    *,
+    expected_mtime: float | None = None,
+    vault: str = "",
+    ref: str = "",
+) -> dict[str, Any]:
     bad = _reject_if_ref(ref, tool="delete_note")
     if bad:
         return bad
@@ -4742,12 +4763,15 @@ def delete_note(path: str, *, vault: str = "", ref: str = "") -> dict[str, Any]:
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
 
-    if not full.exists():
-        return _err(path=path, error="not_found", message="note not found")
-    abs_path = str(full.resolve())
-    full.unlink()
-    purged = _enqueue_purge(b, full)
-    index_deferred.dequeue_paths(b.collection, [abs_path])
+    with note_write_lock(full):
+        if not full.exists():
+            return _err(path=path, error="not_found", message="note not found")
+        if guard := _check_mtime(full, expected_mtime, path):
+            return guard
+        abs_path = str(full.resolve())
+        full.unlink()
+        purged = _enqueue_purge(b, full)
+        index_deferred.dequeue_paths(b.collection, [abs_path])
     out: dict[str, Any] = {
         "ok": True,
         "path": path,
