@@ -35,6 +35,14 @@ except ImportError:
 from . import config, links, oversize, ref_catalog, rerank, table_markdown, vaults
 from .index_models import Hit, IndexStats, QueueStats
 
+def _embed_commit_batch() -> int:
+    try:
+        value = int(getattr(config, "EMBED_COMMIT_BATCH", 64))
+    except (TypeError, ValueError):
+        value = 64
+    return max(1, value)
+
+
 def has_nan(vector: list[float]) -> bool:
     return any(value != value for value in vector)
 
@@ -133,7 +141,7 @@ def _embed_batch_resilient(
     """
     try:
         embs = _server_embed_request(texts, keep_alive=keep_alive)
-        if not any(_has_nan(v) for v in embs):
+        if not any(has_nan(v) for v in embs):
             return embs
     except (urllib.error.HTTPError, urllib.error.URLError, RuntimeError, TimeoutError):
         pass
@@ -362,7 +370,7 @@ def _hydrate_query_embed_from_disk(*, limit: int | None = None) -> int:
         except (struct.error, TypeError):
             continue
         if vec:
-            candidates.append((_normalize_query(q), vec))
+            candidates.append((normalize_query(q), vec))
     hydrated = 0
     with _query_embed_lock:
         for q, vec in candidates:
@@ -400,7 +408,7 @@ def query_embed(query: str) -> list[float]:
     the prefix needs no reindex. Cache key is the raw (unprefixed) normalized query.
     Concurrent misses for the same model, prefix, and query share one backend call.
     """
-    key = _normalize_query(query)
+    key = normalize_query(query)
     ttl = config.QUERY_EMBED_TTL
     now = time.monotonic()
     prefix = getattr(config, "QUERY_PREFIX", "") or ""
@@ -475,10 +483,13 @@ def clear_query_embed_cache() -> None:
         pass
     try:
         # Legacy rows from when the cache lived in index.db meta.
+        # Call-time import: index_db imports this module at load time.
+        from .index_db import writer_connect
+
         db = writer_connect()
         db.execute("DELETE FROM meta WHERE key LIKE 'qemb:%'")
         db.commit()
     except (OSError, sqlite3.Error):
         pass
 
-__owned__ = ['has_nan', 'normalize_query', '_query_embed_cache', '_query_embed_lock', '_fastembed', '_embed_fastembed', '_ollama_embed_request', '_llamacpp_embed_request', '_server_embed_request', '_truncate_dim', '_embed_batch_resilient', 'embed_concurrency', '_embed_ollama', 'iter_embedded_in_order', 'embed', '_query_embed_meta_key', '_query_embed_disk_ttl', '_QCACHE_PRUNE_INTERVAL', '_qcache_last_prune', 'query_embed_cache_path', '_qcache_connect', '_unpack_vec', '_load_query_embed_disk', '_save_query_embed_disk', '_hydrate_query_embed_from_disk', 'warm_query_embed', 'query_embed', 'clear_query_embed_cache']
+__owned__ = ['_embed_commit_batch', 'has_nan', 'normalize_query', '_query_embed_cache', '_query_embed_lock', '_fastembed', '_embed_fastembed', '_ollama_embed_request', '_llamacpp_embed_request', '_server_embed_request', '_truncate_dim', '_embed_batch_resilient', 'embed_concurrency', '_embed_ollama', 'iter_embedded_in_order', 'embed', '_query_embed_meta_key', '_query_embed_disk_ttl', '_QCACHE_PRUNE_INTERVAL', '_qcache_last_prune', 'query_embed_cache_path', '_qcache_connect', '_unpack_vec', '_load_query_embed_disk', '_save_query_embed_disk', '_hydrate_query_embed_from_disk', 'warm_query_embed', 'query_embed', 'clear_query_embed_cache']

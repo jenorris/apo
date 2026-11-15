@@ -34,6 +34,10 @@ except ImportError:
     _np = None
 
 from . import config, links, oversize, ref_catalog, rerank, table_markdown, vaults
+from . import ranking
+from .content import _FM_KEY_SAFE
+from .embeddings import query_embed
+from .index_db import RRF_K, _collapse_part_hits, _scoped_vector_hits, reader_connect
 from .index_models import Hit, IndexStats, QueueStats
 
 def fts_query(query: str) -> str | None:
@@ -209,7 +213,7 @@ def _sql_path_prefix_excludes(prefixes: list[str]) -> tuple[str, list[Any]]:
     params: list[Any] = []
     for pref in prefixes:
         parts.append("c.path NOT LIKE ? ESCAPE '\\'")
-        params.append(_escape_like(pref) + "%")
+        params.append(escape_like(pref) + "%")
     if not parts:
         return "", []
     return " AND " + " AND ".join(parts), params
@@ -523,7 +527,7 @@ def search_lex_only(
     db = reader_connect()
     folder_prefix = folder.replace("\\", "/").strip("/")
     excl_prefixes, excl_globs = _compile_excludes(exclude)
-    match = _fts_query(query)
+    match = fts_query(query)
     if not match:
         return []
     fts_ready = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
@@ -545,7 +549,7 @@ def search_lex_only(
                    WHERE chunks_fts MATCH ?
                      AND c.path LIKE ? ESCAPE '\\'
                    ORDER BY rank LIMIT ?""",
-                (match, _escape_like(folder_prefix) + "/%", fetch_n),
+                (match, escape_like(folder_prefix) + "/%", fetch_n),
             ).fetchall()
         else:
             frows = db.execute(
@@ -985,7 +989,7 @@ def search(
     if hybrid:
         fts_ready = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
         if fts_ready and fts_ready[0] == "1":
-            match = _fts_query(query)
+            match = fts_query(query)
             if match:
                 excl_sql, excl_params = _sql_path_prefix_excludes(excl_prefixes)
                 try:
@@ -997,7 +1001,7 @@ def search(
                                WHERE chunks_fts MATCH ?
                                  AND c.path LIKE ? ESCAPE '\\'{excl_sql}
                                ORDER BY rank LIMIT ?""",
-                            (match, _escape_like(folder_prefix) + "/%", *excl_params, fts_n),
+                            (match, escape_like(folder_prefix) + "/%", *excl_params, fts_n),
                         ).fetchall()
                     else:
                         frows = db.execute(
@@ -1468,7 +1472,7 @@ def _filter_notes_from_table(
         params.append(tree_oid)
     if folder_prefix:
         where_parts.append("path LIKE ? ESCAPE '\\'")
-        params.append(_escape_like(folder_prefix) + "/%")
+        params.append(escape_like(folder_prefix) + "/%")
 
     if sql_pred is not None:
         pred_sql, pred_params = sql_pred
@@ -1626,7 +1630,7 @@ def search_at_ref(
 
     Returns ``(hits, total)``. Hits have path/content/score/mtime — no chunk_hash.
     """
-    match = _fts_query(query)
+    match = fts_query(query)
     if not match:
         return [], 0
     db = ref_catalog.reader_connect()
@@ -1636,7 +1640,7 @@ def search_at_ref(
     params: list[Any] = [tree_oid, match]
     if folder_prefix:
         where.append("path LIKE ? ESCAPE '\\'")
-        params.append(_escape_like(folder_prefix) + "/%")
+        params.append(escape_like(folder_prefix) + "/%")
     # Prefix excludes in SQL. substr() keeps startswith()'s case sensitivity (LIKE would not).
     for pref in prefixes:
         where.append("substr(COALESCE(path, ''), 1, ?) != ?")
@@ -1686,7 +1690,7 @@ def recent_notes(limit: int = 10, folder: str = "") -> list[tuple[str, float]]:
     if folder_prefix:
         rows = db.execute(
             "SELECT path, mtime FROM files WHERE path LIKE ? ESCAPE '\\' ORDER BY mtime DESC LIMIT ?",
-            (_escape_like(folder_prefix) + "/%", limit),
+            (escape_like(folder_prefix) + "/%", limit),
         ).fetchall()
     else:
         rows = db.execute(
@@ -1728,7 +1732,7 @@ def recent_notes_preview(
     params: list[Any] = []
     if folder_prefix:
         where.append("f.path LIKE ? ESCAPE '\\'")
-        params.append(_escape_like(folder_prefix) + "/%")
+        params.append(escape_like(folder_prefix) + "/%")
     if since is not None:
         where.append("f.mtime >= ?")
         params.append(float(since))
