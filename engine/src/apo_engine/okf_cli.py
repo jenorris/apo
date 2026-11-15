@@ -1,14 +1,15 @@
-"""``apo-engine okf`` — validate | init | export | ingest.
+"""``apo-engine okf`` / ``apo engine okf`` — validate | fix | init | export | ingest |
+linkify | indexes.
 
-One OKF implementation. ``vault-tools/tools/okf/`` used to carry a second copy
-(its own frontmatter parser, its own type map) that could drift from
-``apo_engine.okf``; these commands are the consolidation point, and the
-vault-tools scripts are shims over them.
+One OKF implementation. The old ``vault-tools/`` tree (its own frontmatter
+parser and type map, plus the linkify and index-regen scripts) is gone; every
+OKF command lives here and reads frontmatter through ``apo_engine.okf``.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 import tarfile
@@ -500,6 +501,267 @@ def _vaults_file() -> Path | None:
 
 
 # --------------------------------------------------------------------------
+# linkify + index regen
+# --------------------------------------------------------------------------
+#
+# Both are contract-gated batch mutators: they refuse a vault with no OKF
+# contract (exit 2) and refuse any path that resolves outside the vault root.
+# Neither one infers a concept type — titles and descriptions only.
+
+PARA_ROOTS = ("inbox", "projects", "areas", "resources", "archives", "system")
+SKIP_DIR_NAMES = frozenset(
+    {".git", ".obsidian", ".cursor", "node_modules", "__pycache__", ".agents", "agent-client"}
+)
+_LISTING_DESC_MAX = 120
+_LINKIFY_MAX_TARGETS = 12
+
+_OKF_LINKS_RE = re.compile(r"(?ms)^## OKF links\s*\n.*?(?=^## |\Z)")
+_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:\|[^\]]+)?\]\]")
+
+
+class OkfCliError(Exception):
+    """A usage / precondition failure; ``main`` prints it and exits ``code``."""
+
+    def __init__(self, message: str, code: int = 2):
+        super().__init__(message)
+        self.code = code
+
+
+def require_contract(root: Path) -> Path:
+    """The vault's OKF contract path, or ``OkfCliError`` when there is none."""
+    contract = okf.resolve_contract_path(root)
+    if contract is None:
+        raise OkfCliError(
+            f"okf: vault has no OKF contract: {root}\n"
+            "  expected system/contracts/okf-contract.schema.yaml "
+            "(run `apo engine okf init`)"
+        )
+    return contract
+
+
+def resolve_under_root(root: Path, path_arg: str | Path) -> Path:
+    """Resolve a CLI path and require it stay under ``root`` (``..``/symlink escapes fail)."""
+    root = root.resolve()
+    raw = Path(path_arg).expanduser()
+    candidate = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise OkfCliError(f"okf: path escapes vault root: {path_arg} (vault={root})") from None
+    return candidate
+
+
+def _skip_dir(path: Path, root: Path) -> bool:
+    """True when ``path`` (a directory) sits in or under a skipped directory name."""
+    try:
+        parts = path.resolve().relative_to(root).parts
+    except ValueError:
+        parts = path.parts
+    return bool(SKIP_DIR_NAMES.intersection(parts))
+
+
+def _iter_markdown(root: Path, target: Path) -> list[Path]:
+    if target.is_file():
+        return [target] if target.suffix == ".md" else []
+    if not target.exists():
+        return []
+    return [p for p in sorted(target.rglob("*.md")) if not _skip_dir(p.parent, root)]
+
+
+def _concept_title(path: Path, text: str) -> str:
+    return okf.parse_scalars(text).get("title") or okf.first_h1(text) or path.stem
+
+
+def _concept_description(text: str) -> str | None:
+    return okf.parse_scalars(text).get("description") or okf.first_h1(text)
+
+
+def _bundle_url(root: Path, path: Path) -> str:
+    try:
+        return "/" + path.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return "/" + path.as_posix()
+
+
+def _rel(root: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _resolve_wikilink(root: Path, link: str, from_path: Path) -> Path | None:
+    link = link.strip().strip("'\"")
+    candidates: list[Path] = []
+    if link.endswith(".md"):
+        candidates.append(root / link.lstrip("/"))
+    else:
+        candidates.append(root / f"{link}.md")
+        candidates.append(root / link / f"{Path(link).name}.md")
+    candidates.append((from_path.parent / f"{link}.md").resolve())
+    candidates.append((from_path.parent / link).resolve())
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _related_targets(root: Path, path: Path, text: str) -> list[Path]:
+    targets: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(link: str, *, skip_self: bool) -> None:
+        resolved = _resolve_wikilink(root, link, path)
+        if resolved is None:
+            return
+        key = resolved.resolve()
+        if key in seen or (skip_self and key == path.resolve()):
+            return
+        seen.add(key)
+        targets.append(resolved)
+
+    # Frontmatter wikilinks (``related:`` items) come first, uncapped.
+    fm = okf._FM_RE.match(text)
+    for line in (fm.group(1) if fm else "").splitlines():
+        if "[[" in line:
+            for m in _WIKILINK_RE.finditer(line):
+                add(m.group(1), skip_self=False)
+
+    # Body wikilinks fill the remainder up to the cap.
+    for m in _WIKILINK_RE.finditer(okf.body_of(text)):
+        if len(targets) >= _LINKIFY_MAX_TARGETS:
+            break
+        add(m.group(1), skip_self=True)
+    return targets
+
+
+def build_okf_links(root: Path, path: Path, text: str | None = None) -> str:
+    text = path.read_text(encoding="utf-8", errors="replace") if text is None else text
+    lines = [
+        "## OKF links",
+        "",
+        f"- This concept: [{_concept_title(path, text)}]({_bundle_url(root, path)})",
+    ]
+    for target in _related_targets(root, path, text):
+        t_text = target.read_text(encoding="utf-8", errors="replace")
+        lines.append(f"- [{_concept_title(target, t_text)}]({_bundle_url(root, target)})")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def linkify_note(root: Path, path: Path) -> bool:
+    """Write/replace the ``## OKF links`` section. True when the file changed."""
+    if path.name in RESERVED_NAMES:
+        return False
+    text = path.read_text(encoding="utf-8", errors="replace")
+    section = build_okf_links(root, path, text)
+    if _OKF_LINKS_RE.search(text):
+        new = _OKF_LINKS_RE.sub(lambda _m: section.rstrip() + "\n", text)
+    else:
+        new = text.rstrip() + "\n\n" + section
+    if not new.endswith("\n"):
+        new += "\n"
+    if new == text:
+        return False
+    atomic_write_text(path, new)
+    return True
+
+
+def linkify_vault(root: Path, paths: list[Path]) -> dict[str, Any]:
+    """Linkify every markdown note under ``paths`` (files or directories)."""
+    root = root.resolve()
+    changed = [
+        _rel(root, path)
+        for target in paths
+        for path in _iter_markdown(root, target)
+        if linkify_note(root, path)
+    ]
+    return {"ok": True, "changed": changed}
+
+
+def regenerate_index(directory: Path, root: Path) -> Path:
+    """Write the OKF §6 ``index.md`` listing for one directory (no frontmatter)."""
+    concepts: list[tuple[str, str, str]] = []
+    subdirs: list[tuple[str, str]] = []
+
+    for child in sorted(directory.iterdir(), key=lambda p: p.name.lower()):
+        if child.name.startswith("."):
+            continue
+        if child.is_dir():
+            if _skip_dir(child, root):
+                continue
+            if any(child.rglob("*.md")):
+                subdirs.append((child.name, f"{child.name}/"))
+            continue
+        if child.suffix != ".md" or child.name in RESERVED_NAMES:
+            continue
+        text = child.read_text(encoding="utf-8", errors="replace")
+        title = _concept_title(child, text)
+        concepts.append((title, child.name, _concept_description(text) or title))
+
+    lines = [f"# {directory.name}", ""]
+    if concepts:
+        lines += ["## Concepts", ""]
+        for title, name, desc in concepts:
+            short = desc.replace("\n", " ").strip()
+            if len(short) > _LISTING_DESC_MAX:
+                short = short[: _LISTING_DESC_MAX - 3] + "…"
+            lines.append(f"* [{title}]({name}) - {short}")
+        lines.append("")
+    if subdirs:
+        lines += ["## Subdirectories", ""]
+        lines += [f"* [{name}]({href})" for name, href in subdirs]
+        lines.append("")
+
+    out = directory / "index.md"
+    atomic_write_text(out, "\n".join(lines).rstrip() + "\n")
+    return out
+
+
+def index_dirs(root: Path, paths: list[Path], *, recursive: bool = True) -> list[Path]:
+    """Directories whose ``index.md`` should be regenerated."""
+    root = root.resolve()
+    roots = [p if p.is_dir() else p.parent for p in (paths or [root])]
+
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for base in roots:
+        if base in seen or not base.is_dir():
+            continue
+        if recursive:
+            for d in [base, *sorted(base.rglob("*"))]:
+                if not d.is_dir() or _skip_dir(d, root) or d in seen:
+                    continue
+                children = list(d.iterdir())
+                if any(c.suffix == ".md" and c.is_file() for c in children) or any(
+                    c.is_dir() and not _skip_dir(c, root) for c in children
+                ):
+                    seen.add(d)
+                    out.append(d)
+        else:
+            seen.add(base)
+            out.append(base)
+            if base == root:  # PARA roots: also one level of children
+                for name in PARA_ROOTS:
+                    child = base / name
+                    if child.is_dir() and child not in seen:
+                        seen.add(child)
+                        out.append(child)
+    return out
+
+
+def regenerate_indexes(
+    root: Path, paths: list[Path], *, recursive: bool = True
+) -> dict[str, Any]:
+    root = root.resolve()
+    written = [
+        _rel(root, regenerate_index(d, root))
+        for d in index_dirs(root, paths, recursive=recursive)
+    ]
+    return {"ok": True, "written": written}
+
+
+# --------------------------------------------------------------------------
 # argparse wiring
 # --------------------------------------------------------------------------
 
@@ -585,6 +847,49 @@ def _cmd_ingest(args) -> int:
     return 0 if out.get("ok") else 1
 
 
+def _guarded(fn):
+    """Turn ``OkfCliError`` into a stderr message + exit code (works under ``apo engine`` too)."""
+
+    def run(args) -> int:
+        try:
+            return fn(args)
+        except OkfCliError as exc:
+            print(exc, file=sys.stderr)
+            return exc.code
+
+    return run
+
+
+def _cmd_linkify(args) -> int:
+    root = _root_for(args)
+    if not args.paths:
+        raise OkfCliError("okf linkify: pass one or more paths (file or directory)")
+    require_contract(root)
+    targets = [resolve_under_root(root, p) for p in args.paths]
+    out = linkify_vault(root, targets)
+    if args.json:
+        print(json.dumps(out, indent=2))
+    else:
+        for rel in out["changed"]:
+            print(f"linkify: {rel}")
+        print(f"updated {len(out['changed'])} file(s)")
+    return 0
+
+
+def _cmd_indexes(args) -> int:
+    root = _root_for(args)
+    require_contract(root)
+    targets = [resolve_under_root(root, p) for p in args.paths]
+    out = regenerate_indexes(root, targets, recursive=not args.no_recursive)
+    if args.json:
+        print(json.dumps(out, indent=2))
+    else:
+        for rel in out["written"]:
+            print(f"index: {rel}")
+        print(f"regenerated {len(out['written'])} index.md file(s)")
+    return 0
+
+
 def add_parser(sub) -> None:
     """Attach the ``okf`` subcommand group to an argparse subparsers object."""
     p = sub.add_parser("okf", help="OKF bundle: validate | init | export | ingest")
@@ -625,6 +930,23 @@ def add_parser(sub) -> None:
     pe.add_argument("--okf-version", choices=("0.1", "0.2"), default="0.1")
     pe.add_argument("--archive", action="store_true", help="write a .tar.gz instead of a directory")
     pe.set_defaults(func=_cmd_export)
+
+    pl = _common(
+        okf_sub.add_parser("linkify", help="write/refresh `## OKF links` with bundle-relative URLs")
+    )
+    pl.add_argument("paths", nargs="*", help="files/dirs under the vault (required)")
+    pl.add_argument("--json", action="store_true")
+    pl.set_defaults(func=_guarded(_cmd_linkify))
+
+    pi = _common(okf_sub.add_parser("indexes", help="regenerate index.md listings (no frontmatter)"))
+    pi.add_argument("paths", nargs="*", help="files/dirs under the vault (default: whole vault)")
+    pi.add_argument(
+        "--no-recursive",
+        action="store_true",
+        help="only the target roots (plus PARA roots at the vault root), not the whole tree",
+    )
+    pi.add_argument("--json", action="store_true")
+    pi.set_defaults(func=_guarded(_cmd_indexes))
 
     pg = okf_sub.add_parser("ingest", help="register an external OKF bundle as a read-only vault")
     pg.add_argument("source", help="path to the external bundle root")

@@ -310,6 +310,117 @@ class IngestTests(OkfCliBase):
         self.assertEqual(out["error"], "not_a_directory")
 
 
+class LinkifyTests(OkfCliBase):
+    def setUp(self):
+        super().setUp()
+        self.write(
+            "areas/threads/hub.md",
+            '---\ntitle: Hub\nrelated:\n  - "[[areas/threads/good]]"\n---\n\n'
+            "# Hub\n\nSee [[native]] and [[missing-note]] and [[hub]].\n",
+        )
+
+    def run_cli(self, *argv: str) -> int:
+        return okf_cli.main([*argv, "--vault-root", str(self.root)])
+
+    def test_appends_section_with_bundle_relative_urls(self):
+        self.assertEqual(self.run_cli("linkify", "areas/threads/hub.md"), 0)
+        text = self.read("areas/threads/hub.md")
+        self.assertIn("## OKF links", text)
+        self.assertIn("- This concept: [Hub](/areas/threads/hub.md)", text)
+        self.assertIn("- [Good](/areas/threads/good.md)", text)
+        self.assertIn("- [Native](/areas/threads/native.md)", text)
+        self.assertNotIn("missing-note](", text)  # unresolved wikilinks dropped
+        self.assertEqual(text.count("/areas/threads/hub.md"), 1)  # no self-link
+
+    def test_idempotent_and_replaces_existing_section(self):
+        self.run_cli("linkify", "areas/threads/hub.md")
+        first = self.read("areas/threads/hub.md")
+        self.run_cli("linkify", "areas/threads/hub.md")
+        self.assertEqual(self.read("areas/threads/hub.md"), first)
+        self.write("areas/threads/hub.md", first.replace("[Good]", "[Stale]"))
+        self.run_cli("linkify", "areas/threads/hub.md")
+        self.assertEqual(self.read("areas/threads/hub.md"), first)
+
+    def test_section_replace_stops_at_next_heading(self):
+        self.write("areas/a.md", "# A\n\n## OKF links\n\n- old\n\n## Tail\n\nkeep\n")
+        self.run_cli("linkify", "areas/a.md")
+        text = self.read("areas/a.md")
+        self.assertIn("## Tail\n\nkeep", text)
+        self.assertNotIn("- old", text)
+
+    def test_directory_walk_skips_reserved_and_skip_dirs(self):
+        self.write("areas/index.md", "# Index\n")
+        self.write("areas/.obsidian/x.md", "# X\n")
+        self.assertEqual(self.run_cli("linkify", "areas"), 0)
+        self.assertNotIn("OKF links", self.read("areas/index.md"))
+        self.assertNotIn("OKF links", self.read("areas/.obsidian/x.md"))
+        self.assertIn("OKF links", self.read("areas/threads/good.md"))
+
+    def test_requires_paths(self):
+        self.assertEqual(self.run_cli("linkify"), 2)
+
+    def test_path_escape_is_refused(self):
+        outside = Path(self.tmp.name) / "outside.md"
+        outside.write_text("# Out\n", encoding="utf-8")
+        self.assertEqual(self.run_cli("linkify", str(outside)), 2)
+        self.assertEqual(self.run_cli("linkify", "../outside.md"), 2)
+        self.assertEqual(outside.read_text(encoding="utf-8"), "# Out\n")
+
+    def test_refuses_vault_without_contract(self):
+        bare = Path(self.tmp.name) / "bare"
+        bare.mkdir()
+        (bare / "n.md").write_text("# N\n", encoding="utf-8")
+        self.assertEqual(okf_cli.main(["linkify", "n.md", "--vault-root", str(bare)]), 2)
+        self.assertEqual((bare / "n.md").read_text(encoding="utf-8"), "# N\n")
+
+
+class IndexesTests(OkfCliBase):
+    def run_cli(self, *argv: str) -> int:
+        return okf_cli.main(["indexes", *argv, "--vault-root", str(self.root)])
+
+    def test_regenerates_listing_without_frontmatter(self):
+        self.assertEqual(self.run_cli("areas"), 0)
+        text = self.read("areas/index.md")
+        self.assertFalse(text.startswith("---"))
+        self.assertIn("# areas", text)
+        self.assertIn("## Subdirectories\n\n* [threads](threads/)", text)
+        threads = self.read("areas/threads/index.md")
+        self.assertIn("## Concepts", threads)
+        self.assertIn("* [Good](good.md) - d", threads)
+        self.assertIn("* [Native](native.md) - d", threads)
+
+    def test_long_description_is_truncated(self):
+        self.write("areas/threads/long.md", f"---\ndescription: {'x' * 200}\n---\n\n# Long\n")
+        self.run_cli("areas/threads")
+        line = next(
+            ln for ln in self.read("areas/threads/index.md").splitlines() if "long.md" in ln
+        )
+        self.assertTrue(line.endswith("…"))
+        self.assertEqual(len(line.split(" - ", 1)[1]), 118)
+
+    def test_no_recursive_targets_roots_only(self):
+        self.assertEqual(self.run_cli("areas", "--no-recursive"), 0)
+        self.assertTrue((self.root / "areas/index.md").is_file())
+        self.assertFalse((self.root / "areas/threads/index.md").exists())
+
+    def test_vault_root_pass_covers_whole_tree_but_not_skip_dirs(self):
+        self.write(".obsidian/plugins/p.md", "# P\n")
+        self.assertEqual(self.run_cli(), 0)
+        self.assertTrue((self.root / "index.md").is_file())
+        self.assertTrue((self.root / "areas/threads/index.md").is_file())
+        self.assertFalse((self.root / ".obsidian/index.md").exists())
+        self.assertNotIn(".obsidian", self.read("index.md"))
+
+    def test_path_escape_is_refused(self):
+        self.assertEqual(self.run_cli("../"), 2)
+
+    def test_refuses_vault_without_contract(self):
+        bare = Path(self.tmp.name) / "bare"
+        bare.mkdir()
+        self.assertEqual(okf_cli.main(["indexes", "--vault-root", str(bare)]), 2)
+        self.assertFalse((bare / "index.md").exists())
+
+
 class ReadOnlyVaultTests(OkfCliBase):
     """A read-only vault is searchable but rejects every write op."""
 

@@ -99,16 +99,13 @@ desk-project-cursor *ARGS:
 check-filter-notes-wire:
     ./scripts/check-filter-notes-wire.sh
 
-# OKF bundle: validate | fix | init | export | ingest.
+# OKF bundle: validate | fix | init | export | ingest | linkify | indexes.
 # `okf validate --profile okf` checks SPEC §11 conformance exactly;
 # `--profile apo` (default) is the stricter house producer profile.
+# `okf linkify <path…>` and `okf indexes [path…]` are contract-gated batch
+# mutators (they replaced the removed vault-tools/ tree). Same as `apo engine okf …`.
 okf *ARGS:
     {{eng}} okf {{ARGS}}
-
-# Contract-gated vault batch tools (index regen, linkify). See vault-tools/README.md
-# OKF lint/fix/export there are shims over `just okf …`.
-vault-tools *ARGS:
-    just --justfile "{{ justfile_directory() }}/vault-tools/justfile" {{ARGS}}
 
 watch-fg:
     {{eng}} watch

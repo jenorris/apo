@@ -73,7 +73,7 @@ Env:
 - `APO_OKF_ENFORCEMENT=soft|hard|off`
 - `APO_OKF_SPEC_TYPE=fill|mirror|off` — overrides `spec_type_policy`
 
-CLI (one implementation; `vault-tools/tools/okf/` are shims over it):
+CLI (one implementation, `apo engine okf …` / `apo-engine okf …`; the old `vault-tools/` tree is removed):
 
 ```sh
 just okf validate --vault meta --profile okf   # SPEC §11 exactly
@@ -82,7 +82,14 @@ just okf fix      --vault meta                 # stamp gaps via the normal write
 just okf init     --vault-root ~/Notes/New     # scaffold contract + bundle root
 just okf export   --vault meta /tmp/bundle --okf-version 0.2
 just okf ingest   /tmp/foreign-bundle --name foreign   # mount read-only
+just okf linkify  --vault meta areas/threads           # write/refresh `## OKF links`
+just okf indexes  --vault meta                         # regenerate index.md listings
 ```
+
+`linkify` (paths required) and `indexes` (default: whole vault; `--no-recursive`
+for target roots only) refuse a vault with no OKF contract and any path that
+resolves outside the vault root (exit 2). Run them from outside the vault root so
+an agent does not use a vault as its edit cwd. They infer no concept type.
 
 Corpus lint on MCP: `vault(request={action: "lint"})` runs the same producer
 profile per note (`okf.missing_field`, plus `okf.missing_frontmatter` /

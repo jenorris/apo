@@ -74,7 +74,7 @@ filter_notes(where={"todos": {"$elemMatch": {"status": "pending"}}}, folder="pro
 
 No separate issue tracker required for “show me open X in folder Y.” Prefer `filter_notes` for frontmatter/status sweeps; use `search_notes` for semantic or keyword recall.
 
-**Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard and `apo-engine okf validate|fix|export|ingest`. Legacy `system/config/` still resolves. Templates: [docs/contracts/](docs/contracts/). Desk: `vault(request={action: "merge"|"project"})` + `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
+**Contracts:** Apo is convention-agnostic until the **vault** encodes a contract it understands. Ship `system/contracts/okf-contract.schema.yaml` (or set `APO_OKF_CONTRACT`) for OKF stamp/soft/hard and `apo-engine okf validate|fix|export|ingest|linkify|indexes`. Legacy `system/config/` still resolves. Templates: [docs/contracts/](docs/contracts/). Desk: `vault(request={action: "merge"|"project"})` + `~/.apo/desk.yaml` ([docs/examples/desk.example.yaml](docs/examples/desk.example.yaml)).
 
 **Multi-vault:** set `APO_VAULTS_ROOT` (parent directory of vaults, autoconfigure) and/or `APO_VAULT_PATHS` (explicit roots) plus `APO_DEFAULT_VAULT`. `APO_COLLECTION_ROOT` remains a deprecated alias for one migration window; matching dual values are accepted and conflicts fail. Tools take `vault=`; watch runs one thread per vault. Foreign OKF bundles can register as **read-only** vaults. `APO_VAULTS` (JSON registry) still loads as a legacy roots-only compat shim. See [docs/multi-vault.md](docs/multi-vault.md).
 
@@ -108,6 +108,8 @@ Adopt it on any vault:
 just okf init     --vault-root ~/Notes/Yours   # contract + bundle-root index
 just okf fix      --vault-root ~/Notes/Yours   # stamp the gaps
 just okf validate --vault-root ~/Notes/Yours --profile okf   # SPEC §11 exactly
+just okf linkify  --vault-root ~/Notes/Yours areas   # `## OKF links` with bundle-relative URLs
+just okf indexes  --vault-root ~/Notes/Yours         # regenerate index.md listings
 ```
 
 `--profile okf` checks **only** what the spec requires and will not fail you for missing `description` / `timestamp`; `--profile apo` (default) is the stricter house style. A vault with no contract reports that rather than claiming to be clean. Field-by-field table and policy knobs: [docs/contracts/okf-bundle.md](docs/contracts/okf-bundle.md).
