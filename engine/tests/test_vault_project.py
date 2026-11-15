@@ -16,7 +16,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from apo_engine import vault_project
+from apo_engine import host_projection, vault_project
 
 
 class IsContractsRelTest(unittest.TestCase):
@@ -272,11 +272,11 @@ class ProvenanceTest(unittest.TestCase):
             "provenance": {"generated_at": "2026-09-28T12:00:00Z", "sources": "abc123def456"},
         }
         expected = "Generated 2026-09-28T12:00:00Z · sources abc123def456"
-        for body in (vault_project.render_desk_body(merge), vault_project.render_desk_index(merge)):
+        for body in (host_projection.render_desk_body(merge), host_projection.render_desk_index(merge)):
             lines = body.splitlines()
             self.assertTrue(lines[0].startswith("# Apo desk"))
             self.assertEqual(lines[2], expected)
-        out = vault_project.project(merge, mode="index")
+        out = host_projection.project(merge, mode="index")
         self.assertEqual(out["sources"], "abc123def456")
         self.assertEqual(out["generated_at"], "2026-09-28T12:00:00Z")
 
@@ -286,9 +286,9 @@ class ProvenanceTest(unittest.TestCase):
             "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": {}}},
             "desk": {"habits": {}},
         }
-        self.assertNotIn("Generated 2", vault_project.render_desk_body(merge))
-        self.assertNotIn("Generated 2", vault_project.render_desk_index(merge))
-        self.assertNotIn("sources", vault_project.project(merge))
+        self.assertNotIn("Generated 2", host_projection.render_desk_body(merge))
+        self.assertNotIn("Generated 2", host_projection.render_desk_index(merge))
+        self.assertNotIn("sources", host_projection.project(merge))
 
 
 def _usage_row(habits: list, *, default: bool = False) -> dict:
@@ -302,8 +302,8 @@ def _usage_row(habits: list, *, default: bool = False) -> dict:
 class WriteHabitsAcrossVaultsTest(unittest.TestCase):
     def test_new_habit_ids_have_rendered_lines(self):
         for hid in ("no_direct_fs_mutate", "fidelity_before_conclude", "known_path_current_first"):
-            self.assertIn(hid, vault_project._WRITE_HABIT_LINES, hid)
-        lines = vault_project._render_write_habit_lines([("no_direct_fs_mutate", None)])
+            self.assertIn(hid, host_projection._WRITE_HABIT_LINES, hid)
+        lines = host_projection._render_write_habit_lines([("no_direct_fs_mutate", None)])
         self.assertIn("Never mutate vault files directly", lines[0])
 
     def test_unscoped_projection_renders_every_vaults_habits(self):
@@ -315,7 +315,7 @@ class WriteHabitsAcrossVaultsTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertIn("## Apo throughput", body)
         # Universal id → plain line; subset ids → tagged with the declaring vault.
         universal = [ln for ln in body.splitlines() if "Hard gate" in ln]
@@ -333,7 +333,7 @@ class WriteHabitsAcrossVaultsTest(unittest.TestCase):
             "vaults": {"optima": _usage_row(["known_path_current_first"], default=True)},
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertIn("read_note(path=…)` that path **first**", body)
         self.assertNotIn("— vaults:", body)
 
@@ -344,27 +344,27 @@ class NoDirectFsMutateDeskHabitTest(unittest.TestCase):
         return {"default_vault": "work", "vaults": {"work": row}, "desk": {"habits": habits}}
 
     def test_desk_habit_on_renders_under_habits(self):
-        body = vault_project.render_desk_body(self._merge({"no_direct_fs_mutate": True}))
+        body = host_projection.render_desk_body(self._merge({"no_direct_fs_mutate": True}))
         self.assertIn("## Habits", body)
         self.assertEqual(body.count("Never mutate vault files directly"), 1)
 
     def test_desk_habit_off_or_absent_renders_nothing(self):
         self.assertNotIn(
             "Never mutate vault files directly",
-            vault_project.render_desk_body(self._merge({"no_direct_fs_mutate": False})),
+            host_projection.render_desk_body(self._merge({"no_direct_fs_mutate": False})),
         )
         self.assertNotIn(
             "Never mutate vault files directly",
-            vault_project.render_desk_body(self._merge({"end_of_turn_gate": True})),
+            host_projection.render_desk_body(self._merge({"end_of_turn_gate": True})),
         )
 
     def test_desk_habit_dedupes_matching_write_habit_id(self):
-        body = vault_project.render_desk_body(
+        body = host_projection.render_desk_body(
             self._merge({"no_direct_fs_mutate": True}, ["no_direct_fs_mutate"])
         )
         self.assertEqual(body.count("Never mutate vault files directly"), 1)
         # Contract-only declaration still renders (under Apo throughput).
-        body = vault_project.render_desk_body(self._merge({}, ["no_direct_fs_mutate"]))
+        body = host_projection.render_desk_body(self._merge({}, ["no_direct_fs_mutate"]))
         self.assertEqual(body.count("Never mutate vault files directly"), 1)
         self.assertIn("## Apo throughput", body)
 

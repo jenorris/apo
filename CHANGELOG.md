@@ -4,6 +4,15 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Changed
+
+- **Host projection moved out of `vault_project.py`.** Desk markdown rendering
+  (`project`, `render_desk_body`, `render_desk_index`, the `format_*` helpers)
+  and the Hermes GBNF grammar compilers (`compile_vault_grammar` and friends)
+  now live in `host_projection.py`. `vault_project.py` keeps desk-overlay
+  scoping, pointer expansion, contract accessors, the drift signature, and the
+  watcher debounce. No behavior change; MCP tool names are unchanged.
+
 ## [0.38.0] — 2026-11-14
 
 A token admin can issue and revoke scoped clients, and symlinks no longer get

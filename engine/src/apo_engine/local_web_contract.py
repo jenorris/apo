@@ -3,7 +3,7 @@
 Active when ``system/contracts/local-web-contract.schema.yaml`` (or legacy
 ``system/config/local-web-contract.schema.yaml``) exists under the vault root.
 Read-only: the local HTML browser process reads this directly; the engine's
-only consumer is desk projection (``vault_project.format_local_web_line``),
+only consumer is desk projection (``host_projection.format_local_web_line``),
 which surfaces bind/port/mode as a one-liner when present.
 """
 

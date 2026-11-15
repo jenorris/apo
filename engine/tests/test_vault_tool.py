@@ -10,7 +10,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from apo_engine import ops, vault_contracts, vault_project
+from apo_engine import host_projection, ops, vault_contracts, vault_project
 
 
 class ContractIdTest(unittest.TestCase):
@@ -27,13 +27,13 @@ class ContractIdTest(unittest.TestCase):
 
 class IntegrationsFormatTest(unittest.TestCase):
     def test_str_list_accepts_scalar_and_list(self):
-        self.assertEqual(vault_project._str_list("apo"), ["apo"])
-        self.assertEqual(vault_project._str_list(["apo", " context7 "]), ["apo", "context7"])
-        self.assertEqual(vault_project._str_list(""), [])
-        self.assertEqual(vault_project._str_list(None), [])
+        self.assertEqual(host_projection._str_list("apo"), ["apo"])
+        self.assertEqual(host_projection._str_list(["apo", " context7 "]), ["apo", "context7"])
+        self.assertEqual(host_projection._str_list(""), [])
+        self.assertEqual(host_projection._str_list(None), [])
 
     def test_format_integrations_scalar_required(self):
-        line = vault_project.format_integrations_line(
+        line = host_projection.format_integrations_line(
             "meta",
             {"mcp": {"required": "apo", "expected": ["context7"]}, "cli": "gws"},
         )
@@ -44,18 +44,18 @@ class IntegrationsFormatTest(unittest.TestCase):
 
 class WriteHabitsProjectTest(unittest.TestCase):
     def test_normalize_note_types_empty_uses_floor(self):
-        listed, warnings = vault_project.normalize_note_types(None)
+        listed, warnings = host_projection.normalize_note_types(None)
         self.assertEqual(listed, [".json", ".md", ".mmd", ".yaml", ".yml"])
         self.assertEqual(warnings, [])
 
     def test_normalize_note_types_clamps_superset(self):
-        listed, warnings = vault_project.normalize_note_types([".md", ".json", ".py"])
+        listed, warnings = host_projection.normalize_note_types([".md", ".json", ".py"])
         self.assertEqual(listed, [".json", ".md"])
         self.assertFalse(any(".json" in w for w in warnings))
         self.assertTrue(any(".py" in w for w in warnings))
 
     def test_format_contribution_line_includes_note_types(self):
-        line = vault_project.format_contribution_line(
+        line = host_projection.format_contribution_line(
             "work",
             {"dialect": "obsidian-ofm", "note_types": [".md", ".yaml"]},
         )
@@ -92,7 +92,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertIn("Read-only", body)
         self.assertIn("| `compliance`", body)
         self.assertIn("| yes |", body)
@@ -100,7 +100,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
         self.assertIn("Mutators (`write_note`", body)
 
     def test_render_write_habit_lines_known_ids(self):
-        lines = vault_project._render_write_habit_lines(
+        lines = host_projection._render_write_habit_lines(
             [
                 ("folder_on_search", None),
                 ("patch_note_wire", None),
@@ -113,7 +113,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
         self.assertIn("request={action:", lines[2])
 
     def test_render_write_habit_lines_dialect_specific_ids(self):
-        lines = vault_project._render_write_habit_lines(
+        lines = host_projection._render_write_habit_lines(
             [("task_router_threads", None), ("filter_memory_type", None)]
         )
         self.assertEqual(len(lines), 2)
@@ -121,13 +121,13 @@ class WriteHabitsProjectTest(unittest.TestCase):
         self.assertIn("memory_type", lines[1])
 
     def test_render_write_habit_lines_inline_text_overrides_dict(self):
-        lines = vault_project._render_write_habit_lines(
+        lines = host_projection._render_write_habit_lines(
             [("custom_habit", "Do the custom thing.")]
         )
         self.assertEqual(lines, ["- **`custom_habit`:** Do the custom thing."])
 
     def test_render_write_habit_lines_unknown_id_falls_back(self):
-        lines = vault_project._render_write_habit_lines([("totally_unknown_id", None)])
+        lines = host_projection._render_write_habit_lines([("totally_unknown_id", None)])
         self.assertEqual(
             lines, ["- `totally_unknown_id` — see usage-contract / apo-write-api."]
         )
@@ -173,7 +173,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertIn("## Apo throughput", body)
         self.assertIn("Hard gate", body)
         self.assertIn("**One** `search_notes`", body)
@@ -185,7 +185,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             "desk": {"habits": {}},
             "desk_meta": {"source": "defaults", "path": None},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertIn("No `~/.apo/desk.yaml` found", body)
 
     def test_render_desk_body_omits_missing_desk_yaml_note_when_configured(self):
@@ -195,7 +195,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             "desk": {"habits": {}},
             "desk_meta": {"source": "file", "path": "/home/jeremy/.apo/desk.yaml"},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertNotIn("No `~/.apo/desk.yaml` found", body)
 
     def test_render_desk_body_surfaces_previously_dropped_contract_fields(self):
@@ -260,7 +260,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertIn("## Vault purpose & scope", body)
         self.assertIn("Personal PKB", body)
         self.assertIn("in scope: areas/; projects/", body)
@@ -304,8 +304,8 @@ class WriteHabitsProjectTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        index_body = vault_project.render_desk_index(merge)
-        full_body = vault_project.render_desk_body(merge)
+        index_body = host_projection.render_desk_index(merge)
+        full_body = host_projection.render_desk_body(merge)
         self.assertLess(len(index_body.encode("utf-8")), 2000)
         self.assertLess(len(index_body), len(full_body))
         # The tool-call directive is the load-bearing line — must be present
@@ -331,13 +331,13 @@ class WriteHabitsProjectTest(unittest.TestCase):
             "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": {}}},
             "desk": {"habits": {}},
         }
-        full = vault_project.project(merge)
-        indexed = vault_project.project(merge, mode="index")
+        full = host_projection.project(merge)
+        indexed = host_projection.project(merge, mode="index")
         self.assertEqual(full["mode"], "full")
         self.assertEqual(indexed["mode"], "index")
         self.assertLess(indexed["bytes"], full["bytes"])
-        self.assertEqual(full["body"], vault_project.render_desk_body(merge))
-        self.assertEqual(indexed["body"], vault_project.render_desk_index(merge))
+        self.assertEqual(full["body"], host_projection.render_desk_body(merge))
+        self.assertEqual(indexed["body"], host_projection.render_desk_index(merge))
 
     def test_render_desk_body_includes_write_workflow_section(self):
         merge = {
@@ -345,7 +345,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": {}}},
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertIn("## Write workflow", body)
         self.assertIn("search_notes", body)
         self.assertIn("expected_mtime", body)
@@ -358,7 +358,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             "vaults": {"atlas": {"root": "/vault/atlas", "default": True, "contracts": {}}},
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertNotIn("## Examples", body)
         self.assertNotIn("<example>", body)
 
@@ -376,7 +376,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertNotIn("## Contract inventory", body)
 
     def test_render_desk_body_front_loads_purpose_scope_and_floor(self):
@@ -400,7 +400,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         desk_pos = body.index("## Desk vaults")
         scope_pos = body.index("## Vault purpose & scope")
         floor_pos = body.index("## Frontmatter floor")
@@ -426,7 +426,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         open_pos = body.index("<vault-directives>")
         close_pos = body.index("</vault-directives>")
         directives_pos = body.index("## Vault directives")
@@ -455,7 +455,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertNotIn("## Key directives (recap)", body)
         self.assertIn("## Safety", body)
         self.assertIn("Search first.", body.split("## Vault directives")[1])
@@ -468,7 +468,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
                 for i in range(60)
             ]
         }
-        lines = vault_project.format_okf_path_rules_lines("atlas", okf, token_budget=20)
+        lines = host_projection.format_okf_path_rules_lines("atlas", okf, token_budget=20)
         self.assertLess(len(lines), 60)
         self.assertTrue(any("more — see okf-contract" in line for line in lines))
 
@@ -507,7 +507,7 @@ class ReadContractProjectTest(unittest.TestCase):
         }
 
     def test_format_read_routing_lines_basic(self):
-        lines = vault_project.format_read_routing_lines(
+        lines = host_projection.format_read_routing_lines(
             "atlas", self._read_data(), token_budget=None
         )
         text = "\n".join(lines)
@@ -522,9 +522,9 @@ class ReadContractProjectTest(unittest.TestCase):
         self.assertIn("`System`=authoritative", text)
 
     def test_format_read_routing_lines_empty_purposes_is_noop(self):
-        self.assertEqual(vault_project.format_read_routing_lines("atlas", {}, token_budget=None), [])
+        self.assertEqual(host_projection.format_read_routing_lines("atlas", {}, token_budget=None), [])
         self.assertEqual(
-            vault_project.format_read_routing_lines("atlas", {"purposes": {}}, token_budget=None),
+            host_projection.format_read_routing_lines("atlas", {"purposes": {}}, token_budget=None),
             [],
         )
 
@@ -535,7 +535,7 @@ class ReadContractProjectTest(unittest.TestCase):
                 for i in range(60)
             }
         }
-        lines = vault_project.format_read_routing_lines("atlas", read, token_budget=20)
+        lines = host_projection.format_read_routing_lines("atlas", read, token_budget=20)
         self.assertLess(len(lines), 60)
         self.assertTrue(any("more — see read-contract" in line for line in lines))
 
@@ -565,7 +565,7 @@ class ReadContractProjectTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        body = vault_project.render_desk_body(merge)
+        body = host_projection.render_desk_body(merge)
         self.assertIn("## Read routing", body)
         self.assertIn("`compliance`", body)
         read_pos = body.index("## Read routing")
@@ -616,8 +616,8 @@ class ReadContractProjectTest(unittest.TestCase):
             },
             "desk": {"habits": {}},
         }
-        body_without = vault_project.render_desk_body(merge_without)
-        body_with = vault_project.render_desk_body(merge_with)
+        body_without = host_projection.render_desk_body(merge_without)
+        body_with = host_projection.render_desk_body(merge_with)
         self.assertNotIn("## Read routing", body_without)
         self.assertIn("## Read routing", body_with)
         read_block_start = body_with.index("## Read routing")
@@ -652,11 +652,11 @@ class ReadContractProjectTest(unittest.TestCase):
                 "desk": {"habits": {}},
             }
 
-        body_a = vault_project.render_desk_body(_merge(data_a))
-        body_b = vault_project.render_desk_body(_merge(data_b))
+        body_a = host_projection.render_desk_body(_merge(data_a))
+        body_b = host_projection.render_desk_body(_merge(data_b))
         self.assertEqual(body_a, body_b)
         # And calling again with the same input is itself byte-identical.
-        self.assertEqual(body_a, vault_project.render_desk_body(_merge(data_a)))
+        self.assertEqual(body_a, host_projection.render_desk_body(_merge(data_a)))
 
 
 class DiscoverContractsTest(unittest.TestCase):
