@@ -1327,7 +1327,7 @@ def render_desk_body(merge: dict[str, Any]) -> str:
         lines.append(
             f"On consequential turns (and new durable facts when enabled): domain note in the owning vault "
             f"({domain_s}); **also** `append_note(..., vault=\"{sv}\")` on `{sp}` → `## {sh}` "
-            f"with `YYYY-MM-DD HH:MM ET` (process turns: `Tooling:`). "
+            f"with `YYYY-MM-DD HH:MM` local time (process turns: `Tooling:`). "
             f"Do not write session logs into another vault's daily notes."
         )
     else:
