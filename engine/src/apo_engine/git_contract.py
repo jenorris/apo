@@ -60,7 +60,7 @@ _LOG_FORMAT = "%H%x00%an%x00%aI%x00%s%x1e"
 
 def resolve_git_contract_path(vault_root: Path, explicit: str | None = None) -> Path | None:
     if explicit is None:
-        explicit = os.environ.get("APO_GIT_CONTRACT", "").strip()
+        explicit = vc.single_vault_override(os.environ.get("APO_GIT_CONTRACT", "").strip())
     if explicit:
         p = Path(explicit).expanduser()
         return p if p.is_file() else None

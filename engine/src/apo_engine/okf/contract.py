@@ -161,7 +161,9 @@ def utc_now() -> str:
 
 def resolve_contract_path(vault_root: Path, explicit: str | None = None) -> Path | None:
     if explicit is None:
-        explicit = env_alias("APO_OKF_CONTRACT", "APO_OKF_PROFILE")
+        from apo_engine.vault_contracts import single_vault_override
+
+        explicit = single_vault_override(env_alias("APO_OKF_CONTRACT", "APO_OKF_PROFILE"))
     if explicit:
         p = Path(explicit).expanduser()
         return p if p.is_file() else None

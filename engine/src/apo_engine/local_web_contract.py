@@ -51,7 +51,7 @@ KNOWN_RENDER_KEYS = frozenset(
 
 def resolve_local_web_contract_path(vault_root: Path, explicit: str | None = None) -> Path | None:
     if explicit is None:
-        explicit = os.environ.get("APO_LOCAL_WEB_CONTRACT", "").strip()
+        explicit = vc.single_vault_override(os.environ.get("APO_LOCAL_WEB_CONTRACT", "").strip())
     if explicit:
         p = Path(explicit).expanduser()
         return p if p.is_file() else None

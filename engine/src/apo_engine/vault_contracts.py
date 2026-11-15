@@ -53,6 +53,24 @@ class ContractParse:
     findings: tuple[dict[str, str], ...] = ()
 
 
+def single_vault_override(value: str) -> str:
+    """Return an ``APO_*_CONTRACT`` env path only when exactly one vault is configured.
+
+    One env path cannot be right for several vaults, so with more than one vault
+    the override is ignored and each vault resolves its own ``system/contracts/``.
+    If the registry cannot be loaded, the override is kept (legacy behavior).
+    """
+    if not value:
+        return ""
+    from apo_engine import vaults
+
+    try:
+        _default, bindings = vaults.load_bindings()
+    except Exception:
+        return value
+    return value if len(bindings) <= 1 else ""
+
+
 def load_yaml_cached(path: Path) -> dict[str, Any] | None:
     """Parse a contract YAML mapping, cached on ``(path, mtime_ns, size)``.
 
