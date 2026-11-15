@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -87,12 +88,17 @@ def test_no_replacement_god_module() -> None:
         indexing: 1500,
         index_db: 1500,
         embeddings: 1500,
-        retrieval: 1800,
+        # retrieval.py is 1848 lines. Until the wiring was removed, every domain
+        # module's ``__file__`` was overwritten with indexing.py's, so this guard
+        # measured indexing.py seven times. It now measures the real files.
+        retrieval: 1850,
         chunking: 1500,
         content: 1500,
         link_index: 1500,
     }
     for module, limit in limits.items():
+        assert module.__name__.startswith("apo_engine."), module.__name__
+        assert Path(module.__file__).stem == module.__name__.rsplit(".", 1)[-1]
         lines = Path(module.__file__).read_text(encoding="utf-8").count("\n") + 1
         assert lines <= limit, (module.__name__, lines, limit)
 
@@ -149,3 +155,77 @@ def test_ranking_does_not_import_core() -> None:
         )
         for node in ast.walk(tree)
     )
+
+
+_STANDALONE_MODULES = (
+    "content",
+    "chunking",
+    "embeddings",
+    "index_db",
+    "link_index",
+    "retrieval",
+    "ranking",
+)
+
+_STANDALONE_SCRIPT = """
+import builtins
+import importlib
+import symtable
+import sys
+from pathlib import Path
+
+module = importlib.import_module("apo_engine." + sys.argv[1])
+# Neither the injection site nor the compatibility facade may be needed.
+assert "apo_engine.indexing" not in sys.modules, "indexing was imported"
+assert "apo_engine.core" not in sys.modules, "core was imported"
+
+source = Path(module.__file__).read_text(encoding="utf-8")
+missing = set()
+
+def walk(table):
+    for symbol in table.get_symbols():
+        name = symbol.get_name()
+        in_function = table.get_type() != "module"
+        used = symbol.is_global() if in_function else True
+        if used and symbol.is_referenced():
+            if not hasattr(module, name) and not hasattr(builtins, name):
+                missing.add(name)
+    for child in table.get_children():
+        walk(child)
+
+walk(symtable.symtable(source, module.__file__, "exec"))
+assert not missing, sorted(missing)
+"""
+
+
+@pytest.mark.parametrize("name", _STANDALONE_MODULES)
+def test_domain_module_imports_alone_and_resolves_its_names(name: str) -> None:
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path))
+    result = subprocess.run(
+        [sys.executable, "-c", _STANDALONE_SCRIPT, name],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_retrieval_and_ranking_dependencies_are_ordinary_imports() -> None:
+    assert retrieval.reader_connect is index_db.reader_connect
+    assert retrieval.query_embed is embeddings.query_embed
+    assert retrieval.RRF_K == index_db.RRF_K
+    assert retrieval.ranking is ranking
+    assert retrieval._FM_KEY_SAFE is content._FM_KEY_SAFE
+    assert retrieval._scoped_vector_hits is index_db._scoped_vector_hits
+    assert retrieval._collapse_part_hits is index_db._collapse_part_hits
+    assert index_db.embed is embeddings.embed
+    assert link_index.writer_connect is index_db.writer_connect
+    assert chunking._index_text_for_embedding is retrieval._index_text_for_embedding
+
+
+def test_module_wiring_injection_is_gone() -> None:
+    assert not hasattr(indexing, "_wire_modules")
+    for module in (chunking, embeddings, index_db, link_index, retrieval):
+        # No domain module carries a copy of another module's namespace.
+        assert "index_file" not in module.__dict__, module.__name__
+        assert "_VAULT_FLUSH_CHUNKS" not in module.__dict__, module.__name__

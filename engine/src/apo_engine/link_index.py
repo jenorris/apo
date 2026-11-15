@@ -33,6 +33,8 @@ except ImportError:
     _np = None
 
 from . import config, links, oversize, ref_catalog, rerank, table_markdown, vaults
+from .content import _known_vault_ids, note_catalog_json
+from .index_db import reader_connect, writer_connect
 from .index_models import Hit, IndexStats, QueueStats
 
 def _note_links(

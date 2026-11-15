@@ -34,7 +34,10 @@ except ImportError:
 
 from . import config, links, oversize, ref_catalog, rerank, table_markdown, vaults
 from .index_models import Hit, IndexStats, QueueStats
+from .content import body_start_line, note_frontmatter
+from .content import body_start_line as _body_start_line, content_hash as _content_hash
 from .markdown_sections import BREADCRUMB_SEP, split_sections
+from .retrieval import _index_text_for_embedding
 
 def slice_lines(
     text: str, start_char: int, end_char: int, base_line: int

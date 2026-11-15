@@ -33,6 +33,12 @@ except ImportError:
     _np = None
 
 from . import config, links, oversize, ref_catalog, rerank, table_markdown, vaults
+from .content import compile_ignore as _compile_ignore
+from .content import content_hash as _content_hash
+from .content import escape_like as _escape_like
+from .content import file_hash as _file_hash
+from .content import is_ignored as _is_ignored
+from .embeddings import _embed_commit_batch, embed, iter_embedded_in_order
 from .index_models import Hit, IndexStats, QueueStats
 
 # Schema bootstrap once per index path per process.
@@ -259,6 +265,9 @@ def connect(path: Path | None = None, *, read_only: bool = False) -> sqlite3.Con
         )
         _ensure_chunk_columns(db)
         _ensure_files_columns(db)
+        # Call-time import: link_index imports this module at load time.
+        from .link_index import _ensure_link_columns
+
         _ensure_link_columns(db)
         _schema_ready.add(key)
     elif read_only and f"{key}#ro" not in _schema_ready:
@@ -419,6 +428,9 @@ def ensure_fts(db: sqlite3.Connection) -> None:
     row = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
     if row and row[0] == "1":
         return
+    # Call-time import: retrieval imports this module at load time.
+    from .retrieval import _index_text_for_embedding
+
     db.create_function("_apo_index_text", 2, _index_text_for_embedding, deterministic=True)
     db.execute("DELETE FROM chunks_fts")
     db.execute(
@@ -439,6 +451,9 @@ def _insert_pending_chunks(
     Batches via executemany with explicit ids so vec_chunks / FTS share the same rowids
     without a per-row lastrowid round-trip.
     """
+    # Call-time import: retrieval imports this module at load time.
+    from .retrieval import _index_text_for_embedding
+
     valid = [(row, vec) for row, vec in zip(pending, vectors) if vec is not None]
     if not valid:
         return 0
@@ -673,6 +688,9 @@ def _embed_and_store_pending(
     """
     if not pending:
         return 0, set()
+    # Call-time import: retrieval imports this module at load time.
+    from .retrieval import _pending_index_text
+
     total = len(pending)
     batch = _embed_commit_batch()
     if verbose:

@@ -38,17 +38,45 @@ from .note_format import has_blocked_dot_segment
 
 from . import content, chunking, embeddings, index_db, link_index, retrieval
 from . import ranking
+from .chunking import _markdown_chunk_rows, _mmd_chunk_rows, compute_chunk_id
+from .content import _known_vault_ids, note_catalog_json
+from .content import compile_ignore as _compile_ignore
+from .content import content_hash as _content_hash
+from .content import file_hash as _file_hash
+from .content import is_ignored as _is_ignored
+from .embeddings import _embed_commit_batch, embed
+from .index_db import (
+    _embed_and_store_pending,
+    _embed_retry_backoff_active,
+    _finalize_index_writes,
+    _hash_algo_ready,
+    _index_key,
+    _insert_pending_chunks,
+    _is_embed_quarantined,
+    _iter_notes,
+    _load_ignore,
+    _record_embed_drops,
+    _schema_ready,
+    _vectors_by_content_hash,
+    writer_close,
+    writer_connect,
+    writer_reset,
+)
+from .retrieval import _pending_index_text
+from .link_index import (
+    _insert_links,
+    _mark_links_current,
+    _note_links,
+    backfill_links,
+    links_backfill_needed,
+    resolve_links,
+)
 
 _OWNED_MODULES = (content, chunking, embeddings, index_db, link_index, retrieval)
 # Full-vault scans embed + stamp in groups of about this many chunks (bounds peak memory).
 _VAULT_FLUSH_CHUNKS = 2000
 
-def _embed_commit_batch() -> int:
-    try:
-        value = int(getattr(config, "EMBED_COMMIT_BATCH", 64))
-    except (TypeError, ValueError):
-        value = 64
-    return max(1, value)
+
 def index_vault(rebuild: bool = False, limit: int | None = None, verbose: bool = True) -> IndexStats:
     t0 = time.time()
     root = vaults.notes_root()
@@ -657,33 +685,6 @@ def process_queues(
     return out
 
 
-def _wire_modules() -> None:
-    context = dict(globals())
-    context["ranking"] = ranking
-    for module in _OWNED_MODULES:
-        for name in module.__owned__:
-            context[name] = getattr(module, name)
-    context.update(
-        {
-            "_body_start_line": content.body_start_line,
-            "_compile_ignore": content.compile_ignore,
-            "_content_hash": content.content_hash,
-            "_file_hash": content.file_hash,
-            "_is_ignored": content.is_ignored,
-            "_has_nan": embeddings.has_nan,
-            "_normalize_query": embeddings.normalize_query,
-            "_escape_like": retrieval.escape_like,
-            "_fts_query": retrieval.fts_query,
-        }
-    )
-    for module in _OWNED_MODULES:
-        module.__dict__.update(context)
-    globals().update(context)
-    for module in _OWNED_MODULES:
-        for name in module.__owned__:
-            globals()[name] = getattr(module, name)
-
-
 def _set_compat_attr(name: str, value: object) -> None:
     globals()[name] = value
     for module in _OWNED_MODULES:
@@ -691,4 +692,14 @@ def _set_compat_attr(name: str, value: object) -> None:
             setattr(module, name, value)
 
 
-_wire_modules()
+# Compatibility surface for the ``core`` facade: re-export every name the domain
+# modules own, plus the private aliases older callers reach through ``core``.
+_body_start_line = content.body_start_line
+_has_nan = embeddings.has_nan
+_normalize_query = embeddings.normalize_query
+_escape_like = retrieval.escape_like
+_fts_query = retrieval.fts_query
+for _module in _OWNED_MODULES:
+    for _name in _module.__owned__:
+        globals()[_name] = getattr(_module, _name)
+del _module, _name
