@@ -1,0 +1,1311 @@
+"""Render desk policy for agent hosts, and compile closed-vocab grammars.
+
+Two renderers share this module because both turn a vault's parsed contracts
+(see ``vault_project`` for discovery and typed accessors) into host-facing text:
+
+- Desk markdown (``project`` / ``render_desk_body`` / ``render_desk_index``) for
+  Cursor and Claude rule, skill, or AGENTS surfaces. Return-only: the agent
+  places the text.
+- GBNF grammars (``compile_vault_grammar``) for local-model hosts such as Hermes
+  that constrain write and search calls to one vault's declared folders and types.
+
+Deterministic — no LLM. Callers: ``ops.vault_op`` (``project`` and ``grammar``
+actions) and, through ``vault_project.project_live``, the ``desk-project`` CLI.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from apo_engine.note_format import NOTE_SUFFIXES
+from apo_engine.vault_project import (
+    _abs_pointer,
+    _contract_data,
+    _usage_contribution,
+    _usage_data,
+    _usage_integrations,
+    _usage_pointers,
+    _usage_write_habits,
+)
+
+# Rendered both for the desk.yaml ``habits.no_direct_fs_mutate`` switch and the
+# usage-contract ``write_habits`` id of the same name (one source, no drift).
+_NO_DIRECT_FS_MUTATE_LINE = (
+    "- **Never mutate vault files directly** (host FS write/edit/shell under any Apo vault "
+    "root) — go through `write_note` / `append_note` / `patch_note` / `patch_table`. Direct "
+    "writes bypass the write guard, contract checks, `expected_mtime`, and telemetry."
+)
+
+
+# Deterministic lines for usage-contract ``write_habits`` ids (projected into apo-desk).
+_WRITE_HABIT_LINES: dict[str, str] = {
+    "prefer_append_patch": (
+        "- Prefer `append_note` / `patch_note` over full-file rewrites; archive via `patch_note` place op."
+    ),
+    "folder_on_search": (
+        "- **Hard gate:** first `search_notes` in a turn **must** include `folder=` when PARA "
+        "bucket is inferable (threads → `areas/threads`, config → `system/config`, etc.). "
+        "Target ≥80% `folder_set/search_notes` in 7d rollups (`vault(request={action: \"stats\"})`)."
+    ),
+    "expected_mtime_on_followup": (
+        "- On **second+** write to the same path in one session, pass `expected_mtime` from the "
+        "prior hit's float `mtime`; on `stale_write`, re-read and reapply."
+    ),
+    "filter_okf_type": (
+        "- When a vault has an OKF contract: stamp `okf_type` / `description` / `timestamp` on "
+        "concept writes; prefer `filter_notes(where={\"okf_type\": \"…\"}, folder=…)`."
+    ),
+    "patch_note_wire": (
+        "- **`patch_note` wire:** every op needs `\"op\"`; `set_field` uses `field=` not `path`; "
+        "`replace_text` uses `find`/`replace` not `old_text`/`new_text`; section ops use `text=` "
+        "not `content=`; batch uses `items=[{path, ops}]`."
+    ),
+    "chunk_hash_surgical": (
+        "- Search → write via `chunk_hash` / `heading` from hits — skip `read_note` when an "
+        "anchor exists (`append_note(chunk_hash=…)` or patch with `chunk_hash`)."
+    ),
+    "dedupe_search": (
+        "- **One** `search_notes` per distinct query per turn — no parallel duplicate searches; "
+        "batch facets with `folder=` or widen `limit=` instead."
+    ),
+    "vault_api_routing": (
+        "- **`vault` tool:** one `request={action: list|contracts|describe|merge|project|stats|lint, "
+        "…}` — not flat kwargs, and not `vault(name=…)`."
+    ),
+    "end_of_turn_domain_writes": (
+        "- **End-of-turn gate:** on consequential turns (decisions, status changes, new/corrected "
+        "facts, completed tasks), write the **domain note** in the default/owning vault before the "
+        "final reply — do not defer to end-of-session."
+    ),
+    "session_audit_telemetry_only": (
+        "- Session audit is **automatic OTel** (Cursor hooks → Jaeger via otlp-mcp) — do **not** "
+        "`append_note` to `vault=sessions` unless desk `dual_write.enabled` is explicitly true."
+    ),
+    "address_flaws_on_write": (
+        "- After successful writes / `vault(request={action: \"lint\"})`, inspect **`flaws[]`** (corpus quality — "
+        "not `tip`/`warning`). For `remediation: llm`, apply `suggested_op` once per finding per "
+        "turn (`value: null` means supply content). For `human`, surface to operator. "
+        "Stop if the same `code`+`path`+`evidence` reappears. Soft OKF may dual-emit prose "
+        "`warnings` during the compat window — prefer branching on `flaws[].code`."
+    ),
+    "lint_before_conclude": (
+        "- Before concluding a large vault hygiene pass, run `vault(request={action: \"lint\", folder: …})` "
+        "and drain `remediation: llm` findings within budget — do not unbounded lint→fix loops."
+    ),
+    "task_router_threads": (
+        "- **Task routing:** tasks are threads with status action-needed. Create or update "
+        "`areas/threads/<slug>.md` (`okf_type: Thread`, `status: active`, priority, "
+        "`## Next action`) — do **not** create flat `tasks.md` entries."
+    ),
+    "filter_memory_type": (
+        "- When a vault tags notes by `memory_type` instead of `okf_type`: stamp "
+        "`memory_type` / `description` / `timestamp` on concept writes; prefer "
+        "`filter_notes(where={\"memory_type\": \"…\"}, folder=…)`."
+    ),
+    "mutator_note_types_only": (
+        "- Mutators (`write_note` / `patch_note` / `append_note` / `delete_note` / place copy) "
+        "accept only note suffixes listed in Contribution `note_types` (engine floor "
+        "`.md` / `.yaml` / `.yml` / `.mmd`). Scripts and config files → host filesystem, not Apo."
+    ),
+    "no_direct_fs_mutate": _NO_DIRECT_FS_MUTATE_LINE,
+    "fidelity_before_conclude": (
+        "- **Fidelity gate:** before concluding a large multi-step task, compare the draft "
+        "against the approved plan / richest in-session artifacts (subagent review, surgical "
+        "patches only) — skill `fidelity-review`; skip for trivia and drafts awaiting approval."
+    ),
+    "known_path_current_first": (
+        "- When the vault declares known paths (e.g. `current.yaml`), `read_note(path=…)` that "
+        "path **first** — do not `search_notes` for state the contract already locates."
+    ),
+}
+
+
+def project_guidance() -> str:
+    """Non-prescriptive placement hint — agent chooses surface and frontmatter."""
+    return (
+        "Return-only desk policy. Place `body` in whichever instruction surface your "
+        "agent host already uses (rule, skill, AGENTS section, etc.). Apo does not "
+        "prescribe paths or frontmatter. Re-run `vault(request={action: \"project\"})` (CLI: "
+        "`apo-engine desk-project` — same operation) after `~/.apo/desk.yaml` or "
+        "vault `system/contracts/` changes."
+    )
+
+
+def _md_link(label: str, path: str) -> str:
+    if path.startswith("/"):
+        return f"[{label}]({path})"
+    return f"{label}: `{path}`"
+
+
+def format_purpose_scope_lines(name: str, data: dict[str, Any]) -> list[str]:
+    """Lines for apo-desk Vault purpose & scope section (deterministic)."""
+    purpose = str(data.get("purpose") or "").strip()
+    # First sentence only — full purpose can run to a paragraph; deep prose
+    # belongs in a pointer, not the compiled skill.
+    first_sentence = purpose.split(". ")[0].split("\n")[0].strip().rstrip(".")
+    in_scope = _str_list(data.get("in_scope"))
+    out_scope = _str_list(data.get("out_scope"))
+    if not first_sentence and not in_scope and not out_scope:
+        return []
+    bits = [f"- `{name}`: " + (first_sentence + "." if first_sentence else "")]
+    if in_scope:
+        bits.append(f"  - in scope: {'; '.join(in_scope)}")
+    if out_scope:
+        bits.append(f"  - out of scope: {'; '.join(out_scope)}")
+    return bits
+
+
+def format_layout_line(name: str, layout: dict[str, Any]) -> str | None:
+    """One-liner for apo-desk Folder layout section (deterministic)."""
+    if not isinstance(layout, dict) or not layout:
+        return None
+    bits = [
+        f"`{folder}`={str(rule).strip()}"
+        for folder, rule in sorted(layout.items())
+        if str(rule or "").strip()
+    ]
+    if not bits:
+        return None
+    return f"- `{name}`: " + "; ".join(bits)
+
+
+def format_frontmatter_floor_line(name: str, keys: list[str]) -> str | None:
+    """One-liner for apo-desk Frontmatter floor section (deterministic)."""
+    if not keys:
+        return None
+    return f"- `{name}`: " + ", ".join(f"`{k}`" for k in keys)
+
+
+def format_directive_lines(name: str, data: dict[str, Any]) -> list[str]:
+    """Lines for apo-desk Vault directives section — usage-contract prose fields
+    ``consult_vault_first`` / ``task_routing`` (deterministic, verbatim)."""
+    lines: list[str] = []
+    consult = str(data.get("consult_vault_first") or "").strip()
+    if consult:
+        lines.append(f"- `{name}` — consult first: {' '.join(consult.split())}")
+    routing = str(data.get("task_routing") or "").strip()
+    if routing:
+        lines.append(f"- `{name}` — task routing: {' '.join(routing.split())}")
+    return lines
+
+
+def format_okf_path_rules_lines(
+    name: str, okf: dict[str, Any], *, token_budget: int | None
+) -> list[str]:
+    """Table rows for apo-desk Type routing section from okf-contract ``path_rules``.
+
+    Truncated to fit ``token_budget`` (rough chars/4 estimate) when set — the
+    fullest contract in practice (atlas: ~30 rules) can otherwise dominate the
+    compiled skill on its own.
+    """
+    rules = okf.get("path_rules")
+    if not isinstance(rules, list) or not rules:
+        return []
+    rows: list[str] = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        match = str(rule.get("match") or "").strip()
+        if not match:
+            continue
+        enforcement = str(rule.get("enforcement") or "").strip()
+        okf_type = str(rule.get("okf_type") or "").strip() or "—"
+        required = _str_list(rule.get("required_fields"))
+        req_s = ", ".join(f"`{f}`" for f in required) if required else "—"
+        rows.append(f"| `{match}` | {enforcement or '—'} | {okf_type} | {req_s} |")
+    if not rows:
+        return []
+    header = [f"### `{name}`", "", "| Match | Enforcement | Type | Required fields |", "|---|---|---|---|"]
+    if token_budget:
+        budget_chars = token_budget * 4
+        kept: list[str] = []
+        used = sum(len(line) for line in header)
+        for row in rows:
+            used += len(row) + 1
+            if used > budget_chars and kept:
+                remaining = len(rows) - len(kept)
+                kept.append(f"| … | | | +{remaining} more — see okf-contract |")
+                break
+            kept.append(row)
+        rows = kept
+    return header + rows + [""]
+
+
+def _gbnf_literal(value: str) -> str:
+    """Escape a value for embedding inside a GBNF double-quoted literal."""
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _gbnf_closed_string_rule(rule_name: str, values: list[str], *, fallback: str) -> str:
+    """``name ::= "\\"" ( "v1" | "v2" | ... ) "\\""`` — a closed-vocab JSON string rule."""
+    vals = [v for v in values if str(v).strip()] or [fallback]
+    alts = " | ".join('"' + _gbnf_literal(v) + '"' for v in vals)
+    return rule_name + r' ::= "\"" ( ' + alts + r' ) "\""'
+
+
+def _grammar_vocab(
+    okf: dict[str, Any], usage: dict[str, Any], *, top_level_dirs: list[str]
+) -> tuple[list[str], list[str]]:
+    """Shared closed-vocab extraction for both grammar ops: (folders, okf_types).
+
+    Folders come from usage-contract ``layout`` (the vault's own declared PARA
+    buckets); okf_types come from okf-contract ``path_rules``. Falls back to
+    this vault's actual top-level directories / declared default_okf_type when
+    a contract is absent or empty, so ``grammar`` never emits an empty (and
+    therefore invalid) GBNF alternation.
+    """
+    path_rules = okf.get("path_rules") if isinstance(okf.get("path_rules"), list) else []
+    okf_types = sorted(
+        {
+            str(r.get("okf_type")).strip()
+            for r in path_rules
+            if isinstance(r, dict) and str(r.get("okf_type") or "").strip()
+        }
+    )
+    if not okf_types:
+        okf_types = [str(okf.get("default_okf_type") or "Note").strip() or "Note"]
+
+    layout = usage.get("layout") if isinstance(usage.get("layout"), dict) else {}
+    folders = sorted(f for f in layout.keys() if str(f).strip())
+    if not folders:
+        folders = list(top_level_dirs) or ["."]
+
+    return folders, okf_types
+
+
+def compile_write_grammar(
+    okf: dict[str, Any], usage: dict[str, Any], *, top_level_dirs: list[str]
+) -> dict[str, Any]:
+    """Compile the structural-envelope GBNF grammar for a write/append/patch/replace.
+
+    Closed vocab (``folder``, ``okf-type``) is templated from this vault's own
+    contracts, so the grammar can only ever reference a folder or type this
+    vault actually declares. ``title``/``path``/``content``/``text``/field
+    values stay shape-checked free strings, never enumerated — a fresh note's
+    title, its content, an existing note's exact path, and what to append to
+    it can't be known ahead of time the way a folder or type can. Only
+    ``write`` carries ``target``/``okf-type`` (it's creating a note under a
+    known vault taxonomy); ``append``/``patch``/``replace`` address an
+    *existing* note by ``path`` alone, matching the real write/append/patch
+    retired endpoints — a folder slot there would be redundant with, and could
+    disagree with, ``path``. Deliberately has no ``tags`` or ``vault`` slot:
+    Apo has no authoritative controlled tag vocabulary to enumerate, and a
+    grammar is compiled for one already-chosen vault at a time — mixing
+    another vault's folders/types in would cross-pollinate contracts, which
+    is against vault policy.
+
+    ``replace`` is distinct from ``patch``: ``patch``'s ``field-set`` only
+    ever edits the small closed set of frontmatter keys in ``field-key``
+    (never free-text body content); ``replace`` swaps an existing note's
+    *body* wholesale. Both address an existing note by ``path`` alone. A
+    caller applying ``replace`` MUST read the note first to preserve its
+    existing frontmatter before writing — this grammar has no read step and
+    cannot enforce that; it only guarantees the ``path``/``content`` shape.
+    (See ``~/.hermes/profiles/*/plugins/apo/__init__.py::_tool_write_guided``
+    for the read-then-write caller that upholds this.)
+    """
+    folders, okf_types = _grammar_vocab(okf, usage, top_level_dirs=top_level_dirs)
+    folder_rule = _gbnf_closed_string_rule("folder-value", folders, fallback=".")
+    okf_type_rule = _gbnf_closed_string_rule("okf-type-value", okf_types, fallback="Note")
+
+    grammar = "\n".join(
+        [
+            "root ::= ws command",
+            "",
+            'command ::= "(" ws (write-command | append-command | patch-command | replace-command) ws ")"',
+            "",
+            'write-command   ::= "write" ws target ws okf-type ws title ws content',
+            'append-command  ::= "append" ws path ws text-field',
+            'patch-command   ::= "patch" ws path ws field-set',
+            'replace-command ::= "replace" ws path ws content',
+            "",
+            'target ::= "(" ws "folder" ws folder-value ws ")"',
+            "",
+            'okf-type   ::= "(" ws "okf-type" ws okf-type-value ws ")"',
+            'title      ::= "(" ws "title" ws free-string ws ")"',
+            'path       ::= "(" ws "path" ws free-string ws ")"',
+            'content    ::= "(" ws "content" ws free-string ws ")"',
+            'text-field ::= "(" ws "text" ws free-string ws ")"',
+            "",
+            'field-set ::= "(" ws "fields" ws field (ws field)* ws ")"',
+            'field     ::= "(" ws field-key ws free-string ws ")"',
+            "",
+            folder_rule,
+            okf_type_rule,
+            'field-key ::= "status" | "due" | "priority" | "description"',
+            "",
+            r'free-string ::= "\"" char* "\""',
+            r'char        ::= [^"\\] | "\\" ["\\/bfnrt]',
+            "",
+            r"ws ::= [ \t\n]*",
+        ]
+    )
+    return {"grammar": grammar, "folders": folders, "okf_types": okf_types}
+
+
+def compile_query_grammar(
+    okf: dict[str, Any], usage: dict[str, Any], *, top_level_dirs: list[str]
+) -> dict[str, Any]:
+    """Compile the search GBNF grammar for this vault's ``apo_filter_notes``
+    shape: ``folder=`` scope (a top-level parameter) plus an optional
+    ``where=`` frontmatter predicate — NOT a single flat predicate. Folder is
+    a directory scope, not a frontmatter field, and the real filter API keeps
+    them separate; earlier drafts of this grammar conflated the two into one
+    ``where=``-style eq-field, which would have produced calls
+    ``apo_filter_notes`` doesn't actually accept that shape for.
+
+    Lower stakes than the write grammar (a bad query returns wrong/empty
+    results, never mutates the vault), so kept intentionally shallow: at
+    least one of folder/where must be present (an empty search is a
+    degenerate "list everything" case, allowed by the real API but not
+    useful as this tool's only output), and ``where`` stays flat —
+    field/operator/value triples, no nesting. ``okf_type`` is the only closed
+    ``where`` field for now: it's the one frontmatter key with an
+    authoritative enum (okf-contract ``path_rules``); other floor fields like
+    ``status`` have no declared value set to enumerate, so they're left out
+    rather than fabricating one — same discipline as the write grammar's
+    ``tags``/``vault`` omissions.
+    """
+    folders, okf_types = _grammar_vocab(okf, usage, top_level_dirs=top_level_dirs)
+    folder_rule = _gbnf_closed_string_rule("folder-value", folders, fallback=".")
+    okf_type_rule = _gbnf_closed_string_rule("okf-type-value", okf_types, fallback="Note")
+
+    grammar = "\n".join(
+        [
+            "root ::= ws command",
+            "",
+            'command     ::= "(" ws "search" ws search-body ws ")"',
+            "search-body ::= (folder-part ws where-part) | folder-part | where-part",
+            "",
+            'folder-part ::= "(" ws "folder" ws folder-value ws ")"',
+            'where-part  ::= "(" ws "where" ws clause (ws clause)* ws ")"',
+            'clause      ::= "(" ws (eq-clause | cmp-clause) ws ")"',
+            "",
+            'eq-clause  ::= ("eq" | "ne") ws eq-field ws eq-value',
+            'cmp-clause ::= ("lt" | "lte" | "gt" | "gte") ws date-field ws date-value',
+            "",
+            'eq-field   ::= "okf_type"',
+            'date-field ::= "created" | "modified"',
+            "",
+            "eq-value ::= okf-type-value",
+            "",
+            folder_rule,
+            okf_type_rule,
+            "",
+            r'date-value ::= "\"" digit digit digit digit "-" digit digit "-" digit digit "\""',
+            "digit      ::= [0-9]",
+            "",
+            r"ws ::= [ \t\n]*",
+        ]
+    )
+    return {"grammar": grammar, "folders": folders, "okf_types": okf_types}
+
+
+def compile_vault_grammar(
+    row: dict[str, Any], op: str, *, top_level_dirs: list[str]
+) -> dict[str, Any]:
+    """Dispatch to ``compile_write_grammar``/``compile_query_grammar`` from a
+    ``vault_op``-shaped ``row`` (the same ``{"contracts": {...}}`` shape
+    ``_contract_data`` reads elsewhere in this module).
+    """
+    okf = _contract_data(row, "okf-contract") or {}
+    usage = _contract_data(row, "usage-contract") or {}
+    if op == "query":
+        return compile_query_grammar(okf, usage, top_level_dirs=top_level_dirs)
+    return compile_write_grammar(okf, usage, top_level_dirs=top_level_dirs)
+
+
+def format_read_routing_lines(
+    name: str, read: dict[str, Any], *, token_budget: int | None
+) -> list[str]:
+    """Table rows for apo-desk Read routing section from read-contract ``purposes``.
+
+    Mirrors ``format_okf_path_rules_lines`` layout/truncation — the two routing
+    tables read the same way. okf Type routing answers "what type + fields for
+    this note"; this answers "what to read for this question, in what order,
+    and how much to trust it" (read-contract is additive, keyed by the same
+    ``okf_type``). Vaults without a read-contract never call this.
+    """
+    purposes = read.get("purposes")
+    rows: list[str] = []
+    if isinstance(purposes, dict):
+        for pname in sorted(purposes):
+            prow = purposes[pname]
+            if not isinstance(prow, dict):
+                continue
+            entry = prow.get("entry") if isinstance(prow.get("entry"), dict) else {}
+            okf_type = str(entry.get("okf_type") or "").strip() or "—"
+            where = entry.get("where")
+            where_s = (
+                json.dumps(where, sort_keys=True) if isinstance(where, dict) and where else ""
+            )
+            order_by = str(entry.get("order_by") or "").strip()
+            if order_by:
+                where_s = f"{where_s}; order_by {order_by}" if where_s else f"order_by {order_by}"
+            filter_s = where_s or "—"
+            read_order = _str_list(prow.get("read_order"))
+            order_s = " → ".join(f"`{t}`" for t in read_order) if read_order else "—"
+            rows.append(f"| `{pname}` | `{okf_type}` | {filter_s} | {order_s} |")
+    if not rows:
+        return []
+    header = [
+        f"### `{name}`",
+        "",
+        "| Purpose | Entry type | Filter | Read order |",
+        "|---|---|---|---|",
+    ]
+    if token_budget:
+        budget_chars = token_budget * 4
+        kept: list[str] = []
+        used = sum(len(line) for line in header)
+        for row in rows:
+            used += len(row) + 1
+            if used > budget_chars and kept:
+                remaining = len(rows) - len(kept)
+                kept.append(f"| … | | | +{remaining} more — see read-contract |")
+                break
+            kept.append(row)
+        rows = kept
+
+    lines = header + rows + [""]
+
+    authority = read.get("type_authority")
+    if isinstance(authority, dict) and authority:
+        bits: list[str] = []
+        for tname in sorted(authority):
+            arow = authority[tname]
+            if not isinstance(arow, dict):
+                continue
+            auth = str(arow.get("authority") or "").strip()
+            if not auth:
+                continue
+            hint = str(arow.get("verify_hint") or "").strip()
+            verify = f" (verify: {hint})" if arow.get("verify") and hint else (
+                "; verify" if arow.get("verify") else ""
+            )
+            bits.append(f"`{tname}`={auth}{verify}")
+        if bits:
+            lines.append(f"Type authority: {'; '.join(bits)}")
+            lines.append("")
+    return lines
+
+
+def format_git_safety_lines(name: str, git: dict[str, Any]) -> list[str]:
+    """Lines for apo-desk Git safety section from git-contract (deterministic)."""
+    lines: list[str] = []
+    never_commit = _str_list(git.get("never_commit"))
+    sync = git.get("sync") if isinstance(git.get("sync"), dict) else {}
+    on_block = str(sync.get("on_block_command") or "").strip()
+    restore = git.get("restore") if isinstance(git.get("restore"), dict) else {}
+    owner = str(restore.get("owner") or "").strip()
+    drill = str(restore.get("drill") or "").strip()
+    bits: list[str] = []
+    if never_commit:
+        bits.append("never_commit=" + ", ".join(f"`{g}`" for g in never_commit))
+    if on_block:
+        bits.append(f"on_block=`{on_block}`")
+    if owner or drill:
+        bits.append(f"restore={owner or '—'}" + (f" ({drill})" if drill else ""))
+    if bits:
+        lines.append(f"- `{name}`: " + "; ".join(bits))
+    return lines
+
+
+def format_telemetry_privacy_lines(name: str, tel: dict[str, Any]) -> list[str]:
+    """Lines for apo-desk Telemetry privacy section from telemetry-contract."""
+    privacy = tel.get("privacy") if isinstance(tel.get("privacy"), dict) else {}
+    allow = privacy.get("allow") if isinstance(privacy.get("allow"), dict) else {}
+    deny = _str_list(privacy.get("deny"))
+    retention = tel.get("retention_days")
+    access = tel.get("agent_access") if isinstance(tel.get("agent_access"), dict) else {}
+    expose = _str_list(access.get("expose_paths"))
+    bits: list[str] = []
+    allow_dims = _str_list(allow.get("dimensions"))
+    if allow_dims:
+        bits.append("allow=" + ", ".join(f"`{d}`" for d in allow_dims))
+    if deny:
+        bits.append("deny=" + ", ".join(f"`{d}`" for d in deny))
+    if retention:
+        bits.append(f"retention={retention}d")
+    if expose:
+        bits.append("expose_paths=" + ", ".join(f"`{p}`" for p in expose))
+    if not bits:
+        return []
+    return [f"- `{name}`: " + "; ".join(bits)]
+
+
+def format_local_web_line(name: str, web: dict[str, Any]) -> str | None:
+    """One-liner for apo-desk Local web browser section from local-web-contract."""
+    bind = str(web.get("bind") or "").strip()
+    port = web.get("port")
+    mode = str(web.get("mode") or "").strip()
+    if not bind and not port:
+        return None
+    addr = f"{bind or '—'}:{port}" if port else (bind or "—")
+    bits = [f"`{addr}`"]
+    if mode:
+        bits.append(f"mode=`{mode}`")
+    return f"- `{name}`: " + " ".join(bits)
+
+
+def _str_list(raw: Any) -> list[str]:
+    """Normalize host keys / CLI names (YAML list or single scalar string)."""
+    if isinstance(raw, str):
+        return [raw.strip()] if raw.strip() else []
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip())
+    return out
+
+
+def _fmt_host_keys(keys: list[str]) -> str:
+    return ", ".join(f"`{k}`" for k in keys) if keys else "—"
+
+
+def format_integrations_line(name: str, integ: dict[str, Any]) -> str:
+    """One-liner for apo-desk Expected integrations section (deterministic)."""
+    mcp = integ.get("mcp") if isinstance(integ.get("mcp"), dict) else {}
+    required = _str_list(mcp.get("required"))
+    expected = _str_list(mcp.get("expected"))
+    optional = _str_list(mcp.get("optional"))
+    never = _str_list(mcp.get("never"))
+    cli_raw = integ.get("cli")
+    if isinstance(cli_raw, dict):
+        cli = _str_list(cli_raw.get("expected"))
+    else:
+        cli = _str_list(cli_raw)
+
+    bits = [
+        f"required={_fmt_host_keys(required)}",
+        f"expected={_fmt_host_keys(expected)}",
+        f"optional={_fmt_host_keys(optional)}",
+        f"never={_fmt_host_keys(never)}",
+    ]
+    if cli:
+        bits.append(f"cli={_fmt_host_keys(cli)}")
+    return f"- `{name}`: " + "; ".join(bits)
+
+
+def format_mcp_proxy_lines(name: str, integ: dict[str, Any]) -> list[str]:
+    """Lines for apo-desk MCP proxy section when ``integrations.mcp.proxy`` is set."""
+    mcp = integ.get("mcp") if isinstance(integ.get("mcp"), dict) else {}
+    proxy = mcp.get("proxy")
+    if not isinstance(proxy, dict):
+        return []
+    proxy_name = str(proxy.get("name") or "").strip()
+    if not proxy_name:
+        return []
+
+    via = _str_list(proxy.get("via"))
+    parked = _str_list(proxy.get("parked"))
+    catalog = str(proxy.get("catalog") or "").strip()
+    enable = str(proxy.get("enable_parked") or "").strip()
+    invoke = str(
+        proxy.get("invoke")
+        or "list_servers → list_commands → invoke_command "
+        "(nest downstream args under `parameters` only)"
+    ).strip()
+
+    lines = [
+        f"- `{name}`: use Cursor MCP host `{proxy_name}` for proxied stdio servers "
+        f"(do not expect them as top-level Cursor tools)."
+    ]
+    if via:
+        lines.append(f"  - via `{proxy_name}`: {_fmt_host_keys(via)}")
+    if parked:
+        lines.append(f"  - parked (off until enabled): {_fmt_host_keys(parked)}")
+    if catalog:
+        lines.append(f"  - catalog: `{catalog}`")
+    if enable:
+        lines.append(f"  - enable parked: {enable}")
+    lines.append(f"  - call pattern: {invoke}")
+    return lines
+
+
+def normalize_note_types(
+    declared: Any,
+    floor: frozenset[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Intersect vault-declared note suffixes with the engine floor for projection."""
+    floor_set = floor or NOTE_SUFFIXES
+    floor_list = sorted(floor_set)
+    if declared is None:
+        return floor_list, []
+    if not isinstance(declared, list):
+        return floor_list, ["note_types must be a list; using engine floor"]
+    normalized: list[str] = []
+    warnings: list[str] = []
+    for item in declared:
+        raw = str(item).strip().lower()
+        if not raw:
+            continue
+        suffix = raw if raw.startswith(".") else f".{raw.lstrip('.')}"
+        if suffix in floor_set:
+            if suffix not in normalized:
+                normalized.append(suffix)
+        else:
+            warnings.append(f"dropped note_types entry {suffix!r} (not in engine floor)")
+    if not normalized:
+        return floor_list, warnings
+    return sorted(normalized), warnings
+
+
+def format_contribution_line(name: str, contrib: dict[str, Any]) -> str:
+    """One-liner for apo-desk Contribution section (deterministic)."""
+    dialect = str(contrib.get("dialect") or "gfm").strip() or "gfm"
+    extras: list[str] = []
+
+    features = contrib.get("features") if isinstance(contrib.get("features"), dict) else {}
+    if features.get("callouts") is not None:
+        extras.append(f"callouts {features['callouts']}")
+
+    surfaces = contrib.get("surfaces")
+    if isinstance(surfaces, dict):
+        for sname, srow in sorted(surfaces.items()):
+            if not isinstance(srow, dict):
+                continue
+            parts: list[str] = []
+            if srow.get("dialect"):
+                parts.append(str(srow["dialect"]))
+            if (
+                srow.get("callouts") is not None
+                and srow["callouts"] != features.get("callouts")
+            ):
+                parts.append(f"callouts {srow['callouts']}")
+            if parts:
+                extras.append(f"{sname}=" + "/".join(parts))
+
+    render = contrib.get("render")
+    if isinstance(render, dict):
+        profile = str(render.get("profile") or "").strip()
+        if profile:
+            extras.append(f"render `{profile}`")
+
+    if extras:
+        base = f"- `{name}`: `{dialect}` ({'; '.join(extras)})"
+    else:
+        base = f"- `{name}`: `{dialect}`"
+
+    note_types, _ = normalize_note_types(contrib.get("note_types"))
+    if note_types:
+        nt_s = ", ".join(note_types)
+        if extras:
+            return f"{base[:-1]}; note_types={nt_s})"
+        return f"{base} (note_types={nt_s})"
+    return base
+
+
+def _render_write_habit_lines(
+    habits: list[tuple[str, str | None]],
+    *,
+    declared_by: dict[str, list[str]] | None = None,
+    vault_count: int = 0,
+) -> list[str]:
+    """Map usage-contract write_habit (id, inline_text) pairs to markdown bullets.
+
+    Precedence: inline ``text`` from the contract, then a ``_WRITE_HABIT_LINES``
+    dict entry, then a generic pointer-only fallback. First occurrence of an id
+    wins (callers order the default vault first).
+
+    ``declared_by`` (id → vault names) with ``vault_count`` > 1 tags any id that
+    only a subset of the projected vaults declares, so an unscoped projection
+    still says which vault a vault-specific habit belongs to.
+    """
+    lines: list[str] = []
+    seen: set[str] = set()
+    for hid, inline_text in habits:
+        if hid in seen:
+            continue
+        seen.add(hid)
+        if inline_text:
+            line = f"- **`{hid}`:** {inline_text}"
+        else:
+            line = _WRITE_HABIT_LINES.get(hid) or f"- `{hid}` — see usage-contract / apo-write-api."
+        if declared_by is not None and vault_count > 1:
+            owners = declared_by.get(hid) or []
+            if 0 < len(owners) < vault_count:
+                line += " — vaults: " + ", ".join(f"`{v}`" for v in owners)
+        lines.append(line)
+    return lines
+
+
+def _collect_write_habits(
+    vaults: dict[str, Any], default: str
+) -> tuple[list[tuple[str, str | None]], dict[str, list[str]], int]:
+    """Gather ``write_habits`` across every projected vault, default vault first.
+
+    Returns ``(ordered pairs, id → declaring vaults, projected vault count)``.
+    Scoped projections (``vaults=[id]``) naturally see one vault; unscoped ones
+    used to read only the default vault and drop every other vault's habits.
+    """
+    rows = {n: r for n, r in vaults.items() if isinstance(r, dict)}
+    ordered = sorted(rows)
+    if default in rows:
+        ordered = [default] + [n for n in ordered if n != default]
+    pairs: list[tuple[str, str | None]] = []
+    declared_by: dict[str, list[str]] = {}
+    for name in ordered:
+        for hid, text in _usage_write_habits(rows[name]):
+            declared_by.setdefault(hid, []).append(name)
+            pairs.append((hid, text))
+    return pairs, declared_by, len(rows)
+
+
+def _provenance_line(merge: dict[str, Any]) -> str | None:
+    """``Generated <iso> · sources <hash>`` when the merge IR carries provenance.
+
+    The live path (``ops.vault_op("project")``) always attaches it; hand-built
+    merge dicts (tests, offline renders) may omit it and get no line.
+    """
+    prov = merge.get("provenance")
+    if not isinstance(prov, dict):
+        return None
+    generated = str(prov.get("generated_at") or "").strip()
+    sources = str(prov.get("sources") or "").strip()
+    if not generated and not sources:
+        return None
+    return f"Generated {generated or '—'} · sources {sources or '—'}"
+
+
+_MEMORY_VERB_MAP: list[tuple[str, str]] = [
+    ("recall / meaning search", "`search_notes` (+ `folder=`; `explain=true` for rank breakdown)"),
+    ("catalog / typed lookup", "`filter_notes(where={…})`"),
+    ("read known path", "`read_note(path=…)`"),
+    ("append fact", "`append_note`"),
+    ("surgical edit", "`patch_note`"),
+    ("new note", "`write_note`"),
+    ("inbound links", "`backlinks(path=…)`"),
+    ("link graph", "`graph_neighbors(path=…, depth=1..3)`"),
+    ("registry / contracts", "`vault(request={action: project, vaults: [id]})`"),
+]
+
+
+def _render_memory_verb_map() -> list[str]:
+    lines = ["## Memory verbs (Apo MCP)", "", "| Intent | Tool |", "|--------|------|"]
+    for intent, tool in _MEMORY_VERB_MAP:
+        lines.append(f"| {intent} | {tool} |")
+    return lines
+
+
+def render_desk_index(merge: dict[str, Any]) -> str:
+    """Compact always-loaded index — Tier 1 of the two-tier desk projection.
+
+    Meant to be baked into a static, always-loaded surface (AGENTS.md,
+    .claude/rules/apo-desk.md). Carries only the vault table (live merge
+    data, so it can't drift the way hand-written text can) plus one
+    directive telling the agent to call ``vault(request={"action": "project",
+    "vaults": [<id>]})`` (``render_desk_body``, Tier 2) for a given vault's
+    frontmatter floor, write directives, OKF routing, and git safety before
+    writing there. Keeps the always-loaded surface small regardless of how
+    large Tier 2 grows for any one vault.
+    """
+    vaults = merge.get("vaults") if isinstance(merge.get("vaults"), dict) else {}
+    default = str(merge.get("default_vault") or "")
+
+    lines: list[str] = []
+    lines.append("# Apo desk (generated, compact index)")
+    lines.append("")
+    prov_line = _provenance_line(merge)
+    if prov_line:
+        lines.append(prov_line)
+        lines.append("")
+    lines.append(
+        "Before writing to a vault for the first time this session, call "
+        '`vault(request={"action": "project", "vaults": ["<id>"]})` to load its current '
+        "frontmatter floor, write directives, OKF type routing, and git "
+        "safety, and write from that."
+    )
+    lines.append("")
+    lines.append(
+        "Full policy / engine API: skill **`mcp-apo`**. Habit check: "
+        '`vault(request={"action": "stats", "days": 7})` (folder scoping, expected_mtime). '
+        "Return-only — re-run after `~/.apo/desk.yaml` or vault `system/contracts/` changes."
+    )
+    lines.append("")
+
+    lines.append("## Desk vaults")
+    lines.append("")
+    lines.append("| Vault | Role | Default | Read-only | Root | Contracts |")
+    lines.append("|-------|------|---------|-----------|------|-----------|")
+    for name, row in sorted(vaults.items()):
+        if not isinstance(row, dict):
+            continue
+        role = row.get("role") or "—"
+        is_def = "yes" if row.get("default") or name == default else ""
+        read_only = "yes" if row.get("read_only") else ""
+        root = row.get("root") or ""
+        ids = row.get("contract_ids") or []
+        id_s = ", ".join(ids) if ids else "—"
+        lines.append(f"| `{name}` | {role} | {is_def} | {read_only} | `{root}` | {id_s} |")
+    lines.append("")
+    lines.append("Pass `vault=` for non-default. Never cross-pollinate OKF/layout between vaults.")
+    lines.append("")
+    lines.extend(_render_memory_verb_map())
+    lines.append("")
+
+    lines.append("## Safety essentials")
+    lines.append("")
+    lines.append(
+        "- Keep `.env`, `*.db`/`*.db-*`, and `.apo/` out of commits — full "
+        "per-vault globs via the tool call above."
+    )
+    lines.append(
+        "- `delete_note` via `apo_admin(action=invoke, name=delete_note, confirm=true)` only."
+    )
+    lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_desk_body(merge: dict[str, Any]) -> str:
+    """Shared markdown body (no host frontmatter)."""
+    desk = merge.get("desk") if isinstance(merge.get("desk"), dict) else {}
+    vaults = merge.get("vaults") if isinstance(merge.get("vaults"), dict) else {}
+    default = str(merge.get("default_vault") or "")
+    dual = desk.get("dual_write") if isinstance(desk.get("dual_write"), dict) else {}
+    habits = desk.get("habits") if isinstance(desk.get("habits"), dict) else {}
+    pointers = desk.get("pointers") if isinstance(desk.get("pointers"), dict) else {}
+    citations = str(desk.get("citations") or "absolute_markdown")
+    workspace = str(desk.get("workspace") or "").strip()
+
+    lines: list[str] = []
+    lines.append("# Apo desk (generated)")
+    lines.append("")
+    prov_line = _provenance_line(merge)
+    if prov_line:
+        lines.append(prov_line)
+        lines.append("")
+    lines.append(
+        'Generated by `vault(request={"action": "project"})`. Source: `~/.apo/desk.yaml` + the '
+        "vault discovery registry + per-vault `system/contracts/`. **Return-only** — agent places "
+        "`body`; re-run `just desk-project` or `vault(request={\"action\": \"project\"})` after "
+        "desk/contract changes."
+    )
+    lines.append("")
+    lines.append("Engine API / throughput / diagnose: skill **`mcp-apo`** (stable product skill).")
+    lines.append("")
+    desk_meta = merge.get("desk_meta") if isinstance(merge.get("desk_meta"), dict) else {}
+    if desk_meta.get("source") == "defaults":
+        lines.append(
+            "**No `~/.apo/desk.yaml` found** — the Role column below, dual-write, and "
+            "workspace label are all inert built-in defaults, not real desk policy. "
+            "Create `~/.apo/desk.yaml` to populate them."
+        )
+        lines.append("")
+    if workspace:
+        lines.append(f"Desk workspace: `{workspace}`.")
+        lines.append("")
+
+    lines.append("## Desk vaults")
+    lines.append("")
+    lines.append("| Vault | Role | Default | Read-only | Root | Contracts |")
+    lines.append("|-------|------|---------|-----------|------|-----------|")
+    for name, row in sorted(vaults.items()):
+        if not isinstance(row, dict):
+            continue
+        role = row.get("role") or "—"
+        is_def = "yes" if row.get("default") or name == default else ""
+        read_only = "yes" if row.get("read_only") else ""
+        root = row.get("root") or ""
+        ids = row.get("contract_ids") or []
+        id_s = ", ".join(ids) if ids else "—"
+        lines.append(f"| `{name}` | {role} | {is_def} | {read_only} | `{root}` | {id_s} |")
+    lines.append("")
+    lines.append("Pass `vault=` for non-default. Never cross-pollinate OKF/layout between vaults.")
+    lines.append("")
+
+    contrib_lines: list[str] = []
+    integ_lines: list[str] = []
+    proxy_lines: list[str] = []
+    contrib_pointer_raws: list[str] = []
+    scope_lines: list[str] = []
+    layout_lines: list[str] = []
+    frontmatter_lines: list[str] = []
+    directive_lines: list[str] = []
+    okf_lines: list[str] = []
+    read_lines: list[str] = []
+    git_safety_lines: list[str] = []
+    telemetry_lines: list[str] = []
+    local_web_lines: list[str] = []
+    for name, row in sorted(vaults.items()):
+        if not isinstance(row, dict):
+            continue
+        contrib = _usage_contribution(row)
+        if contrib:
+            contrib_lines.append(format_contribution_line(name, contrib))
+            ptrs = contrib.get("pointers")
+            if isinstance(ptrs, list):
+                for p in ptrs:
+                    if isinstance(p, str) and p.strip():
+                        contrib_pointer_raws.append(p.strip())
+            render = contrib.get("render")
+            if isinstance(render, dict):
+                rp = render.get("pointer")
+                if isinstance(rp, str) and rp.strip():
+                    contrib_pointer_raws.append(rp.strip())
+        integ = _usage_integrations(row)
+        if integ:
+            integ_lines.append(format_integrations_line(name, integ))
+            proxy_lines.extend(format_mcp_proxy_lines(name, integ))
+            iptrs = integ.get("pointers")
+            if isinstance(iptrs, list):
+                for p in iptrs:
+                    if isinstance(p, str) and p.strip():
+                        contrib_pointer_raws.append(p.strip())
+        contrib_pointer_raws.extend(_usage_pointers(row))
+
+        usage = _usage_data(row)
+        if usage:
+            scope_lines.extend(format_purpose_scope_lines(name, usage))
+            layout_line = format_layout_line(name, usage.get("layout") or {})
+            if layout_line:
+                layout_lines.append(layout_line)
+            fm_line = format_frontmatter_floor_line(name, _str_list(usage.get("frontmatter_floor")))
+            if fm_line:
+                frontmatter_lines.append(fm_line)
+            directive_lines.extend(format_directive_lines(name, usage))
+
+        okf = _contract_data(row, "okf-contract")
+        if okf:
+            token_budget = usage.get("token_budget") if usage else None
+            token_budget = token_budget if isinstance(token_budget, int) else None
+            okf_lines.extend(format_okf_path_rules_lines(name, okf, token_budget=token_budget))
+
+        read = _contract_data(row, "read-contract")
+        if read:
+            token_budget = usage.get("token_budget") if usage else None
+            token_budget = token_budget if isinstance(token_budget, int) else None
+            read_lines.extend(format_read_routing_lines(name, read, token_budget=token_budget))
+
+        git = _contract_data(row, "git-contract")
+        if git:
+            git_safety_lines.extend(format_git_safety_lines(name, git))
+
+        telemetry = _contract_data(row, "telemetry-contract")
+        if telemetry:
+            telemetry_lines.extend(format_telemetry_privacy_lines(name, telemetry))
+
+        local_web = _contract_data(row, "local-web-contract")
+        if local_web:
+            lw_line = format_local_web_line(name, local_web)
+            if lw_line:
+                local_web_lines.append(lw_line)
+    if scope_lines:
+        lines.append("## Vault purpose & scope")
+        lines.append("")
+        lines.extend(scope_lines)
+        lines.append("")
+
+    if frontmatter_lines:
+        lines.append("## Frontmatter floor")
+        lines.append("")
+        lines.append("Minimum frontmatter keys agents should stamp on concept notes, per vault.")
+        lines.append("")
+        lines.extend(frontmatter_lines)
+        lines.append("")
+
+    if contrib_lines:
+        lines.append("## Contribution")
+        lines.append("")
+        lines.append(
+            "Per-vault authoring dialect from usage-contract "
+            "(`plain-md` | `gfm` | `obsidian-ofm`). "
+            "Render profiles (`htmlize`) are export-only — not body syntax. "
+            "Mutators accept note suffixes in Contribution `note_types` only "
+            "(engine floor `.md` / `.yaml` / `.yml` / `.mmd`). "
+            "Read-only vaults reject all mutators with `read_only_vault`."
+        )
+        lines.append("")
+        lines.extend(contrib_lines)
+        lines.append("")
+
+    if integ_lines:
+        lines.append("## Expected integrations")
+        lines.append("")
+        lines.append(
+            "Per-vault MCP host keys / CLI names from usage-contract `integrations` "
+            "(advisory — does not start Cursor MCP processes). "
+            "`required` / `expected` / `optional` / `never` guide tool choice by vault domain."
+        )
+        lines.append("")
+        lines.extend(integ_lines)
+        lines.append("")
+
+    if proxy_lines:
+        lines.append("## MCP proxy")
+        lines.append("")
+        lines.append(
+            "When `integrations.mcp.proxy` is set, listed `via` / `parked` servers are "
+            "**not** top-level Cursor MCP tools — call them through the named proxy "
+            "(typically `lazy-mcp`). Parked servers stay off until enabled in the catalog."
+        )
+        lines.append("")
+        lines.extend(proxy_lines)
+        lines.append("")
+
+    if layout_lines:
+        lines.append("## Folder layout")
+        lines.append("")
+        lines.extend(layout_lines)
+        lines.append("")
+
+    lines.extend(_render_memory_verb_map())
+    lines.append("")
+
+    lines.append("<vault-directives>")
+    if directive_lines:
+        lines.append("## Vault directives")
+        lines.append("")
+        lines.extend(directive_lines)
+        lines.append("")
+
+    lines.append("## Write workflow")
+    lines.append("")
+    lines.append(
+        "1. `search_notes` / `filter_notes`, scoped with `folder=` set to "
+        "one of the exact folder names in the layout table above (not a "
+        "guessed name), for an existing note before creating a new one."
+    )
+    lines.append(
+        "2. `write_note` (new) or `append_note`/`patch_note` (existing), "
+        "preserving prior content."
+    )
+    lines.append(
+        "3. Stamp `okf_type` / `description` / `timestamp` per this vault's "
+        "frontmatter floor (above, if set)."
+    )
+    lines.append(
+        "4. On any follow-up edit to a note you already read this session, pass "
+        "`expected_mtime` from the last read/write response to avoid clobbering "
+        "concurrent changes."
+    )
+    lines.append("")
+    lines.append("</vault-directives>")
+    lines.append("")
+
+    if okf_lines:
+        lines.append("## Type routing (OKF)")
+        lines.append("")
+        lines.append(
+            "Folder → `okf_type` → required fields, from each vault's okf-contract "
+            "`path_rules` (first match wins). Use this to pick `okf_type` and required "
+            "fields when creating a concept note — do not guess."
+        )
+        lines.append("")
+        lines.extend(okf_lines)
+
+    if read_lines:
+        lines.append("## Read routing")
+        lines.append("")
+        lines.append(
+            "Purpose → entry `okf_type` + filter + cross-type read order, from each "
+            "vault's read-contract `purposes` (additive over Type routing above — okf "
+            "says what a note is; read-contract says what to read for a given "
+            "question, and how much to trust it). Vaults without a read-contract are "
+            "unaffected."
+        )
+        lines.append("")
+        lines.extend(read_lines)
+
+    if git_safety_lines:
+        lines.append("## Git safety")
+        lines.append("")
+        lines.append("From each vault's git-contract — never-commit globs, sync block hook, restore drill.")
+        lines.append("")
+        lines.extend(git_safety_lines)
+        lines.append("")
+
+    if telemetry_lines:
+        lines.append("## Telemetry privacy")
+        lines.append("")
+        lines.append("From each vault's telemetry-contract — what agent-facing telemetry captures and retains.")
+        lines.append("")
+        lines.extend(telemetry_lines)
+        lines.append("")
+
+    if local_web_lines:
+        lines.append("## Local web browser")
+        lines.append("")
+        lines.extend(local_web_lines)
+        lines.append("")
+
+    sv = dual.get("session_vault") or "sessions"
+    sp = dual.get("session_path_template") or "inbox/daily/{date}.md"
+    sh = dual.get("session_heading") or "Session log"
+    domain = dual.get("domain_vaults")
+    if isinstance(domain, list) and domain:
+        domain_s = ", ".join(f"`{d}`" for d in domain)
+    else:
+        # Default: writable domain vaults only — skip audit + grc (GRC SoT is git/PR).
+        _skip_roles = {"audit", "grc", None}
+        domain_s = ", ".join(
+            f"`{n}`"
+            for n, r in sorted(vaults.items())
+            if isinstance(r, dict) and r.get("role") not in _skip_roles
+            and n != sv
+        ) or f"`{sv}`"
+    dual_enabled = bool(dual.get("enabled"))
+    if dual_enabled:
+        lines.append("## Dual-write")
+        lines.append("")
+        lines.append(
+            f"On consequential turns (and new durable facts when enabled): domain note in the owning vault "
+            f"({domain_s}); **also** `append_note(..., vault=\"{sv}\")` on `{sp}` → `## {sh}` "
+            f"with `YYYY-MM-DD HH:MM` local time (process turns: `Tooling:`). "
+            f"Do not write session logs into another vault's daily notes."
+        )
+    else:
+        lines.append("## Session audit")
+        lines.append("")
+        lines.append(
+            "Session working memory is **automatic OTel** (Cursor hooks → Jaeger via otlp-mcp). "
+            "Do **not** `append_note` to `vault=sessions` on consequential turns."
+        )
+        lines.append("")
+        lines.append(
+            f"On consequential turns (decisions, status changes, new/corrected facts, completed tasks): "
+            f"write the **domain note** in the owning/default vault ({domain_s}) before the final reply."
+        )
+    if habits.get("end_of_turn_gate", True):
+        lines.append("")
+        lines.append("End-of-turn gate: do not reply until required writes land.")
+    lines.append("")
+
+    lines.append("## Citations")
+    lines.append("")
+    if citations == "absolute_markdown":
+        lines.append(
+            "Chat citations: absolute markdown links ending in `.md` "
+            "(Cursor does not resolve `[[wiki-links]]`). Keep wiki-links inside vault note bodies / `related:`."
+        )
+    else:
+        lines.append(f"Citation mode: `{citations}`.")
+    lines.append("")
+
+    if habits:
+        lines.append("## Habits")
+        lines.append("")
+        if habits.get("new_durable_facts", True):
+            lines.append(
+                "- **Write as you go, not at the end.** Capture new durable facts "
+                "(dates, people, equipment, schedule, preferences, decisions) the moment "
+                "they're learned. A turn that ends without a write it owed is a policy "
+                "violation, not a wrap-up step skipped for later."
+            )
+        if habits.get("prefer_append_patch", True):
+            lines.append("- Prefer `append_note` / `patch_note` over full-file rewrites; archive via `patch_note` place op.")
+        if habits.get("filter_okf_type", True):
+            lines.append(
+                "- When a vault has an OKF contract: stamp `okf_type` / `description` / `timestamp` on concept writes; prefer `filter_notes(where={\"okf_type\": \"…\"}, folder=…)`."
+            )
+        # Opt-in (desk.yaml `habits.no_direct_fs_mutate: true`) — the key was read
+        # from desk.yaml but never rendered, so hosts never saw the rule.
+        if habits.get("no_direct_fs_mutate", False):
+            lines.append(_NO_DIRECT_FS_MUTATE_LINE)
+        lines.append("")
+
+    # Apo throughput — usage-contract write_habits across every projected vault
+    # (default vault first; a scoped projection sees only its own vault).
+    default_vault = default or next(iter(vaults.keys()), "")
+    throughput_ids, declared_by, vault_count = _collect_write_habits(vaults, default_vault)
+    # Skip ids already rendered by desk.yaml boolean habits (avoid duplicate bullets).
+    if habits.get("prefer_append_patch", True):
+        throughput_ids = [h for h in throughput_ids if h[0] != "prefer_append_patch"]
+    if habits.get("filter_okf_type", True):
+        throughput_ids = [h for h in throughput_ids if h[0] != "filter_okf_type"]
+    if habits.get("no_direct_fs_mutate", False):
+        throughput_ids = [h for h in throughput_ids if h[0] != "no_direct_fs_mutate"]
+    throughput_lines = _render_write_habit_lines(
+        throughput_ids, declared_by=declared_by, vault_count=vault_count
+    )
+    if throughput_lines:
+        lines.append("## Apo throughput")
+        lines.append("")
+        lines.append(
+            "From usage-contract `write_habits` across the projected vaults (default vault "
+            "first; an id only some vaults declare carries a `vaults:` tag) — engine API "
+            "detail in skill **`mcp-apo`** and Meta `system/config/apo-write-api.md`."
+        )
+        lines.append("")
+        lines.extend(throughput_lines)
+        lines.append("")
+
+    # Role-specific short notes without dumping Meta OKF
+    role_notes = desk.get("role_notes") if isinstance(desk.get("role_notes"), dict) else {}
+    if role_notes:
+        lines.append("## Role notes")
+        lines.append("")
+        for role, note in sorted(role_notes.items()):
+            lines.append(f"- **{role}:** {note}")
+        lines.append("")
+
+    if pointers:
+        lines.append("## Deep policy pointers")
+        lines.append("")
+        seen_ptr: set[str] = set()
+        for key, raw in sorted(pointers.items()):
+            path = _abs_pointer(str(raw), vaults)
+            if path in seen_ptr:
+                continue
+            seen_ptr.add(path)
+            label = key.replace("_", " ")
+            lines.append(f"- {_md_link(label, path)}")
+        for raw in contrib_pointer_raws:
+            path = _abs_pointer(raw, vaults)
+            if path in seen_ptr:
+                continue
+            seen_ptr.add(path)
+            # vault_id:rel → short label from basename
+            label = Path(path).stem.replace("-", " ").replace("_", " ")
+            lines.append(f"- {_md_link(label, path)}")
+        lines.append("")
+    elif contrib_pointer_raws:
+        lines.append("## Deep policy pointers")
+        lines.append("")
+        seen_ptr: set[str] = set()
+        for raw in contrib_pointer_raws:
+            path = _abs_pointer(raw, vaults)
+            if path in seen_ptr:
+                continue
+            seen_ptr.add(path)
+            label = Path(path).stem.replace("-", " ").replace("_", " ")
+            lines.append(f"- {_md_link(label, path)}")
+        lines.append("")
+
+    lines.append("## Safety")
+    lines.append("")
+    lines.append("- `delete_note` via `apo_admin(action=invoke, name=delete_note, confirm=true)` only.")
+    lines.append("- Do not substitute Apo for repo Grep/Glob or hosted Confluence/Jira/Slack/Gmail/Calendar.")
+    lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def project(merge: dict[str, Any], *, mode: str = "full") -> dict[str, Any]:
+    """Render desk policy from merge IR (return-only — agent places).
+
+    ``mode="full"`` (default, Tier 2): the complete body, ``render_desk_body``.
+    ``mode="index"`` (Tier 1): the compact pointer surface, ``render_desk_index``,
+    meant for static always-loaded files — see that function's docstring.
+    """
+    body = render_desk_index(merge) if mode == "index" else render_desk_body(merge)
+    out: dict[str, Any] = {
+        "ok": True,
+        "action": "project",
+        "mode": mode,
+        "body": body,
+        "bytes": len(body.encode("utf-8")),
+        "guidance": project_guidance(),
+    }
+    prov = merge.get("provenance")
+    if isinstance(prov, dict):
+        # Mirrored from the body's `Generated … · sources …` line so a script can
+        # compare a placed file's declared hash against a fresh render's.
+        out["generated_at"] = prov.get("generated_at")
+        out["sources"] = prov.get("sources")
+    return out

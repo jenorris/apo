@@ -253,7 +253,7 @@ def read_usage_layout(root: Path) -> dict[str, str]:
     Adapted from qmd (github.com/tobi/qmd)'s per-path search-result context, which it
     calls its key feature: results self-describe their neighborhood inline instead of
     requiring an agent to already hold the whole vault's folder layout in context.
-    ``vault_project.format_layout_line`` already renders this same ``layout`` dict for
+    ``host_projection.format_layout_line`` already renders this same ``layout`` dict for
     the static desk projection — this is the per-search-hit sibling of that.
 
     Cached per resolved root, invalidated on the contract file's own mtime (one stat

@@ -37,6 +37,15 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 - Legacy `tool-metrics-*.jsonl` files are still imported once (and deleted). Rows in an
   existing `~/.apo/metrics.duckdb` are **not** imported; that import never existed, and
   reading it would keep DuckDB a runtime dependency. The old file is left in place.
+- **Host projection moved out of `vault_project.py`.** Desk markdown rendering
+  (`project`, `render_desk_body`, `render_desk_index`, the `format_*` helpers)
+  and the Hermes GBNF grammar compilers (`compile_vault_grammar` and friends)
+  now live in `host_projection.py`. `vault_project.py` keeps desk-overlay
+  scoping, pointer expansion, contract accessors, the drift signature, and the
+  watcher debounce. No behavior change; MCP tool names are unchanged.
+- **`APO_*_CONTRACT` applies only when one vault is configured.** With more than
+  one vault, each vault uses its own `system/contracts/`. `okf ingest` of a
+  read-only bundle with no usage contract keeps the JSON key.
 
 ### Removed
 

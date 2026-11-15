@@ -28,6 +28,7 @@ from apo_engine import (
     git_catalog,
     git_contract,
     git_sync,
+    host_projection,
     links,
     note_lint,
     search_contract,
@@ -4858,7 +4859,7 @@ def vault_op(
     desk ``body`` + ``guidance``; ``mode="full"`` (default) is the complete body, ``mode="index"``
     is a compact always-loaded pointer surface that tells the agent to call ``project`` again
     scoped to one vault (``vaults=[<id>]``) for that vault's full detail — see
-    ``vault_project.render_desk_index`` / ``render_desk_body``. ``lint`` emits corpus ``flaws[]`` (archival + note_lint detectors)
+    ``host_projection.render_desk_index`` / ``render_desk_body``. ``lint`` emits corpus ``flaws[]`` (archival + note_lint detectors)
     for one vault. ``fix=true`` on lint applies mechanical auto remediations (trailing WS) only.
     ``okf_dry_run`` (vault=, contract=<proposed okf-contract.schema.yaml text>) simulates
     that contract against the current corpus and reports what it would reclassify or
@@ -5025,7 +5026,7 @@ def vault_op(
         found = vault_contracts.discover_contracts(root)
         contracts = vault_contracts.present_contracts(found, full=True)
         row = {"contracts": contracts}
-        compiled = vault_project.compile_vault_grammar(
+        compiled = host_projection.compile_vault_grammar(
             row, op_s, top_level_dirs=_top_level_dirs(root)
         )
         grammar_text = compiled["grammar"]
@@ -5252,7 +5253,7 @@ def vault_op(
             desk_mtime=vault_project._desk_mtime(),
             contracts_sig=vault_project._contracts_signature(),
         )
-        projected = vault_project.project(merge, mode=proj_mode)
+        projected = host_projection.project(merge, mode=proj_mode)
         if not projected.get("ok"):
             return projected
         projected["default_vault"] = merge.get("default_vault")
