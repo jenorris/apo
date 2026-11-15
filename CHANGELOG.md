@@ -4,6 +4,21 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Removed
+
+- **Unimplemented contract keys.** The shape checks no longer accept keys no
+  engine code reads, so a vault that still sets them now gets a
+  `contract.unknown_key` warning.
+  - `archival-contract`: top-level `hot_search` and `schedule`; the unread
+    `actions.place` and `safety.require_git_clean` / `require_expected_mtime`
+    from the template.
+  - `telemetry-contract`: top-level `ingest` and `pointers`; `privacy.allow.flags`;
+    the unread `store.local_uri` and `agent_access.lean_visible` / `scope` /
+    `actions` from the template.
+  - `apo_engine.local_web_contract` (loader and checker) is deleted. Nothing
+    but the shape check called it. Desk projection still reads the
+    `local-web-contract` body, and the schema template stays for `just serve`.
+
 ## [0.38.0] — 2026-11-14
 
 A token admin can issue and revoke scoped clients, and symlinks no longer get

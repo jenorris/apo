@@ -56,32 +56,12 @@ eligibility:
   #   - Project
 
 # What the agent should do when applying a suggestion (deterministic).
+# Only set_fields is read: it is echoed as evidence.set_fields on each flaw.
 actions:
-  place: true
   set_fields:
     status: archived
     archived_at: "$now"          # agent stamps ISO timestamp via set_field on src
-  # append_history: false
-  # strip_from_hot_index: true   # rely on search-contract exclude after place
-
-# Hot vs cold retrieval (documentation for harness; search-contract is SoT).
-# After place under archives/, unscoped search_notes should miss the note
-# because search-contract default_exclude includes archives/*.
-# Cold recall: search_notes(folder="archives") or filter_notes(..., folder="archives").
-hot_search:
-  relies_on: search-contract.default_exclude
-  expected_exclude_globs:
-    - archives/*
-
-# Watcher cadence — reserved for mode=auto (not implemented).
-schedule:
-  interval_minutes: 60
-  max_per_pass: 25
-  on_ambiguity: suggest   # suggest | skip
 
 # Safety rails.
 safety:
-  require_git_clean: false
-  require_expected_mtime: true
   deny_if_open_todos: true       # frontmatter todos with status pending → blocked_todos
-  # deny_if_status_in: [active, in-progress, blocked]

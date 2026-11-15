@@ -28,8 +28,6 @@ KNOWN_TOP_KEYS = frozenset(
         "destination",
         "eligibility",
         "actions",
-        "hot_search",
-        "schedule",
         "safety",
     }
 )
@@ -135,7 +133,7 @@ def _check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
 def parse_contract(data: dict[str, Any]) -> vc.ContractParse:
     """Normalize archival mapping sections once for runtime and checking."""
     normalized = dict(data)
-    for key in ("destination", "eligibility", "actions", "hot_search", "schedule", "safety"):
+    for key in ("destination", "eligibility", "actions", "safety"):
         normalized[key] = data.get(key) if isinstance(data.get(key), dict) else {}
     return vc.ContractParse(normalized, tuple(_check_contract(data)))
 

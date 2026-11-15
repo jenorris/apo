@@ -361,6 +361,36 @@ class ContractCheckTest(unittest.TestCase):
         self.assertIn(("contract.invalid_value", "eligibility.idle.field"), a)
         self.assertIn(("contract.invalid_shape", "eligibility.status_in"), a)
 
+    def test_unimplemented_archival_and_telemetry_keys_are_unknown(self):
+        # These keys were declared but no engine code reads them.
+        _write_yaml(
+            self.cdir / "archival-contract.schema.yaml",
+            {"mode": "suggest", "hot_search": {}, "schedule": {}, "safety": {}},
+        )
+        _write_yaml(
+            self.cdir / "telemetry-contract.schema.yaml",
+            {
+                "retention_days": 90,
+                "ingest": {},
+                "pointers": [],
+                "privacy": {"allow": {"flags": ["folder_set"], "paths": "none"}},
+            },
+        )
+        found = vault_contracts.discover_contracts(self.vault)
+
+        def fields(cid: str) -> set[tuple[str, str]]:
+            return {(w["code"], w["field"]) for w in found[cid].get("warnings", [])}
+
+        a = fields("archival-contract")
+        self.assertIn(("contract.unknown_key", "hot_search"), a)
+        self.assertIn(("contract.unknown_key", "schedule"), a)
+        self.assertNotIn(("contract.unknown_key", "safety"), a)
+        t = fields("telemetry-contract")
+        self.assertIn(("contract.unknown_key", "ingest"), t)
+        self.assertIn(("contract.unknown_key", "pointers"), t)
+        self.assertIn(("contract.unknown_key", "privacy.allow.flags"), t)
+        self.assertNotIn(("contract.unknown_key", "retention_days"), t)
+
     def test_usage_contract_findings(self):
         # usage-contract used to have no checker at all — a bare relative pointer,
         # a string token_budget, or a missing vault_id were silently unvalidated.
