@@ -23,13 +23,19 @@
 # and APO_MCP_AUTH_CONFIG. See engine/docs/systemd/apo-mcp.service.example.
 
 FROM python:3.12-slim AS builder
-RUN python -m venv /opt/venv
+COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /usr/local/bin/uv
+# Install the locked environment into /opt/venv. The system interpreter stays
+# the only Python (no uv download), and the project installs non-editable so
+# the venv does not point back at /build.
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
 ENV PATH="/opt/venv/bin:$PATH"
-WORKDIR /build
-COPY engine/pyproject.toml ./engine/pyproject.toml
-COPY engine/README.md ./engine/README.md
-COPY engine/src ./engine/src
-RUN pip install --no-cache-dir "./engine[mcp]"
+WORKDIR /build/engine
+COPY engine/pyproject.toml engine/uv.lock engine/README.md ./
+COPY engine/src ./src
+RUN uv sync --locked --extra mcp --no-dev --no-editable
 
 FROM python:3.12-slim
 RUN useradd --create-home --uid 1000 apo
