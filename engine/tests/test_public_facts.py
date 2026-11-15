@@ -30,6 +30,7 @@ def test_documented_public_facts_match_runtime(tmp_path, monkeypatch) -> None:
     facts = checker.runtime_facts()
     assert facts.top_level_tools == 12
     assert facts.admin_capabilities == 7
+    assert facts.tool_aliases == 6
     assert checker.check_public_facts(_ROOT, facts) == []
 
 

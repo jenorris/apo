@@ -27,6 +27,8 @@ from fastmcp.exceptions import ResourceError, ToolError
 from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
+from apo_engine.tool_aliases import canonical_tool
+
 # Tools that take a top-level ``vault=`` (and maybe ``vaults=``/prefixed paths).
 VAULT_ARG_TOOLS = frozenset({
     "write_note", "append_note", "patch_note", "patch_table", "read_note",
@@ -110,7 +112,7 @@ class VaultScopeMiddleware(Middleware):
         if scope is None:
             return await call_next(context)
         allowed, default = scope
-        name = context.message.name
+        name = canonical_tool(context.message.name)
         args = dict(context.message.arguments or {})
 
         if name in DENIED_TOOLS:
@@ -142,7 +144,10 @@ class VaultScopeMiddleware(Middleware):
         tools = await call_next(context)
         if _scope() is None:
             return tools
-        return [t for t in tools if t.name in VAULT_ARG_TOOLS or t.name == "vault"]
+        return [
+            t for t in tools
+            if canonical_tool(t.name) in VAULT_ARG_TOOLS or t.name == "vault"
+        ]
 
     async def on_read_resource(self, context: MiddlewareContext, call_next: CallNext[Any, Any]) -> Any:
         scope = _scope()

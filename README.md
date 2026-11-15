@@ -124,7 +124,7 @@ just okf indexes  --vault-root ~/Notes/Yours         # regenerate index.md listi
 | **Vault contracts** | Optional OKF / search / git / usage contracts — stamp and validate on write; OKF CLI for lint/export/ingest |
 | **Hybrid search** | BM25 + dense vectors (RRF-style fusion) over chunked Markdown (+ YAML title/description fields) |
 | **Typed query expansion** | Opt-in `expand=true` — lex/vec/hyde sub-queries RRF-fused with a top-rank bonus and position-aware rerank blend (adapted from [tobi/qmd](https://github.com/tobi/qmd)) |
-| **MCP surface** | 12 top-level tools + 7 admin capabilities via `apo_admin` |
+| **MCP surface** | 12 top-level tools + 7 admin capabilities via `apo_admin` (plus CLI-shaped aliases, not counted) |
 | **Index-backed graphs** | `backlinks` + `history` (mtime browse; file git log when git contract active) hit sqlite / git — not a vault walk |
 | **Live updates** | Optional watcher drains `~/.apo/deferred-*.json` after agent writes |
 | **Measurable quality** | Labeled search eval (`just search-eval`, hit@k / MRR) + optional local cross-encoder reranker |
@@ -246,9 +246,12 @@ Prefer `append_note` / `patch_note` over full-file `write_note` for day-to-day e
 |---------|------:|-------|
 | Top-level | **12** | Core search/write + `vault` + `apo_admin` |
 | Via `apo_admin` | **7** | `memory_status`, `index_health`, `reindex`, `reload_config`, `delete_note`, `git_sync`, `list_refs` |
+| Aliases | **6** | CLI-shaped names for the `*_note` tools; not counted as top-level tools (see below) |
 
 Counts are checked against the live tool registry and admin handlers by
 `scripts/check_public_facts.py` — if this table drifts from the code, CI fails.
+
+**Aliases.** Each `*_note` tool also answers to its CLI verb, registered on the same function with the same arguments and return shape: `read` = `read_note`, `search` = `search_notes`, `write` = `write_note`, `append` = `append_note`, `patch` = `patch_note`, `filter` = `filter_notes`. The `_note` names stay canonical. Aliases are callable but hidden from `tools/list` (no change to existing clients or schema size); set `APO_MCP_LIST_ALIASES=1` to list them. `graph_neighbors`, `patch_table`, `backlinks`, `history`, `vault`, and `apo_admin` have no alias.
 
 Habit KPIs (optional): **`vault(request={action: "stats"})`**. Operator traces: OTel → Jaeger (Workbench `harness/observability/`).
 

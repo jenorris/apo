@@ -24,6 +24,8 @@ from apo_engine import core as apo_core
 from apo_engine import ops as apo_ops
 from apo_engine import vaults as apo_vaults
 from apo_engine.mcp_auth import build_auth_provider_from_env
+from apo_engine.tool_aliases import ALIAS_TAG, TOOL_ALIASES
+from apo_engine.tool_aliases_middleware import AliasListingMiddleware
 from apo_engine.mcp_instructions import MCP_INSTRUCTIONS as _MCP_INSTRUCTIONS
 from apo_engine.mcp_action_schemas import (
     VAULT_ACTION_FIELD_DESC,
@@ -1134,6 +1136,34 @@ async def apo_admin(
         error="bad_action",
         message="action must be list|describe|invoke",
     )
+
+
+###############################################################################
+# CLI-shaped aliases — same function object as the canonical ``*_note`` tool.
+###############################################################################
+
+_ALIAS_ANNOTATIONS = {
+    "write_note": _MUTATE,
+    "append_note": _WRITE,
+    "patch_note": _MUTATE,
+    "read_note": _RO,
+    "search_notes": _RO,
+    "filter_notes": _RO,
+}
+assert set(_ALIAS_ANNOTATIONS) == set(TOOL_ALIASES.values())
+
+for _alias, _canonical in TOOL_ALIASES.items():
+    _fn = globals()[_canonical]
+    mcp.tool(
+        _fn,
+        name=_alias,
+        description=f"{(_fn.__doc__ or '').strip()} Alias of {_canonical}.",
+        tags={ALIAS_TAG},
+        annotations=_ALIAS_ANNOTATIONS[_canonical],
+    )
+del _alias, _canonical, _fn
+
+mcp.add_middleware(AliasListingMiddleware())
 
 
 ###############################################################################

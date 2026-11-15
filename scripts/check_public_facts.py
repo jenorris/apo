@@ -13,14 +13,22 @@ from typing import NamedTuple
 class PublicFacts(NamedTuple):
     top_level_tools: int
     admin_capabilities: int
+    tool_aliases: int = 0
 
 
 def runtime_facts() -> PublicFacts:
-    """Read counts from the decorated server and its public admin catalog."""
+    """Read counts from the decorated server and its public admin catalog.
+
+    Aliases are registered tools tagged ``alias``. They are counted apart from
+    the canonical top-level tools.
+    """
     from apo_engine import apo_admin
     from apo_engine.mcp import server
+    from apo_engine.tool_aliases import ALIAS_TAG
 
-    tools = asyncio.run(server.mcp.list_tools())
+    registry = asyncio.run(server.mcp.list_tools(run_middleware=False))
+    tools = [t for t in registry if ALIAS_TAG not in (t.tags or ())]
+    aliases = [t for t in registry if ALIAS_TAG in (t.tags or ())]
     capabilities = {
         item["name"] for item in apo_admin.admin_list()["capabilities"]
     }
@@ -28,7 +36,7 @@ def runtime_facts() -> PublicFacts:
     if missing_handlers:
         missing = ", ".join(sorted(missing_handlers))
         raise RuntimeError(f"admin capabilities without handlers: {missing}")
-    return PublicFacts(len(tools), len(capabilities))
+    return PublicFacts(len(tools), len(capabilities), len(aliases))
 
 
 def check_public_facts(root: Path, facts: PublicFacts) -> list[str]:
@@ -66,6 +74,15 @@ def check_public_facts(root: Path, facts: PublicFacts) -> list[str]:
                 f"{documented[0]}/{documented[1]}; runtime is {actual[0]}/{actual[1]}"
             )
 
+    table_alias = re.search(r"\| Aliases \| \*\*(\d+)\*\*", readme)
+    if table_alias is None:
+        errors.append("README.md MCP tools table alias count is missing")
+    elif int(table_alias.group(1)) != facts.tool_aliases:
+        errors.append(
+            f"README.md MCP tools table says {table_alias.group(1)} aliases; "
+            f"runtime is {facts.tool_aliases}"
+        )
+
     just_count = re.search(
         r"Pure-Python MCP tool count \(no Node\)\. Expect (\d+) tools\.",
         justfile,
@@ -95,7 +112,8 @@ def main() -> int:
         return 1
     print(
         f"Public facts OK: {facts.top_level_tools} top-level tools, "
-        f"{facts.admin_capabilities} admin capabilities"
+        f"{facts.admin_capabilities} admin capabilities, "
+        f"{facts.tool_aliases} aliases"
     )
     return 0
 
