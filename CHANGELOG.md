@@ -4,6 +4,11 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.39.0] — 2026-11-14
+
+Optima leaves the engine, tool-use metrics are SQLite, and note writes share
+one file lock.
+
 ### Added
 - **`apo engine okf linkify <path…>` and `apo engine okf indexes [path…]`** — the
   `## OKF links` writer and `index.md` listing regeneration now live in
@@ -46,6 +51,17 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 - **`APO_*_CONTRACT` applies only when one vault is configured.** With more than
   one vault, each vault uses its own `system/contracts/`. `okf ingest` of a
   read-only bundle with no usage contract keeps the JSON key.
+- **Note writes take one file lock.** `write_note`, `append_note`, `patch_note`,
+  `move_note`, `place_note`, `send_note`, and `delete_note` hold an `fcntl`
+  lock from stat through replace. `delete_note` takes `expected_mtime`. Lock
+  files live under the deferred runtime directory, 256 stripes per path.
+- **`ops.py` is a re-export.** The functions live in `ops_read`, `ops_search`,
+  `ops_mutate`, `ops_place`, `ops_vault`, `ops_admin`, `ops_guard`, and
+  `ops_common`. `ops.write_note` and the MCP tool names are unchanged.
+- **Ranker and embed modules import each other directly.** `_wire_modules` is
+  gone. Scores, RRF, embed concurrency, and the query-embed cache are unchanged.
+- **The container installs from `engine/uv.lock`.** `uv sync --locked` builds
+  the image, and `APO_MCP_HOST` defaults to `127.0.0.1`.
 
 ### Removed
 
