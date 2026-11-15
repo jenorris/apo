@@ -82,7 +82,7 @@ agent (budget N per turn)
 **Inline:** successful writes attach `flaws` for that path (OKF soft + format; archival when contracted).
 **Sweep:** `vault(request={action: "lint"})` — folder/vault backlog, paginated (archival + note_lint detectors, including the OKF producer profile per note; unscoped sweeps also report `contract.*` drift in the vault's contract files — see [contracts/README.md → Contract checks](contracts/README.md#contract-checks)).
 **Opt-in read:** `read_note(path, lint=true)`.
-**Batch:** existing `vault-tools` OKF lint/fix share detector themes; MCP uses dotted `code`s.
+**Batch:** `apo engine okf validate` / `fix` share detector themes; MCP uses dotted `code`s.
 
 ## Detector catalog (v1 candidates)
 
@@ -138,5 +138,5 @@ agent (budget N per turn)
 - [agent-throughput.md](agent-throughput.md) — habit tips + `flaws[]` habits
 - [contracts/](contracts/) — OKF / usage templates
 - [contracts/archival.md](contracts/archival.md) — suggest-mode archival (shipped)
-- [vault-tools/README.md](../vault-tools/README.md) — batch OKF lint/fix
+- [contracts/okf-bundle.md](contracts/okf-bundle.md) — batch OKF CLI (`apo engine okf`)
 - [search-quality.md](search-quality.md) — retrieval eval (orthogonal)

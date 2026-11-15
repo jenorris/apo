@@ -4,6 +4,22 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- **`apo engine okf linkify <path…>` and `apo engine okf indexes [path…]`** — the
+  `## OKF links` writer and `index.md` listing regeneration now live in
+  `okf_cli.py`. Output is byte-identical to the old scripts. Both refuse a vault
+  with no OKF contract and any path outside the vault root (exit 2).
+  `indexes --no-recursive` limits the pass to the target roots.
+
+### Removed
+
+- **`vault-tools/`** and `just vault-tools …`. Its second OKF implementation
+  (own frontmatter parser, own type map including the `projects/pci-2026` rules)
+  is gone. Use `just okf <validate|fix|export|linkify|indexes>` instead
+  (`apo engine okf …` without `just`). `APO_VAULT_TOOLS` is no longer read; vault
+  `justfile` binders that call it must call `apo engine okf` instead.
+
 ## [0.38.0] — 2026-11-14
 
 A token admin can issue and revoke scoped clients, and symlinks no longer get
