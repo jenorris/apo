@@ -365,8 +365,9 @@ def _warn_apo_vaults_shim() -> None:
         return
     _APO_VAULTS_WARNED = True
     msg = (
-        "APO_VAULTS: keys/collection are ignored; names come from usage-contract "
-        "vault_id. Still supported for read-only vault mounts (apo-engine okf "
+        "APO_VAULTS: collection is ignored; names come from usage-contract "
+        "vault_id (the JSON key only when the bundle has no usage contract). "
+        "Still supported for read-only vault mounts (apo-engine okf "
         "ingest) — for ordinary multi-vault registration prefer "
         "APO_VAULTS_ROOT (parent directory of vaults) or APO_VAULT_PATHS / "
         "--vault-path."
@@ -492,13 +493,17 @@ def _bindings_from_paths(paths: list[Path]) -> dict[str, VaultBinding]:
 
 
 def _bindings_from_apo_vaults_shim(data: dict) -> tuple[dict[str, VaultBinding], str | None]:
-    """Compat: roots (+ optional index); JSON keys ignored. Returns (bindings, json_default)."""
+    """Compat: roots (+ optional index). Returns (bindings, json_default).
+
+    The name is the usage-contract ``vault_id``. A bundle with no usage contract
+    (a foreign read-only OKF bundle) is registered under its JSON key instead.
+    """
     _warn_apo_vaults_shim()
     vaults_raw = data.get("vaults") or {}
     if not isinstance(vaults_raw, dict) or not vaults_raw:
         raise ValueError("APO_VAULTS.vaults must be a non-empty object")
     out: dict[str, VaultBinding] = {}
-    for _key, spec in vaults_raw.items():
+    for key, spec in vaults_raw.items():
         if not isinstance(spec, dict):
             raise ValueError("APO_VAULTS vault spec must be an object")
         root = spec.get("root") or spec.get("notes_root")
@@ -506,6 +511,10 @@ def _bindings_from_apo_vaults_shim(data: dict) -> tuple[dict[str, VaultBinding],
             raise ValueError("APO_VAULTS vault entry missing root")
         root_path = _path(root)
         vault_id = read_usage_vault_id(root_path)
+        if not vault_id and not (root_path / _APO_DISABLED).exists():
+            # No usage contract at all: fall back to the JSON key.
+            if _read_usage_data(root_path) is None:
+                vault_id = str(key).strip() or None
         if not vault_id:
             raise ValueError(
                 f"path is not a vault (missing usage-contract vault_id or .apo-disabled): {root_path}"
