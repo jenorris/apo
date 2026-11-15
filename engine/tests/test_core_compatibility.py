@@ -21,6 +21,14 @@ from apo_engine import (
     link_index,
     mcp_backend,
     ops,
+    ops_admin,
+    ops_common,
+    ops_guard,
+    ops_mutate,
+    ops_place,
+    ops_read,
+    ops_search,
+    ops_vault,
     ranking,
     retrieval,
 )
@@ -95,12 +103,48 @@ def test_no_replacement_god_module() -> None:
         chunking: 1500,
         content: 1500,
         link_index: 1500,
+        # ops.py is a thin re-export; the code lives in the role modules.
+        # Today's pre-split ops.py was 5315 lines, so every cap sits far below it.
+        ops: 300,
+        ops_common: 400,
+        ops_admin: 500,
+        ops_guard: 450,
+        ops_search: 900,
+        ops_read: 1700,
+        ops_mutate: 1800,
+        ops_place: 700,
+        ops_vault: 800,
     }
     for module, limit in limits.items():
         assert module.__name__.startswith("apo_engine."), module.__name__
         assert Path(module.__file__).stem == module.__name__.rsplit(".", 1)[-1]
         lines = Path(module.__file__).read_text(encoding="utf-8").count("\n") + 1
         assert lines <= limit, (module.__name__, lines, limit)
+
+
+def test_ops_reexports_role_module_functions() -> None:
+    role_modules = (
+        ops_common,
+        ops_admin,
+        ops_guard,
+        ops_search,
+        ops_read,
+        ops_mutate,
+        ops_place,
+        ops_vault,
+    )
+    for module in role_modules:
+        for name, value in vars(module).items():
+            if callable(value) and getattr(value, "__module__", None) == module.__name__:
+                assert getattr(ops, name) is value, (module.__name__, name)
+
+
+def test_ops_setattr_reaches_the_module_that_calls_the_name(monkeypatch) -> None:
+    replacement = object()
+    monkeypatch.setattr(ops, "_guard_write", replacement)
+
+    assert ops_mutate._guard_write is replacement
+    assert ops_guard._guard_write is replacement
 
 
 def test_lower_level_modules_do_not_import_core() -> None:

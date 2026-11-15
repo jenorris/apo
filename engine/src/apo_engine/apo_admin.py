@@ -76,6 +76,7 @@ _ADMIN_CATALOG: dict[str, dict[str, Any]] = {
         "confirm_policy": "always",
         "parameters": {
             "path": "vault-relative note path (required)",
+            "expected_mtime": "mtime from the prior read/write; stale_write if the file changed since",
             "vault": "vault name (default registry default)",
         },
     },
