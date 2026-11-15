@@ -1,4 +1,4 @@
-"""Unit tests for tool-use analytics DuckDB + rollups."""
+"""Unit tests for tool-use analytics SQLite + rollups."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import duckdb
+import sqlite3
 
 from apo_engine import tool_metrics
 
@@ -15,7 +15,7 @@ from apo_engine import tool_metrics
 class ToolMetricsTest(unittest.TestCase):
     def test_record_and_rollup(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "metrics.duckdb"
+            db_path = Path(tmp) / "metrics.sqlite"
             tool_metrics.record_call(
                 collection="test",
                 tool="search_notes",
@@ -91,7 +91,7 @@ class ToolMetricsTest(unittest.TestCase):
     def test_schema_ddl_runs_once_and_all_events_land_after_flush(self):
         n = 120  # spans more than one drain batch
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "metrics.duckdb"
+            db_path = Path(tmp) / "metrics.sqlite"
             with mock.patch.object(
                 tool_metrics, "_ensure_schema", wraps=tool_metrics._ensure_schema
             ) as ensure:
@@ -149,8 +149,8 @@ class ToolMetricsTest(unittest.TestCase):
 
     def test_days_filter(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "metrics.duckdb"
-            conn = duckdb.connect(str(db_path))
+            db_path = Path(tmp) / "metrics.sqlite"
+            conn = sqlite3.connect(str(db_path))
             tool_metrics._ensure_schema(conn)
             conn.execute(
                 """
@@ -168,6 +168,7 @@ class ToolMetricsTest(unittest.TestCase):
                     1,
                 ],
             )
+            conn.commit()
             conn.close()
             tool_metrics.record_call(
                 collection="t",
@@ -178,6 +179,60 @@ class ToolMetricsTest(unittest.TestCase):
             stats = tool_metrics.tool_stats("t", days=7, path=db_path)
             self.assertEqual(stats["calls"], 1)
             self.assertEqual(stats["by_tool"][0]["tool"], "append_note")
+
+    def test_store_is_sqlite_wal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "metrics.sqlite"
+            tool_metrics.record_call(
+                collection="t", tool="read_note", ok=True, path=db_path
+            )
+            tool_metrics.read_events("t", path=db_path)  # flush + migrate
+            conn = sqlite3.connect(str(db_path))
+            try:
+                mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            finally:
+                conn.close()
+            self.assertEqual(mode, "wal")
+            self.assertEqual(
+                tool_metrics.metrics_db_path(None).name, "metrics.sqlite"
+            )
+
+    def test_event_shape_round_trips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "metrics.sqlite"
+            tool_metrics.record_call(
+                collection="t",
+                tool="patch_note",
+                ok=False,
+                error="boom",
+                duration_ms=12.5,
+                req_bytes=7,
+                resp_bytes=9,
+                flags={
+                    "folder_set": True,
+                    "ops_count": 3,
+                    "error_shape": ["ValueError:ops[0]"],
+                },
+                vault_id="work",
+                path=db_path,
+            )
+            (event,) = tool_metrics.read_events("t", path=db_path)
+            self.assertEqual(event["tool"], "patch_note")
+            self.assertIs(event["ok"], False)
+            self.assertEqual(event["error"], "boom")
+            self.assertEqual(event["duration_ms"], 12.5)
+            self.assertEqual((event["req_bytes"], event["resp_bytes"]), (7, 9))
+            self.assertIs(event["folder_set"], True)
+            self.assertEqual(event["ops_count"], 3)
+            self.assertEqual(event["error_shape"], ["ValueError:ops[0]"])
+            self.assertEqual(event["vault_id"], "work")
+
+    def test_no_duckdb_and_no_second_exporter(self):
+        import importlib.util
+        import sys
+
+        self.assertNotIn("duckdb", sys.modules)
+        self.assertIsNone(importlib.util.find_spec("apo_engine.otel_forwarder"))
 
 
 if __name__ == "__main__":

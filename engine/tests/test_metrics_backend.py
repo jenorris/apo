@@ -12,8 +12,8 @@ from apo_engine import metrics_backend as mb
 class MetricsBackendTest(unittest.TestCase):
     def test_embedded_status(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = Path(tmp) / "m.duckdb"
-            backend = mb.EmbeddedDuckDBBackend(db)
+            db = Path(tmp) / "m.sqlite"
+            backend = mb.EmbeddedSqliteBackend(db)
             st = backend.status()
             self.assertEqual(st["backend"], "embedded")
             backend.record("t", {"ts": "2026-01-01T00:00:00Z", "tool": "x", "ok": True})
@@ -22,7 +22,7 @@ class MetricsBackendTest(unittest.TestCase):
 
     def test_local_backend_maps_to_embedded(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = Path(tmp) / "m.duckdb"
+            db = Path(tmp) / "m.sqlite"
             cfg = mb.resolve_store_config(Path(tmp))
             # contract/env "local" is normalized to embedded in v0.5.0
             import os
@@ -39,6 +39,18 @@ class MetricsBackendTest(unittest.TestCase):
                     os.environ["APO_METRICS_BACKEND"] = old
             backend = mb.get_backend(Path(tmp), force=True)
             self.assertEqual(backend.status()["backend"], "embedded")
+
+    def test_duckdb_store_path_maps_to_sqlite(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            legacy = {"store": {"path": str(vault / "metrics.duckdb")}}
+            with mock.patch.object(
+                mb.tc, "load_telemetry_contract", return_value=legacy
+            ):
+                cfg = mb.resolve_store_config(vault)
+            self.assertEqual(cfg.path, vault / "metrics.sqlite")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ from apo_engine import telemetry_ops, tool_metrics
 class TelemetryOpsTest(unittest.TestCase):
     def test_efficiency_rollups(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "metrics.duckdb"
+            db_path = Path(tmp) / "metrics.sqlite"
             for i in range(5):
                 tool_metrics.record_call(
                     collection="eff",
@@ -52,7 +52,7 @@ class TelemetryOpsTest(unittest.TestCase):
 
     def test_telemetry_efficiency_delegates_to_vault_stats(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "metrics.duckdb"
+            db_path = Path(tmp) / "metrics.sqlite"
             tool_metrics.record_call(
                 collection="eff2",
                 tool="search_notes",
@@ -70,7 +70,7 @@ class TelemetryOpsTest(unittest.TestCase):
 
     def test_vault_stats(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "metrics.duckdb"
+            db_path = Path(tmp) / "metrics.sqlite"
             tool_metrics.record_call(
                 collection="vs",
                 tool="filter_notes",
@@ -90,7 +90,7 @@ class TelemetryOpsTest(unittest.TestCase):
 
     def test_collection_rollup_embedded(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "metrics.duckdb"
+            db_path = Path(tmp) / "metrics.sqlite"
             tool_metrics.record_call(
                 collection="coll",
                 tool="filter_notes",

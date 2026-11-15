@@ -74,10 +74,10 @@ def test_write_target_predicates(monkeypatch):
         "both": (True, True),
         "none": (False, False),
     }
-    for backend, (duck, otlp) in cases.items():
+    for backend, (sqlite, otlp) in cases.items():
         monkeypatch.setenv("APO_METRICS_BACKEND", backend)
         cfg = mb.resolve_store_config(None)
-        assert (cfg.writes_duckdb, cfg.writes_otlp) == (duck, otlp), backend
+        assert (cfg.writes_sqlite, cfg.writes_otlp) == (sqlite, otlp), backend
 
 
 def test_endpoint_env_override(monkeypatch):

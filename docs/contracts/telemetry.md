@@ -31,20 +31,20 @@ Ship `paths: vault_relative` + `expose_paths: true` so habit rollups can identif
 | **`vault(request={action: "stats"})`** | **Agent MCP** — habit KPI rollups (`folder_scoped_pct`, chunk-read ratio, validation tips) |
 | **OTLP spans → collector** | **Session / tool traces** — emitted by the engine itself (`store.backend: otlp`), fanned out to Jaeger + otlp-mcp |
 
-### Current state (2026-08-24)
+### Current state
 
-The engine **does** now export OTLP directly — see [OTLP export](#otlp-export) (`store.backend: otlp`, selectable in place of DuckDB). This supersedes the earlier note that OTLP existed only as an external Cursor-hook pipeline on another machine; that pipeline is not what runs here. Separately, [OTLP forwarding](#otlp-forwarding-optional-additive) (`otel` extra) fans each already-recorded DuckDB event out to Jaeger as well — additive, not a replacement for the DuckDB store — so the two live side by side: pick `store.backend: otlp|both` to make OTLP the store, or leave `embedded` and turn on forwarding to get spans without changing the store.
+The engine exports OTLP directly — see [OTLP export](#otlp-export). There is one exporter (`otlp_backend`, selected with `store.backend: otlp|both`). The earlier additive forwarder (`otel_forwarder`, `otel` extra, `APO_OTEL_EXPORT`) was removed after 0.38.0, so one event is never sent as a span by two code paths. The queryable store is SQLite in WAL mode (`~/.apo/metrics.sqlite`); DuckDB is no longer used at runtime.
 
 ## Store backends
 
 | `store.backend` | Path / URI |
 |-----------------|------------|
-| `embedded` (default) | `~/.apo/metrics.duckdb` |
+| `embedded` (default) | `~/.apo/metrics.sqlite` (SQLite, WAL) |
 | `otlp` | `store.endpoint` (default `http://localhost:4318/v1/traces`) |
-| `both` | Fan-out — DuckDB **and** OTLP. Cutover state; reads resolve to DuckDB |
+| `both` | Fan-out — SQLite row **and** one OTLP span per event from the single exporter; reads resolve to SQLite |
 | `none` | No recording (`APO_TOOL_METRICS=0`) |
 
-Legacy `local` / desk-metrics HTTP ingest is **retired in v0.5.0** — maps to `embedded`, as does the historical spelling `duckdb`. Env override: `APO_METRICS_BACKEND=embedded|otlp|both|none`.
+Legacy `local` / desk-metrics HTTP ingest is **retired in v0.5.0** — maps to `embedded`, as does the historical spelling `duckdb`. A `store.path` ending in `.duckdb` is mapped to the `.sqlite` sibling (SQLite cannot open a DuckDB file). Rows in an old `metrics.duckdb` are not imported; only legacy `tool-metrics-*.jsonl` files are, once. Env override: `APO_METRICS_BACKEND=embedded|otlp|both|none`.
 
 ## OTLP export
 
@@ -58,7 +58,7 @@ Install: `pip install 'apo-engine[otlp]'`. Without it the backend logs once and 
 | `apo.vault_id`, `apo.collection`, `apo.version` | binding + engine semver |
 | `apo.folder_set`, `apo.expected_mtime_set`, `apo.fields_set`, `apo.used_alias`, `apo.ops_count` | habit flags |
 | `apo.req_bytes`, `apo.resp_bytes` | payload sizes |
-| `apo.note_path`, `apo.path_hash`, `apo.heading`, `apo.chunk_hash` | **contract-governed** — same `privacy.allow.paths` rules as DuckDB |
+| `apo.note_path`, `apo.path_hash`, `apo.heading`, `apo.chunk_hash` | **contract-governed** — same `privacy.allow.paths` rules as the SQLite store |
 | `apo.session_id` | session identity (below) |
 
 Duration is span timing, not an attribute. `TelemetryPolicy` is applied *before* the backend sees the event, so privacy rules hold identically across backends.
@@ -66,28 +66,6 @@ Duration is span timing, not an attribute. `TelemetryPolicy` is applied *before*
 **Why spans, not Prometheus metrics.** This is per-event forensic data — "what did session X do, in what order, failing how". Prometheus stores aggregates and cannot answer that, and a session id as a label is unbounded cardinality. Aggregates are derived downstream by the collector's `spanmetrics` connector, so the engine instruments once and both shapes exist.
 
 **Shutdown.** Export is batched (1s) so it stays off the request path, and is flushed from a SIGTERM/SIGINT handler as well as `atexit` — MCP clients signal stdio servers rather than asking them to stop, and `atexit` does not run on a signal.
-
-## OTLP forwarding (optional, additive)
-
-DuckDB stays the queryable habit-KPI store; when enabled, each already-privacy-redacted event is **also** emitted as one OpenTelemetry span so Apo's real in-process timing lands in Jaeger next to Cursor-hook / just-recipe spans.
-
-| Aspect | Value |
-|--------|-------|
-| Service | `apo-mcp` |
-| Span | `apo.tool` (width = `duration_ms`) |
-| Attributes | `tool.name`, `tool.ok`, `vault_id`, `conversation_id`, `collection`, `req_bytes`, `resp_bytes`, `apo_version`, flags, `error` / `error_shape` |
-| Trace correlation | `trace_id = sha256(conversation_id)[:16]` (matches Workbench hooks); nests under the `"{cid}:session"` span so Apo joins the same Jaeger trace |
-| Endpoint | `OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://127.0.0.1:4318`), OTLP `http/protobuf` |
-
-**Enablement** (precedence): env `APO_OTEL_EXPORT=1|0` → vault contract `otel.export: true|false` → auto-on when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
-
-**Dependency:** optional extra `pip install apo-engine[otel]` (`opentelemetry-sdk` + otlp-http exporter). No-op when absent or the collector is down — best-effort, never raises, never blocks the tool or the DuckDB write.
-
-```yaml
-# <vault>/system/contracts/telemetry-contract.schema.yaml
-otel:
-  export: true   # or false to opt out even when an endpoint is set
-```
 
 ## Session identity (MCP wire)
 

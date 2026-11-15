@@ -136,7 +136,7 @@ emitted · **partial** = present under a different name or shape ·
 | `verified: [{by, at}]` | trust | **read-only** | Read (bare mapping → one-element list per §11); Apo never asserts verification itself |
 | `sources: [{resource, …}]` | provenance | **read-only** | Read, with `# Citations` fallback; not yet emitted |
 | `usage_window: {from, to}` | provenance | **read-only** | Read; frames every `usage_count` beneath it |
-| `usage_count` | provenance | **conflict** | Lives *inside* a `sources[]` entry and counts uses of that source. Apo's `metrics.duckdb` counts MCP tool calls — a different quantity. Not a wiring task. |
+| `usage_count` | provenance | **conflict** | Lives *inside* a `sources[]` entry and counts uses of that source. Apo's `metrics.sqlite` counts MCP tool calls — a different quantity. Not a wiring task. |
 | `status` | lifecycle | **partial** | Read, default `stable`; unknown values surfaced not rejected. Apo vaults already use `status` with their own values |
 | `stale_after` | lifecycle | **read-only** | Read; `ConceptMeta.is_stale()` |
 | `runtime` / `parameters` / `computation` / `executor` / `attester` | computation | **out of scope** | Attested Computation is not an Apo concept type |

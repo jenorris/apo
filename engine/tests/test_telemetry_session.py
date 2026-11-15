@@ -58,7 +58,7 @@ class TelemetryContractTest(unittest.TestCase):
                 yaml.safe_dump({"enabled": False}),
                 encoding="utf-8",
             )
-            db_path = Path(tmp) / "metrics.duckdb"
+            db_path = Path(tmp) / "metrics.sqlite"
             tool_metrics.record_call(
                 collection="c",
                 tool="search_notes",
@@ -86,7 +86,7 @@ class SessionStatsTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            db_path = Path(tmp) / "metrics.duckdb"
+            db_path = Path(tmp) / "metrics.sqlite"
             with mock.patch.dict(os.environ, {"APO_CONVERSATION_ID": "sess-1"}):
                 tool_metrics.record_call(
                     collection="meta",

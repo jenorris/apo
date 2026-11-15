@@ -8,15 +8,13 @@ enabled: true
 
 store:
   backend: embedded # embedded | local | none
-  path: ~/.apo/metrics.duckdb
+  path: ~/.apo/metrics.sqlite # SQLite, WAL mode
   local_uri: http://127.0.0.1:9473
 
-# Optional: also forward each event as an OTLP span (service apo-mcp, span apo.tool)
-# to OTEL_EXPORTER_OTLP_ENDPOINT (Jaeger via otlp-mcp). Additive to the DuckDB store.
-# Precedence: env APO_OTEL_EXPORT=1|0 → this flag → auto-on when the endpoint is set.
-# Requires the optional dependency: pip install apo-engine[otel]
-otel:
-  export: true
+# Retired after 0.38.0: the separate OTLP forwarder is gone, so `otel.export` is accepted
+# and ignored. For spans, set store.backend: otlp | both (pip install apo-engine[otlp]).
+# otel:
+#   export: true
 
 # The recorder is allow-list by construction: it reads allow.paths / headings /
 # chunk_hash and whether conversation_id is in allow.dimensions. It never

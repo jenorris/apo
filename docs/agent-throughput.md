@@ -106,7 +106,7 @@ See [tables.md](tables.md) and [toc-navigation.md](toc-navigation.md) for the fu
 
 ## Habit KPI gate (optional)
 
-Agents may self-check via **`vault(request={action: "stats", days: 7})`** (habit rollups from embedded `~/.apo/metrics.duckdb`).
+Agents may self-check via **`vault(request={action: "stats", days: 7})`** (habit rollups from embedded `~/.apo/metrics.sqlite`).
 
 Targets (rolling 7d, primary collection):
 

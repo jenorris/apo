@@ -2,7 +2,7 @@
 
 A single static binary (Go, ~8MB, no runtime dependency) that speaks MCP
 streamable-HTTP to a *running* apo-engine server. No local vault access, no
-engine dependencies (duckdb, sqlite-vec, watchdog, ...) — every command is
+engine dependencies (sqlite-vec, watchdog, ...) — every command is
 one MCP tool call over the wire. Pairs with the containerized engine (see
 `../Dockerfile`) so you can run the engine anywhere and talk to it from
 anywhere on the network, with nothing heavier than one binary installed on

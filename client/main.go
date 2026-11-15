@@ -1,8 +1,8 @@
 // Command apo-remote is a thin MCP client for a running apo-engine server
 // (streamable-HTTP transport, engine/mcp/server.py APO_MCP_TRANSPORT=http).
 //
-// It has no local vault access and no engine dependencies (duckdb,
-// sqlite-vec, watchdog, ...) — every command is a single MCP tool call over
+// It has no local vault access and no engine dependencies
+// (sqlite-vec, watchdog, ...) — every command is a single MCP tool call over
 // the wire. For the same commands run in-process against a local vault with
 // no server required, see the apo-local console script (apo_engine.cli_ops,
 // Python, part of the apo-engine package) — or the unified `apo` entry

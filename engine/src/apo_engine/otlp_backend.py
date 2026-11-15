@@ -91,8 +91,7 @@ def _build_tracer(endpoint: str, service_name: str) -> Any:
         }
     )
     provider = TracerProvider(resource=resource)
-    # Batched: export happens off the request path. The DuckDB backend wrote
-    # synchronously inside every tool call; this is strictly less overhead.
+    # Batched: export happens off the request path.
     #
     # The delay is deliberately short. Under stdio the client kills this
     # process when the session ends, and anything still queued dies with it —
@@ -265,8 +264,8 @@ class OtlpBackend:
 class FanoutBackend:
     """Write to several backends; read from the first that can answer.
 
-    Used for the DuckDB -> OTLP cutover: spans start flowing before the read
-    path moves, so there is never a window with no telemetry surface at all.
+    Used by ``store.backend: both``: a SQLite row (the queryable store) plus
+    one span per event from this module's exporter.
     """
 
     def __init__(self, backends: list[Any]) -> None:

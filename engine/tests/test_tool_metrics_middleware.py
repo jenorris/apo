@@ -34,7 +34,7 @@ class ToolMetricsMiddlewareResolveTest(unittest.TestCase):
     def test_record_uses_resolved_collection(self) -> None:
         async def _run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
-                db_path = Path(tmp) / "metrics.duckdb"
+                db_path = Path(tmp) / "metrics.sqlite"
                 # Patch get_backend path via record_call path= kw — middleware
                 # calls record_call without path, so set APO metrics path via
                 # recording through a thin wrapper by monkeypatching record_call.
@@ -80,7 +80,7 @@ class ToolMetricsMiddlewareResolveTest(unittest.TestCase):
 class RemapDefaultCollectionsTest(unittest.TestCase):
     def test_remap_default_to_vault_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "metrics.duckdb"
+            db_path = Path(tmp) / "metrics.sqlite"
             tool_metrics.record_call(
                 collection="default",
                 tool="search_notes",

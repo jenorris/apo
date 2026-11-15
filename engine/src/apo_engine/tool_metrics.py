@@ -1,4 +1,4 @@
-"""MCP tool-use analytics — DuckDB under ~/.apo/metrics.duckdb.
+"""MCP tool-use analytics — SQLite (WAL) under ~/.apo/metrics.sqlite.
 
 Privacy dimensions are vault-contract-driven (``telemetry-contract.schema.yaml``).
 Legacy ``tool-metrics-*.jsonl`` files are imported once on first open, then deleted.
@@ -10,14 +10,13 @@ import json
 import os
 import queue
 import re
+import sqlite3
 import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-
-import duckdb
 
 from apo_engine import telemetry_contract as tc
 
@@ -31,7 +30,7 @@ _write_lock = threading.Lock()
 # DB paths whose schema + JSONL import already ran in this process.
 _ready_paths: set[Path] = set()
 # record_call only enqueues; one daemon thread drains the queue in batches so no
-# DuckDB I/O happens on the request path. Each batch opens the DB once and closes
+# SQLite I/O happens on the request path. Each batch opens the DB once and closes
 # it, so other processes (apo-local, a second MCP server) can still write between
 # batches.
 _BATCH_MAX = 50
@@ -50,22 +49,6 @@ _FLAG_KEYS = (
     "flaws_emitted",
     "flaws_auto_fixed",
 )
-_EXTRA_COLS = (
-    ("vault_id", "VARCHAR"),
-    ("conversation_id", "VARCHAR"),
-    ("note_path", "VARCHAR"),
-    ("path_hash", "VARCHAR"),
-    ("heading", "VARCHAR"),
-    ("chunk_hash", "VARCHAR"),
-    ("apo_version", "VARCHAR"),
-    ("flaws_emitted", "INTEGER"),
-    ("flaws_auto_fixed", "INTEGER"),
-    # Calling surface — "mcp" (via ToolMetricsMiddleware) or "cli" (apo-local).
-    # NULL for historical rows recorded before this column existed.
-    ("surface", "VARCHAR"),
-)
-
-
 def engine_version() -> str:
     """Installed apo-engine semver (pyproject / ``apo_engine.__version__``)."""
     return str(_ENGINE_VERSION).strip() or "0.0.0"
@@ -87,12 +70,12 @@ def metrics_enabled(vault_root: Path | None = None) -> bool:
 
 
 def metrics_db_path(path: Path | None = None) -> Path:
-    """Shared DuckDB file for all collections."""
-    return path if path is not None else DEFERRED_DIR / "metrics.duckdb"
+    """Shared SQLite (WAL) file for all collections."""
+    return path if path is not None else DEFERRED_DIR / "metrics.sqlite"
 
 
 def metrics_path(collection: str = "") -> Path:
-    """Legacy alias — returns the shared metrics DuckDB path."""
+    """Legacy alias — returns the shared metrics SQLite path."""
     _ = collection
     return metrics_db_path()
 
@@ -139,54 +122,61 @@ def extract_arg_flags(
     return flags
 
 
-def _connect(db_path: Path) -> duckdb.DuckDBPyConnection:
+def _connect(db_path: Path) -> sqlite3.Connection:
+    """Open the metrics DB in WAL mode.
+
+    ``isolation_level=None`` keeps transactions explicit (``BEGIN IMMEDIATE`` in
+    ``_write_batch``). ``busy_timeout`` lets a second writer process (apo-local,
+    another MCP server) wait out a batch instead of failing.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=5.0, isolation_level=None)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    return conn
 
 
-def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
+def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS metrics_meta (
-            key VARCHAR PRIMARY KEY,
-            value VARCHAR
+            key TEXT PRIMARY KEY,
+            value TEXT
         )
         """
     )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS tool_calls (
-            ts VARCHAR NOT NULL,
-            collection VARCHAR NOT NULL,
-            tool VARCHAR NOT NULL,
-            ok BOOLEAN NOT NULL,
-            error VARCHAR,
-            duration_ms DOUBLE,
+            ts TEXT NOT NULL,
+            collection TEXT NOT NULL,
+            tool TEXT NOT NULL,
+            ok INTEGER NOT NULL,
+            error TEXT,
+            duration_ms REAL,
             req_bytes INTEGER,
             resp_bytes INTEGER,
-            folder_set BOOLEAN,
-            fields_set BOOLEAN,
-            expected_mtime_set BOOLEAN,
-            used_alias BOOLEAN,
+            folder_set INTEGER,
+            fields_set INTEGER,
+            expected_mtime_set INTEGER,
+            used_alias INTEGER,
             ops_count INTEGER,
-            error_shape JSON,
-            vault_id VARCHAR,
-            conversation_id VARCHAR,
-            note_path VARCHAR,
-            path_hash VARCHAR,
-            heading VARCHAR,
-            chunk_hash VARCHAR,
-            apo_version VARCHAR
+            error_shape TEXT,
+            vault_id TEXT,
+            conversation_id TEXT,
+            note_path TEXT,
+            path_hash TEXT,
+            heading TEXT,
+            chunk_hash TEXT,
+            apo_version TEXT,
+            flaws_emitted INTEGER,
+            flaws_auto_fixed INTEGER,
+            -- Calling surface: "mcp" (ToolMetricsMiddleware) or "cli" (apo-local).
+            surface TEXT
         )
         """
     )
-    for col, typ in _EXTRA_COLS:
-        try:
-            conn.execute(
-                f"ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS {col} {typ}"
-            )
-        except duckdb.Error:
-            pass
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_tool_calls_collection_ts
@@ -201,17 +191,16 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-def _meta_get(conn: duckdb.DuckDBPyConnection, key: str) -> str | None:
+def _meta_get(conn: sqlite3.Connection, key: str) -> str | None:
     row = conn.execute(
         "SELECT value FROM metrics_meta WHERE key = ?", [key]
     ).fetchone()
     return str(row[0]) if row else None
 
 
-def _meta_set(conn: duckdb.DuckDBPyConnection, key: str, value: str) -> None:
-    conn.execute("DELETE FROM metrics_meta WHERE key = ?", [key])
+def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.execute(
-        "INSERT INTO metrics_meta (key, value) VALUES (?, ?)", [key, value]
+        "INSERT OR REPLACE INTO metrics_meta (key, value) VALUES (?, ?)", [key, value]
     )
 
 
@@ -252,7 +241,7 @@ def _error_shape_json(value: Any) -> str | None:
 
 
 def _insert_events(
-    conn: duckdb.DuckDBPyConnection,
+    conn: sqlite3.Connection,
     collection: str,
     events: list[dict[str, Any]],
 ) -> None:
@@ -315,19 +304,25 @@ def _migrate_jsonl_once(db_path: Path) -> None:
             try:
                 _ensure_schema(conn)
                 if _meta_get(conn, "jsonl_migrated") != "1":
-                    for jpath in sorted(DEFERRED_DIR.glob("tool-metrics-*.jsonl")):
-                        coll = _collection_from_jsonl_path(jpath)
-                        rows = _parse_jsonl_file(jpath)
-                        if rows:
-                            _insert_events(conn, coll, rows)
-                        jpath.unlink(missing_ok=False)
-                    _meta_set(conn, "jsonl_migrated", "1")
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        for jpath in sorted(DEFERRED_DIR.glob("tool-metrics-*.jsonl")):
+                            coll = _collection_from_jsonl_path(jpath)
+                            rows = _parse_jsonl_file(jpath)
+                            if rows:
+                                _insert_events(conn, coll, rows)
+                            jpath.unlink(missing_ok=False)
+                        _meta_set(conn, "jsonl_migrated", "1")
+                    except BaseException:
+                        conn.execute("ROLLBACK")
+                        raise
+                    conn.execute("COMMIT")
                 _ready_paths.add(db_path)
             finally:
                 conn.close()
     except OSError:
         return
-    except duckdb.Error:
+    except sqlite3.Error:
         return
 
 
@@ -341,13 +336,17 @@ def _write_batch(batch: list[tuple[Path, str, dict[str, Any]]]) -> None:
             with _write_lock:
                 conn = _connect(db_path)
                 try:
-                    conn.begin()
-                    for collection, event in rows:
-                        _insert_events(conn, collection, [event])
-                    conn.commit()
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        for collection, event in rows:
+                            _insert_events(conn, collection, [event])
+                    except BaseException:
+                        conn.execute("ROLLBACK")
+                        raise
+                    conn.execute("COMMIT")
                 finally:
                     conn.close()
-        except (OSError, duckdb.Error):
+        except (OSError, sqlite3.Error):
             continue
 
 
@@ -462,7 +461,7 @@ def _row_to_event(row: tuple[Any, ...], columns: list[str]) -> dict[str, Any]:
 def _embedded_record(
     collection: str, event: dict[str, Any], path: Path | None = None
 ) -> None:
-    """Queue one event for the background DuckDB writer. Best-effort — never raises."""
+    """Queue one event for the background SQLite writer. Best-effort — never raises."""
     _enqueue((metrics_db_path(path), collection, event))
 
 
@@ -517,26 +516,17 @@ def record_call(
             event["conversation_id"] = cid
     event.update(tc.extract_note_context(tool, arguments, policy))
 
-    # Additive OTLP forwarding (Jaeger via otlp-mcp) — DuckDB stays the queryable
-    # store. Best-effort; gated by env/contract; never affects the DuckDB write.
-    try:
-        from apo_engine.otel_forwarder import enqueue_event
-
-        enqueue_event(collection, event, vault_root=vault_root)
-    except Exception:
-        pass
-
     from apo_engine.metrics_backend import get_backend
 
     backend = get_backend(vault_root)
     if path is not None and isinstance(backend, object):
-        from apo_engine.metrics_backend import EmbeddedDuckDBBackend
+        from apo_engine.metrics_backend import EmbeddedSqliteBackend
 
-        EmbeddedDuckDBBackend(path).record(collection, event)
+        EmbeddedSqliteBackend(path).record(collection, event)
         return
     try:
         backend.record(collection, event)
-    except (OSError, duckdb.Error):
+    except (OSError, sqlite3.Error):
         return
 
 
@@ -585,13 +575,13 @@ def _embedded_read_events(
                     ).strftime("%Y-%m-%dT%H:%M:%SZ")
                     sql += " AND ts >= ?"
                     params.append(cutoff_ts)
-                sql += " ORDER BY ts"
+                sql += " ORDER BY ts, rowid"
                 cur = conn.execute(sql, params)
                 columns = [d[0] for d in cur.description]
                 rows = cur.fetchall()
             finally:
                 conn.close()
-    except (OSError, duckdb.Error):
+    except (OSError, sqlite3.Error):
         return []
     return [_row_to_event(row, columns) for row in rows]
 
@@ -891,33 +881,24 @@ def remap_default_collections_by_vault_id(
                     where = (
                         f"collection = 'default' AND vault_id IN ({placeholders})"
                     )
-                    before = int(
-                        conn.execute(
-                            f"SELECT COUNT(*) FROM tool_calls WHERE {where}",
-                            ids,
-                        ).fetchone()[0]
-                    )
-                    conn.execute(
+                    cur = conn.execute(
                         f"UPDATE tool_calls SET collection = vault_id WHERE {where}",
                         ids,
                     )
+                    before = cur.rowcount
                 else:
                     where = (
                         "collection = 'default' "
                         "AND vault_id IS NOT NULL AND vault_id != ''"
                     )
-                    before = int(
-                        conn.execute(
-                            f"SELECT COUNT(*) FROM tool_calls WHERE {where}"
-                        ).fetchone()[0]
-                    )
-                    conn.execute(
+                    cur = conn.execute(
                         f"UPDATE tool_calls SET collection = vault_id WHERE {where}"
                     )
+                    before = cur.rowcount
                 updated = before
             finally:
                 conn.close()
-    except (OSError, duckdb.Error) as e:
+    except (OSError, sqlite3.Error) as e:
         return {"ok": False, "updated": 0, "path": str(db_path), "error": str(e)}
     return {"ok": True, "updated": updated, "path": str(db_path), "vault_ids": ids or "all"}
 
