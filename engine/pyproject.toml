@@ -72,7 +72,7 @@ apo-mcp = "apo_engine.mcp.server:main"
 # patch/patch-table/graph-neighbors/filter/backlinks/history) go to the same
 # apo_engine.cli_ops backend as apo-local; `apo engine <cmd>` goes to the
 # same apo_engine.cli backend as apo-engine (index/search/search-eval/stats/
-# watch/desk-project/okf/serve/optima-merge); `apo mcp` runs the MCP server
+# watch/desk-project/okf/serve); `apo mcp` runs the MCP server
 # in place, same as apo-mcp. See apo_engine/cli_apo.py's module docstring for
 # the full rationale, including how this resolves the `search` name
 # collision between the two backends. The Go network client (../client/),

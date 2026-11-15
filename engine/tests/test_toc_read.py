@@ -130,8 +130,8 @@ class TocReadTest(unittest.TestCase):
         native `datetime.date`/`datetime.datetime` — ops.read_note() does not
         coerce it to a string (wire serialization handles that
         only at its HTTP JSON-encoding boundary). Any caller serializing this
-        result to JSON — `apo-local`/`apo`'s `_print_json` (cli_ops.py), the
-        optima-merge JSON path (cli.py) — already passes `default=str`, which
+        result to JSON — `apo-local`/`apo`'s `_print_json` (cli_ops.py) — already passes
+        `default=str`, which
         does not crash and renders both types as their `str()` form. A caller
         using a bare `json.dumps()` (no `default=`) would still crash — that
         contract, not an ops.py bug, is what callers must honor now that the

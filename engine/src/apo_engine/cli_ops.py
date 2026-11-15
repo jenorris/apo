@@ -9,7 +9,7 @@ read_note, search_notes, write_note, append_note, patch_note, patch_table,
 graph_neighbors, filter_notes, backlinks, history — plus graph-export (the
 ``vault(action=export)`` link graph). It does NOT expose
 apo_admin, vault (registry/desk-project), index, serve, watch,
-okf, search-eval, desk-project, or optima-merge — those stay on apo-engine
+okf, search-eval, or desk-project — those stay on apo-engine
 or the MCP apo_admin tool.
 
 Output default is JSON on stdout (one dict, matching the MCP tool's return

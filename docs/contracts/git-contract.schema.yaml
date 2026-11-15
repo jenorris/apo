@@ -42,5 +42,5 @@ sync:
   # on_block_command: >-
   #   osascript -e "display notification \"$APO_SYNC_ERROR\" with title \"Apo sync blocked\""
 restore:
-  owner: "jeremy"
+  owner: "alice"
   drill: "clone remote → point APO_VAULTS_ROOT / APO_VAULT_PATHS at the checkout → just index --vault <id>"

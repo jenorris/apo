@@ -114,7 +114,7 @@ def test_span_attributes_namespace_and_renames():
     event = {
         "tool": "search_notes",
         "ok": True,
-        "vault_id": "jeremy",
+        "vault_id": "alice",
         "conversation_id": "proc-abc123",
         "apo_version": "0.6.4",
         "folder_set": True,
@@ -124,7 +124,7 @@ def test_span_attributes_namespace_and_renames():
 
     assert attrs["apo.collection"] == "e9c50a9b35a0"
     assert attrs["apo.tool"] == "search_notes"
-    assert attrs["apo.vault_id"] == "jeremy"
+    assert attrs["apo.vault_id"] == "alice"
     assert attrs["apo.folder_set"] is True
     # renamed for readability in Jaeger
     assert attrs["apo.session_id"] == "proc-abc123"

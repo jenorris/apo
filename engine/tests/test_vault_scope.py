@@ -146,7 +146,7 @@ class TokenScopeConfigTest(unittest.TestCase):
         digest = hashlib.sha256(b"tok").hexdigest()
         p = self._file({
             "cecil": {"sha256": digest, "vaults": ["atlas", "grid"]},
-            "optima": {"sha256": "0" * 64},
+            "ledger": {"sha256": "0" * 64},
         })
         scopes = load_token_scopes(p)
         self.assertEqual({"cecil": {"vaults": ["atlas", "grid"], "default_vault": "atlas"}}, scopes)
@@ -156,7 +156,7 @@ class TokenScopeConfigTest(unittest.TestCase):
 
     def test_unscoped_client_gets_no_claims(self):
         digest = hashlib.sha256(b"tok").hexdigest()
-        access = asyncio.run(StaticBearerTokenVerifier({"optima": digest}).verify_token("tok"))
+        access = asyncio.run(StaticBearerTokenVerifier({"ledger": digest}).verify_token("tok"))
         self.assertEqual({}, access.claims)
 
     def test_bad_scope_entries_are_rejected(self):

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import tzinfo
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _ENGINE_ROOT = Path(__file__).resolve().parents[2]  # <repo>/engine
 
@@ -22,6 +24,23 @@ def env_alias(canonical: str, deprecated: str, default: str = "") -> str:
             f"{deprecated}={old!r}; set one value or make both identical"
         )
     return new or old or default
+
+
+def local_tzinfo() -> tzinfo | None:
+    """Timezone for date-only inputs and human-readable timestamps.
+
+    ``APO_TIMEZONE`` (an IANA name such as ``Europe/Berlin``) wins. Otherwise
+    return ``None``, which the ``datetime`` API reads as the machine's local
+    timezone (DST-aware): ``astimezone(None)`` converts to it and a naive
+    datetime is read in it. An unknown name raises ``ValueError``.
+    """
+    name = (os.environ.get("APO_TIMEZONE") or "").strip()
+    if not name:
+        return None
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as e:
+        raise ValueError(f"APO_TIMEZONE={name!r} is not a known timezone") from e
 
 
 ENV_TRUTHY = ("1", "true", "yes", "on")

@@ -5,12 +5,30 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from importlib import metadata
 from typing import Any
 
 from .watch_health import HookHealthTracker
 
 logger = logging.getLogger("apo.watch")
+
+# Installed packages extend the watcher by exposing an entry point in this group.
+# Each entry point loads to a hook factory: ``factory(binding, verbose)`` returns
+# an iterable of ``(hook_name, hook_callable)`` for that vault. With no package
+# installed the group is empty and the watcher runs only its built-in hooks.
+ENTRY_POINT_GROUP = "apo.watch_hooks"
+
+
+def load_entry_point_factories() -> tuple[Callable[[Any, bool], Iterable[tuple[str, Callable[..., Any]]]], ...]:
+    """Load every ``apo.watch_hooks`` entry point; skip (and log) any that fail to load."""
+    factories = []
+    for ep in metadata.entry_points(group=ENTRY_POINT_GROUP):
+        try:
+            factories.append(ep.load())
+        except Exception:
+            logger.exception("watch hook entry point %r failed to load; skipped", ep.name)
+    return tuple(factories)
 
 
 class HookWorker:

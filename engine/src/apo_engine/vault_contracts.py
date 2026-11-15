@@ -191,8 +191,6 @@ def _checker_for(cid: str) -> Callable[[dict[str, Any]], list[dict[str, str]]] |
         from apo_engine.archival_contract import check_contract as fn
     elif cid == "telemetry-contract":
         from apo_engine.telemetry_contract import check_contract as fn
-    elif cid == "optima-contract":
-        from apo_engine.optima_contract import check_contract as fn
     elif cid == "usage-contract":
         from apo_engine.usage_contract import check_contract as fn
     else:

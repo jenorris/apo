@@ -3,13 +3,13 @@ flowchart TD
     GWS["gws calendar events list"]
     YAML["slack-status-rules.yaml"]
     OVR["slack-status-overrides.json"]
-    OPT["Optima current.yaml"]
+    OPT["Schedule current.yaml"]
     FB["Time-of-day fallback slots"]
   end
 
   subgraph engine [slack-status-bot.py]
-    PROJ["schedule + optima projector sync"]
-    MAP["build_optima_decision"]
+    PROJ["schedule + projector sync"]
+    MAP["build_status_decision"]
     RESOLVE["resolve_decision priority"]
     FP["Fingerprint dedup"]
   end

@@ -202,7 +202,7 @@ class StaticBearerTokenVerifier(TokenVerifier):
     """Shared-secret bearer auth for machine clients on a private network.
 
     The tokens file maps a client name to the SHA-256 hex digest of its token
-    (``{"clients": {"optima-service": {"sha256": "<hex>"}}}``), so the file on
+    (``{"clients": {"ledger-service": {"sha256": "<hex>"}}}``), so the file on
     disk never holds a usable secret. Each client keeps its own plaintext
     token and can be revoked by deleting its entry and restarting the server.
 

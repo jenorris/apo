@@ -38,7 +38,7 @@ generated:
   by: reference_agent/gemini-2.5-pro
   at: "2026-02-01T00:00:00Z"
 verified:
-  - by: human:jeremy
+  - by: human:alice
     at: "2026-02-02T00:00:00Z"
 usage_window:
   from: 2026-01-01
@@ -173,12 +173,12 @@ class TrustTests(unittest.TestCase):
     def test_bare_verified_mapping_reads_as_one_element_list(self):
         """SPEC §11 consumer obligation."""
         note = (
-            "---\ntype: Note\nverified:\n  by: human:jeremy\n"
+            "---\ntype: Note\nverified:\n  by: human:alice\n"
             "  at: \"2026-02-02T00:00:00Z\"\n---\n\n# X\n"
         )
         meta = okf.read_concept(note, "resources/x.md")
         self.assertEqual(len(meta.verified), 1)
-        self.assertEqual(meta.verified[0].by.raw, "human:jeremy")
+        self.assertEqual(meta.verified[0].by.raw, "human:alice")
 
     def test_human_verification_detected(self):
         meta = okf.read_concept(V02_NOTE, "resources/modern.md")
@@ -194,9 +194,9 @@ class TrustTests(unittest.TestCase):
 
     def test_actor_convention(self):
         """SPEC §7 — three identity forms."""
-        human = okf.parse_actor("human:jeremy")
+        human = okf.parse_actor("human:alice")
         self.assertTrue(human.is_human)
-        self.assertEqual(human.ident, "jeremy")
+        self.assertEqual(human.ident, "alice")
 
         proc = okf.parse_actor("process:finance-nightly")
         self.assertEqual(proc.kind, "process")

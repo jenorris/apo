@@ -304,7 +304,7 @@ def run_watch(
             "another apo-engine watch holds %s; exiting", watch_lock_path()
         )
         raise SystemExit(0)
-    hook_factories = tuple(hook_factories)
+    hook_factories = (*hook_factories, *watch_hooks.load_entry_point_factories())
 
     _default, bindings = vaults.load_bindings()
     # Single-vault legacy (no discovery env): one thread, no supervisor.
@@ -497,8 +497,11 @@ def _watch_one(
         lambda *, index_busy: sync_ctl.tick(index_busy=index_busy),
     )
     for factory in hook_factories:
-        for name, hook in factory(binding, verbose):
-            hooks.register(name, hook)
+        try:
+            for name, hook in factory(binding, verbose):
+                hooks.register(name, hook)
+        except Exception:
+            logger.exception("[%s] watch hook factory %r failed; skipped", label, factory)
 
     ignore_res = core._compile_ignore(core._load_ignore())
     contracts_dirty = threading.Event()

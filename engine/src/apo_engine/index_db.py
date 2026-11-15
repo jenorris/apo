@@ -1342,7 +1342,7 @@ def index_health() -> dict[str, Any]:
         """
     )
 
-    # Watch-loop hook health (git-sync / optima-merge / desk-reprojection) —
+    # Watch-loop hook health (git-sync / desk-reprojection / plugin hooks) —
     # a small persisted heartbeat the watcher writes per vault; see
     # `watch_health.py`. Read-side only here: a stalled or hung hook needs to
     # surface through the same `index_health()`/`apo-engine doctor` path an

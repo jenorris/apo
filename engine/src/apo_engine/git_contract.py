@@ -140,8 +140,8 @@ def check_contract(data: dict[str, Any]) -> list[dict[str, str]]:
 def is_git_work_tree(vault_root: Path) -> bool:
     """True if vault_root is inside a git work tree (root or subdirectory).
 
-    Meta lives under ``~/Notes`` (``jenorris/foam``) without its own ``.git``;
-    Norris/Work are dedicated checkouts with ``.git`` on the vault root.
+    A vault may sit inside a larger checkout without its own ``.git``, or be a
+    dedicated checkout with ``.git`` on the vault root.
 
     Result is TTL-cached: this forks a ``git`` subprocess, and the watcher's
     git-sync tick asked once per vault per second.

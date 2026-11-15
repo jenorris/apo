@@ -13,7 +13,7 @@ Dispatch:
                              patch, patch-table, graph-neighbors, filter, backlinks,
                              history — same backend as apo-local / the MCP note tools)
   apo engine <cmd> ...     -> apo_engine.cli.main        (index, search-eval, stats,
-                             watch, desk-project, okf, optima-merge — same as
+                             watch, desk-project, okf — same as
                              apo-engine)
   apo mcp                  -> apo_engine.mcp.server.main  (stdio/http MCP server,
                              env-configured, same as apo-mcp)
@@ -70,7 +70,7 @@ Usage:
                            backlinks, history
                            (same backend as apo-local / the MCP note tools)
   apo engine <cmd> ...     admin/index ops: index, search-eval, stats,
-                           watch, desk-project, okf, optima-merge
+                           watch, desk-project, okf
                            (same as apo-engine)
   apo mcp                  run the MCP server in place (same as apo-mcp;
                            stdio by default, APO_MCP_TRANSPORT=http for HTTP)

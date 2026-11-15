@@ -80,7 +80,6 @@ class TestHistory(unittest.TestCase):
     def test_browse_since_until_and_exclude(self):
         import os
         from datetime import datetime
-        from zoneinfo import ZoneInfo
 
         old = self.vault / "archives" / "old.md"
         old.parent.mkdir(parents=True)
@@ -88,7 +87,7 @@ class TestHistory(unittest.TestCase):
         os.utime(old, (1_700_000_000, 1_700_000_000))
         core.index_vault(rebuild=True, verbose=False)
 
-        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
         h = ops.history(limit=20, since=today, until=today)
         self.assertTrue(h["ok"], msg=h)
         self.assertTrue(h.get("since"))
@@ -190,9 +189,8 @@ class TestHistory(unittest.TestCase):
         # Keep the history backend's serialized response behavior
         # forwarded these params from a JSON body) — same combo, direct ops call.
         from datetime import datetime
-        from zoneinfo import ZoneInfo
 
-        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
         h = ops.history(
             limit=5,
             since=today,

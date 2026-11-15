@@ -212,7 +212,7 @@ separate memorizing:
 | Command | Routes to | Covers |
 |---------|-----------|--------|
 | `apo <note-verb> ...` | same backend as `apo-local` | `read`, `search`, `write`, `append`, `patch`, `patch-table`, `graph-neighbors`, `filter`, `backlinks`, `history` — mirrors the MCP note tools |
-| `apo engine <cmd> ...` | same backend as `apo-engine` | `index`, `search-eval`, `stats`, `watch`, `desk-project`, `okf`, `optima-merge` |
+| `apo engine <cmd> ...` | same backend as `apo-engine` | `index`, `search-eval`, `stats`, `watch`, `desk-project`, `okf` |
 | `apo mcp` | same backend as `apo-mcp` | run the MCP server in place (stdio/http) |
 
 `apo-engine` / `apo-local` / `apo-mcp` still work unchanged as their own commands — nothing that depends on those exact names (launchd plists, shell aliases, MCP host config) needs to change. `just`'s own recipes (`search`/`stats`/`index`/`mcp`/...) still shell out to the original names too, so they keep working whether or not `apo` has been reinstalled yet.

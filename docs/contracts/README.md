@@ -32,7 +32,7 @@ Do **not** confuse templates here with a setting in MCP config. Opt-in means: pu
 
 ## Contract checks
 
-The engine coerces silently at load time (an unknown key is ignored, an unknown `enforcement` becomes `soft`, a rule without `match` is dropped). To keep that drift visible, every engine-interpreted contract (`okf`, `search`, `table`, `git`, `mermaid`, `archival`, `telemetry`, `optima`'s `refresh` block) has a shape check beside its loader:
+The engine coerces silently at load time (an unknown key is ignored, an unknown `enforcement` becomes `soft`, a rule without `match` is dropped). To keep that drift visible, every engine-interpreted contract (`okf`, `search`, `table`, `git`, `mermaid`, `archival`, `telemetry`) has a shape check beside its loader:
 
 | Surface | What you see |
 |---------|--------------|

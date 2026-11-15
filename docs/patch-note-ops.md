@@ -84,7 +84,7 @@ retries by heading and returns a soft `tip` to re-search.
 ```
 
 ```json
-{"op": "prepend", "heading": "## Session log", "text": "**2026-07-24 08:00 ET** — …\n\n"}
+{"op": "prepend", "heading": "## Session log", "text": "**2026-07-24 08:00 UTC** — …\n\n"}
 ```
 
 ```json
