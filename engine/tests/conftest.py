@@ -1,6 +1,6 @@
 """Shared test isolation — no test may touch the real ~/.apo runtime directory.
 
-Redirects deferred queues, tool-metrics DuckDB, and the watcher PID probe into a
+Redirects deferred queues, tool-metrics SQLite, and the watcher PID probe into a
 per-test tmp dir. Applies to unittest.TestCase tests too (autouse side effects).
 """
 from __future__ import annotations
@@ -34,7 +34,6 @@ from apo_engine import (  # noqa: E402
     config,
     deferred,
     ops,
-    otel_forwarder,
     tool_metrics,
     vaults,
 )
@@ -81,4 +80,3 @@ def _isolated_apo_runtime(tmp_path, tmp_path_factory, monkeypatch):
     yield
     # Queued metrics events must land (or be dropped) before the runtime redirect is undone.
     tool_metrics.flush()
-    otel_forwarder.flush()

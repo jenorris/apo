@@ -1,4 +1,4 @@
-"""Pluggable metrics storage — OTLP spans, embedded DuckDB, or both."""
+"""Pluggable metrics storage — OTLP spans, embedded SQLite (WAL), or both."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from apo_engine.config import ENV_FALSY
 
 log = logging.getLogger(__name__)
 
-DEFAULT_EMBEDDED_PATH = Path.home() / ".apo" / "metrics.duckdb"
+DEFAULT_EMBEDDED_PATH = Path.home() / ".apo" / "metrics.sqlite"
 
 VALID_BACKENDS = ("embedded", "otlp", "both", "none")
 
@@ -29,7 +29,7 @@ class StoreConfig:
         return self.backend != "none"
 
     @property
-    def writes_duckdb(self) -> bool:
+    def writes_sqlite(self) -> bool:
         return self.backend in ("embedded", "both")
 
     @property
@@ -50,7 +50,7 @@ def _store_from_contract(vault_root: Path | None) -> dict[str, Any]:
     return store if isinstance(store, dict) else {}
 
 
-# Historical spellings that mean "embedded DuckDB".
+# Historical spellings that mean "embedded" (the store was DuckDB through 0.38).
 _BACKEND_ALIASES = {"local": "embedded", "duckdb": "embedded"}
 
 
@@ -70,7 +70,12 @@ def resolve_store_config(vault_root: Path | None = None) -> StoreConfig:
         )
         backend = "embedded"
     raw_path = str(store.get("path") or "").strip()
-    path = Path(raw_path).expanduser() if raw_path else _runtime_dir() / "metrics.duckdb"
+    path = Path(raw_path).expanduser() if raw_path else _runtime_dir() / "metrics.sqlite"
+    if path.suffix == ".duckdb":
+        # A contract written for the DuckDB store. SQLite cannot open a DuckDB
+        # file, so point at the sibling SQLite file instead of failing quietly.
+        path = path.with_suffix(".sqlite")
+        log.warning("store.path names a .duckdb file; using %s (SQLite)", path)
     endpoint = str(store.get("endpoint") or "").strip()
     return StoreConfig(backend=backend, path=path, endpoint=endpoint)
 
@@ -90,8 +95,8 @@ class MetricsBackend(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
-class EmbeddedDuckDBBackend:
-    """Default — ~/.apo/metrics.duckdb via tool_metrics DuckDB helpers."""
+class EmbeddedSqliteBackend:
+    """Default — ~/.apo/metrics.sqlite (WAL) via tool_metrics SQLite helpers."""
 
     def __init__(self, path: Path | None = None) -> None:
         self._path = path
@@ -145,11 +150,10 @@ def _build_backend(cfg: StoreConfig) -> MetricsBackend:
     if cfg.backend == "otlp":
         return OtlpBackend(cfg.endpoint)
     if cfg.backend == "both":
-        # Cutover mode: spans flow before the read path moves off DuckDB, so
-        # there is never a window with no telemetry surface. Reads resolve to
-        # DuckDB (OtlpBackend.read_events is empty by design).
-        return FanoutBackend([EmbeddedDuckDBBackend(cfg.path), OtlpBackend(cfg.endpoint)])
-    return EmbeddedDuckDBBackend(cfg.path if cfg.backend == "embedded" else None)
+        # Reads resolve to SQLite (OtlpBackend.read_events is empty by design).
+        # This is the only span path: the retired otel_forwarder is gone.
+        return FanoutBackend([EmbeddedSqliteBackend(cfg.path), OtlpBackend(cfg.endpoint)])
+    return EmbeddedSqliteBackend(cfg.path if cfg.backend == "embedded" else None)
 
 
 def get_backend(vault_root: Path | None = None, *, force: bool = False) -> MetricsBackend:

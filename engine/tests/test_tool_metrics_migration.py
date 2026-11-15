@@ -1,4 +1,4 @@
-"""One-time JSONL → DuckDB migration for tool metrics."""
+"""One-time JSONL → SQLite migration for tool metrics."""
 from __future__ import annotations
 
 import json
@@ -30,7 +30,7 @@ class ToolMetricsMigrationTest(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            db_path = runtime / "metrics.duckdb"
+            db_path = runtime / "metrics.sqlite"
             with mock.patch.object(tool_metrics, "DEFERRED_DIR", runtime):
                 events = tool_metrics.read_events("migrate", path=db_path)
                 self.assertFalse(jsonl.is_file())
@@ -66,7 +66,7 @@ class ToolMetricsMigrationTest(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            db_path = runtime / "metrics.duckdb"
+            db_path = runtime / "metrics.sqlite"
             with mock.patch.object(tool_metrics, "DEFERRED_DIR", runtime):
                 events = tool_metrics.read_events("only", path=db_path)
                 self.assertFalse(jsonl.is_file())
@@ -76,7 +76,7 @@ class ToolMetricsMigrationTest(unittest.TestCase):
     def test_migration_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
-            db_path = runtime / "metrics.duckdb"
+            db_path = runtime / "metrics.sqlite"
             with mock.patch.object(tool_metrics, "DEFERRED_DIR", runtime):
                 tool_metrics.record_call(
                     collection="once",

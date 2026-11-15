@@ -4,6 +4,25 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Changed
+
+- **Tool-use metrics move from DuckDB to SQLite (WAL).** Events now go to
+  `~/.apo/metrics.sqlite` (same `tool_calls` fields, same readers and rollups).
+  The `duckdb` dependency is gone from `engine/pyproject.toml` and `engine/uv.lock`,
+  so a clean install no longer pulls a ~30 MB wheel for a few thousand rows.
+  `EmbeddedDuckDBBackend` is now `EmbeddedSqliteBackend`. A `store.path` ending in
+  `.duckdb` is mapped to `.sqlite` with a warning.
+- Legacy `tool-metrics-*.jsonl` files are still imported once (and deleted). Rows in an
+  existing `~/.apo/metrics.duckdb` are **not** imported; that import never existed, and
+  reading it would keep DuckDB a runtime dependency. The old file is left in place.
+
+### Removed
+
+- **`apo_engine.otel_forwarder`, the `otel` extra and `APO_OTEL_EXPORT`.** It mirrored each
+  event as a span next to the DuckDB row, which duplicated `otlp_backend`. One exporter
+  remains: set `store.backend: otlp | both` (`pip install 'apo-engine[otlp]'`). A vault
+  contract's `otel.export` key is still accepted and ignored.
+
 ## [0.38.0] — 2026-11-14
 
 A token admin can issue and revoke scoped clients, and symlinks no longer get
