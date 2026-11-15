@@ -11,6 +11,7 @@ from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 from apo_engine import config, tool_metrics
 from apo_engine.session_context import request_conversation_id
+from apo_engine.tool_aliases import canonical_tool
 
 
 def _tool_name(context: MiddlewareContext[Any]) -> str:
@@ -103,7 +104,7 @@ class ToolMetricsMiddleware(Middleware):
         if not tool_metrics.metrics_enabled():
             return await call_next(context)
 
-        tool = _tool_name(context) or "?"
+        tool = canonical_tool(_tool_name(context)) or "?"
         if tool in _SKIP_METRICS_TOOLS:
             return await call_next(context)
 

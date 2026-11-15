@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from apo_engine.tool_aliases import canonical_tool
+
 
 _OPS_HINT = (
     'Each ops[] item needs "op". '
@@ -181,7 +183,7 @@ def _input_keys(err: dict[str, Any]) -> list[str]:
 
 def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
     """Turn a FastMCP/Pydantic ValidationError into a one-shot agent hint."""
-    name = (tool_name or "").strip() or "tool"
+    name = canonical_tool((tool_name or "").strip()) or "tool"
     errors = _pydantic_errors(exc)
     hints: list[str] = []
 

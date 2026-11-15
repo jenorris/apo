@@ -4,6 +4,15 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Added
+
+- **CLI-shaped MCP tool aliases**: `read`, `search`, `write`, `append`, `patch`,
+  `filter` run the same function as `read_note`, `search_notes`, `write_note`,
+  `append_note`, `patch_note`, `filter_notes`. The `_note` names stay canonical.
+  Aliases are hidden from `tools/list` (set `APO_MCP_LIST_ALIASES=1` to list
+  them) and are not counted in the documented 12 top-level tools.
+  `scripts/check_public_facts.py` now also checks the alias count.
+
 ## [0.38.0] — 2026-11-14
 
 A token admin can issue and revoke scoped clients, and symlinks no longer get
