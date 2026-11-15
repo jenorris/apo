@@ -12,7 +12,6 @@ Opt-in per vault. When present under `<vault>/system/contracts/`, Apo adjusts **
 | `privacy.allow.paths` | `none` (flags only) · `hash_only` · `vault_relative` · `absolute` |
 | `privacy.allow.headings` / `chunk_hash` | Section-level optimization nodes when paths allowed |
 | `agent_access.expose_paths` | Habit rollups may include path-scoped flags when allowed |
-| `agent_access.scope` | `session` (conversation_id) · `collection` · `desk` (operator) |
 | `privacy.allow.dimensions` | Includes `apo_version` (engine semver per row) for cross-version burn-down |
 | `efficiency` | KPI thresholds for `vault(request={action: "stats"})` tips |
 

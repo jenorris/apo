@@ -9,7 +9,6 @@ enabled: true
 store:
   backend: embedded # embedded | local | none
   path: ~/.apo/metrics.sqlite # SQLite, WAL mode
-  local_uri: http://127.0.0.1:9473
 
 # Retired after 0.38.0: the separate OTLP forwarder is gone, so `otel.export` is accepted
 # and ignored. For spans, set store.backend: otlp | both (pip install apo-engine[otlp]).
@@ -23,7 +22,6 @@ store:
 privacy:
   allow:
     dimensions: [tool, ok, duration_ms, collection, conversation_id, vault_id, apo_version]
-    flags: [folder_set, expected_mtime_set, error_shape, used_alias, fields_set]
     paths: vault_relative # none | hash_only | vault_relative | absolute
     headings: true
     chunk_hash: true
@@ -36,10 +34,7 @@ privacy:
 retention_days: 90
 
 agent_access:
-  lean_visible: true
-  scope: session # session | collection | desk
   expose_paths: true
-  actions: [status, session, collection, active, efficiency, workbench]
 
 # Optional KPI thresholds for telemetry(action=efficiency) tips
 efficiency:
@@ -47,12 +42,3 @@ efficiency:
   expand_to_search_target_pct: 10
   error_rate_max_pct: 5
   large_read_bytes: 15000
-
-ingest:
-  conversation_id_env: APO_CONVERSATION_ID
-  # Preferred: MCP _meta apo/conversation_id or args _apo.conversation_id (stripped pre-validation)
-  active_session_file: ~/.apo/active-session.json
-  rpc_telemetry: true # POST /v1/telemetry
-
-pointers:
-  - docs/agent-throughput.md

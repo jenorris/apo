@@ -23,13 +23,11 @@ KNOWN_TOP_KEYS = frozenset(
         "retention_days",
         "agent_access",
         "efficiency",
-        "ingest",
-        "pointers",
     }
 )
 # What the engine reads under privacy.allow; ``deny`` is documentation only —
 # the recorder is allow-list by construction and never captures bodies/queries.
-KNOWN_ALLOW_KEYS = frozenset({"dimensions", "flags", "paths", "headings", "chunk_hash"})
+KNOWN_ALLOW_KEYS = frozenset({"dimensions", "paths", "headings", "chunk_hash"})
 
 TELEMETRY_CONTRACT_CANDIDATES = (
     Path("system") / "contracts" / "telemetry-contract.schema.yaml",

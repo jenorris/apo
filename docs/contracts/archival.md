@@ -57,13 +57,9 @@ eligibility:
     field: last_activity
     older_than_days: 90
 actions:
-  place: true
   set_fields:
     status: archived
     archived_at: "$now"
-hot_search:
-  relies_on: search-contract.default_exclude
-  expected_exclude_globs: [archives/*]
 safety:
   deny_if_open_todos: true
 ```
