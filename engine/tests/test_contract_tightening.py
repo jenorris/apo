@@ -2,7 +2,7 @@
 
 Covers the gaps closed in the tighten-contracts pass:
 
-* ``table-contract`` — mapping-form ``tables:`` (the shape the Optima vault
+* ``table-contract`` — mapping-form ``tables:`` (the shape a live vault
   actually ships) is honored; ``replace_table`` upsert keys by the contract
   ``key_column``; per-rule ``merge`` / ``allow_new_columns`` / ``header_synonyms``
   are read (the template documented them, the engine ignored them).
@@ -78,13 +78,13 @@ class TableContractShapeTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_mapping_form_is_honored(self):
-        # The live Optima vault ships this shape; the loader used to drop it
+        # A live vault ships this shape; the loader used to drop it
         # silently, so row_key fell back to the first cell.
         _write_yaml(
             self.contract,
             {
                 "table_contract_version": "0.1",
-                "vault_id": "optima",
+                "vault_id": "ledger",
                 "tables": {"horizon.md": {"key_column": "start"}, "recent.md": {"key_column": "start"}},
             },
         )

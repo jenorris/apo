@@ -145,7 +145,7 @@ class JsonPatchTests(JsonCatalogBase):
             "inbox/widget.json",
             [
                 {"op": "set_field", "field": "status", "value": "active"},
-                {"op": "set_field", "field": "meta.owner", "value": "jeremy"},
+                {"op": "set_field", "field": "meta.owner", "value": "alice"},
                 {"op": "set_field", "field": "meta.code", "value": "007"},
                 {"op": "set_field", "field": "meta.count", "value": 7},
                 {"op": "set_field", "field": "todos[id=t2].status", "value": "done"},
@@ -158,7 +158,7 @@ class JsonPatchTests(JsonCatalogBase):
         self.assertEqual(out["applied"], 6)
         data = json.loads(self._disk())
         self.assertEqual(data["status"], "active")
-        self.assertEqual(data["meta"], {"owner": "jeremy", "code": "007", "count": 7})
+        self.assertEqual(data["meta"], {"owner": "alice", "code": "007", "count": 7})
         self.assertEqual(data["todos"][1]["status"], "done")
         self.assertNotIn("okf_type", data)
         self.assertEqual(

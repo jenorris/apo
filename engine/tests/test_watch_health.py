@@ -1,7 +1,7 @@
 """Watch-loop hook health — persisted heartbeat + index_health() wiring.
 
 Covers the "Problem B" fix in docs/watcher-scheduler-separation.md: each of
-the watch loop's peripheral hooks (git-sync, optima-merge, desk-reproject) is
+the watch loop's peripheral hooks (git-sync, desk-reproject, plugin hooks) is
 wrapped in try/except Exception, which only guards a call that *raises* — a
 hang was previously invisible. `watch_health.HookHealthTracker` records
 last-tick timestamp/duration/outcome per hook; `core.index_health()` surfaces
@@ -48,14 +48,14 @@ class HookHealthTrackerTest(unittest.TestCase):
     def test_record_failure_writes_immediately_bypassing_throttle(self):
         tracker = watch_health.HookHealthTracker(self.tmp)
         # First write establishes the throttle window.
-        tracker.record(watch_health.OPTIMA_MERGE, seconds=0.01, ok=True)
+        tracker.record("plugin_hook", seconds=0.01, ok=True)
         # A failure right after must not be swallowed by the 5s write-gap
         # throttle — a stall/error needs to be visible without delay.
         tracker.record(
-            watch_health.OPTIMA_MERGE, seconds=1.5, ok=False, error="boom"
+            "plugin_hook", seconds=1.5, ok=False, error="boom"
         )
         hooks = watch_health.read_hook_health(self.tmp)
-        row = hooks[watch_health.OPTIMA_MERGE]
+        row = hooks["plugin_hook"]
         self.assertFalse(row["ok"])
         self.assertEqual(row["error"], "boom")
 
@@ -93,9 +93,9 @@ class HookHealthFlagsTest(unittest.TestCase):
         stale_at = (
             datetime.now(timezone.utc) - timedelta(seconds=watch_health.STALE_AFTER_S + 5)
         ).isoformat(timespec="seconds")
-        hooks = {"optima_merge": {"ok": True, "last_tick_at": stale_at}}
+        hooks = {"plugin_hook": {"ok": True, "last_tick_at": stale_at}}
         flags = watch_health.hook_health_flags(hooks)
-        self.assertIn("hook_stale:optima_merge", flags)
+        self.assertIn("hook_stale:plugin_hook", flags)
 
     def test_stale_running_hook_uses_start_time(self):
         stale_at = (
@@ -137,9 +137,9 @@ class IndexHealthHooksIntegrationTest(VaultTestCase):
         from apo_engine import core
 
         tracker = watch_health.HookHealthTracker(self.vault)
-        tracker.record(watch_health.OPTIMA_MERGE, seconds=0.1, ok=False, error="oops")
+        tracker.record("plugin_hook", seconds=0.1, ok=False, error="oops")
         health = core.index_health()
-        self.assertIn("hook_error:optima_merge", health["flags"])
+        self.assertIn("hook_error:plugin_hook", health["flags"])
 
     def test_no_hooks_file_yet_is_empty_not_error(self):
         from apo_engine import core

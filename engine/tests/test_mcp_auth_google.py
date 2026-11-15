@@ -32,10 +32,10 @@ from apo_engine.mcp_auth import (
 
 from test_patch_note_schema import _list_tools_lean
 
-JEREMY_CLIENT_ID = "jeremy-client.apps.googleusercontent.com"
-FOTINI_CLIENT_ID = "fotini-client.apps.googleusercontent.com"
-JEREMY_EMAIL = "ada@example.com"
-FOTINI_EMAIL = "bao@example.com"
+ALICE_CLIENT_ID = "alice-client.apps.googleusercontent.com"
+BOB_CLIENT_ID = "bob-client.apps.googleusercontent.com"
+ALICE_EMAIL = "ada@example.com"
+BOB_EMAIL = "bao@example.com"
 KID = "test-key-1"
 
 
@@ -58,16 +58,16 @@ def _mock_http_client(jwks: dict) -> httpx.AsyncClient:
 def _personas() -> tuple[Persona, ...]:
     return (
         Persona(
-            name="jeremy",
-            client_id=JEREMY_CLIENT_ID,
+            name="alice",
+            client_id=ALICE_CLIENT_ID,
             client_secret=None,
-            allowed_emails=frozenset({JEREMY_EMAIL}),
+            allowed_emails=frozenset({ALICE_EMAIL}),
         ),
         Persona(
-            name="fotini",
-            client_id=FOTINI_CLIENT_ID,
+            name="bob",
+            client_id=BOB_CLIENT_ID,
             client_secret=None,
-            allowed_emails=frozenset({FOTINI_EMAIL}),
+            allowed_emails=frozenset({BOB_EMAIL}),
         ),
     )
 
@@ -98,36 +98,36 @@ class PersonaVerifierTest(unittest.TestCase):
             additional_claims={"email": email, "email_verified": True},
         )
 
-    def test_valid_jeremy_token_maps_to_jeremy(self):
+    def test_valid_alice_token_maps_to_alice(self):
         token = self._token(
             self.keypair,
             issuer="https://accounts.google.com",
-            audience=JEREMY_CLIENT_ID,
-            email=JEREMY_EMAIL,
+            audience=ALICE_CLIENT_ID,
+            email=ALICE_EMAIL,
         )
         access = asyncio.run(self._verifier().verify_token(token))
         self.assertIsNotNone(access)
-        self.assertEqual(access.claims["persona"], "jeremy")
+        self.assertEqual(access.claims["persona"], "alice")
 
-    def test_valid_fotini_token_maps_to_fotini(self):
+    def test_valid_bob_token_maps_to_bob(self):
         token = self._token(
             self.keypair,
             issuer="https://accounts.google.com",
-            audience=FOTINI_CLIENT_ID,
-            email=FOTINI_EMAIL,
+            audience=BOB_CLIENT_ID,
+            email=BOB_EMAIL,
         )
         access = asyncio.run(self._verifier().verify_token(token))
         self.assertIsNotNone(access)
-        self.assertEqual(access.claims["persona"], "fotini")
+        self.assertEqual(access.claims["persona"], "bob")
 
     def test_wrong_persona_client_id_rejected(self):
-        # Jeremy's email, but the token was issued for Fotini's client
-        # registration — must NOT fall back and authorize as Fotini either.
+        # Alice's email, but the token was issued for Bob's client
+        # registration — must NOT fall back and authorize as Bob either.
         token = self._token(
             self.keypair,
             issuer="https://accounts.google.com",
-            audience=FOTINI_CLIENT_ID,
-            email=JEREMY_EMAIL,
+            audience=BOB_CLIENT_ID,
+            email=ALICE_EMAIL,
         )
         access = asyncio.run(self._verifier().verify_token(token))
         self.assertIsNone(access)
@@ -136,8 +136,8 @@ class PersonaVerifierTest(unittest.TestCase):
         token = self._token(
             self.keypair,
             issuer="https://evil.example.com",
-            audience=JEREMY_CLIENT_ID,
-            email=JEREMY_EMAIL,
+            audience=ALICE_CLIENT_ID,
+            email=ALICE_EMAIL,
         )
         access = asyncio.run(self._verifier().verify_token(token))
         self.assertIsNone(access)
@@ -146,8 +146,8 @@ class PersonaVerifierTest(unittest.TestCase):
         token = self._token(
             self.keypair,
             issuer="https://accounts.google.com",
-            audience=JEREMY_CLIENT_ID,
-            email=JEREMY_EMAIL,
+            audience=ALICE_CLIENT_ID,
+            email=ALICE_EMAIL,
             expires_in=-10,
         )
         access = asyncio.run(self._verifier().verify_token(token))
@@ -157,7 +157,7 @@ class PersonaVerifierTest(unittest.TestCase):
         token = self._token(
             self.keypair,
             issuer="https://accounts.google.com",
-            audience=JEREMY_CLIENT_ID,
+            audience=ALICE_CLIENT_ID,
             email="someone-else@gmail.com",
         )
         access = asyncio.run(self._verifier().verify_token(token))
@@ -168,8 +168,8 @@ class PersonaVerifierTest(unittest.TestCase):
         token = self._token(
             self.other_keypair,
             issuer="https://accounts.google.com",
-            audience=JEREMY_CLIENT_ID,
-            email=JEREMY_EMAIL,
+            audience=ALICE_CLIENT_ID,
+            email=ALICE_EMAIL,
         )
         access = asyncio.run(self._verifier().verify_token(token))
         self.assertIsNone(access)
@@ -188,10 +188,10 @@ class PersonaConfigTest(unittest.TestCase):
                     {
                         "personas": [
                             {
-                                "name": "jeremy",
-                                "client_id": JEREMY_CLIENT_ID,
+                                "name": "alice",
+                                "client_id": ALICE_CLIENT_ID,
                                 "client_secret": "unused-in-verification",
-                                "allowed_emails": [JEREMY_EMAIL.upper()],
+                                "allowed_emails": [ALICE_EMAIL.upper()],
                             }
                         ],
                         "issuer": "https://accounts.google.com",
@@ -200,8 +200,8 @@ class PersonaConfigTest(unittest.TestCase):
                 )
             )
             settings = load_persona_config(p)
-            self.assertEqual(settings.personas[0].name, "jeremy")
-            self.assertIn(JEREMY_EMAIL, settings.personas[0].allowed_emails)
+            self.assertEqual(settings.personas[0].name, "alice")
+            self.assertIn(ALICE_EMAIL, settings.personas[0].allowed_emails)
 
     def test_build_auth_provider_from_config_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -211,16 +211,16 @@ class PersonaConfigTest(unittest.TestCase):
                     {
                         "personas": [
                             {
-                                "name": "jeremy",
-                                "client_id": JEREMY_CLIENT_ID,
+                                "name": "alice",
+                                "client_id": ALICE_CLIENT_ID,
                                 "client_secret": "unused-in-verification",
-                                "allowed_emails": [JEREMY_EMAIL],
+                                "allowed_emails": [ALICE_EMAIL],
                             },
                             {
-                                "name": "fotini",
-                                "client_id": FOTINI_CLIENT_ID,
+                                "name": "bob",
+                                "client_id": BOB_CLIENT_ID,
                                 "client_secret": "unused-in-verification",
-                                "allowed_emails": [FOTINI_EMAIL],
+                                "allowed_emails": [BOB_EMAIL],
                             },
                         ],
                         "issuer": "https://accounts.google.com",
@@ -263,16 +263,16 @@ class UnauthenticatedMutationGateTest(unittest.TestCase):
                 {
                     "personas": [
                         {
-                            "name": "jeremy",
-                            "client_id": JEREMY_CLIENT_ID,
+                            "name": "alice",
+                            "client_id": ALICE_CLIENT_ID,
                             "client_secret": "unused-in-verification",
-                            "allowed_emails": [JEREMY_EMAIL],
+                            "allowed_emails": [ALICE_EMAIL],
                         },
                         {
-                            "name": "fotini",
-                            "client_id": FOTINI_CLIENT_ID,
+                            "name": "bob",
+                            "client_id": BOB_CLIENT_ID,
                             "client_secret": "unused-in-verification",
-                            "allowed_emails": [FOTINI_EMAIL],
+                            "allowed_emails": [BOB_EMAIL],
                         },
                     ],
                     "issuer": "https://accounts.google.com",

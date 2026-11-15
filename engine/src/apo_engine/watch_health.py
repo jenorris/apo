@@ -1,8 +1,9 @@
 """Watch-loop hook health — per-vault heartbeat for the watcher's peripheral hooks.
 
-`_watch_one` (``watch.py``) runs three pieces of business logic every cycle
-alongside its actual job (sole ``index.db`` writer): git-sync, Optima-vault
-merge, and desk/contracts reprojection. Each is wrapped in ``try/except
+`_watch_one` (``watch.py``) runs peripheral business logic every cycle
+alongside its actual job (sole ``index.db`` writer): git-sync, desk/contracts
+reprojection, and any hooks installed packages register through the
+``apo.watch_hooks`` entry point group. Each is wrapped in ``try/except
 Exception`` today, which only guards against a call that *raises* — nothing
 previously recorded whether a hook was ticking at all, so a hang (blocks
 without raising) was invisible. See ``docs/watcher-scheduler-separation.md``
@@ -29,7 +30,6 @@ from .atomic_io import atomic_write_text
 # Known hook names — informational only, not enforced (callers may record
 # any string key).
 GIT_SYNC = "git_sync"
-OPTIMA_MERGE = "optima_merge"
 DESK_REPROJECT = "desk_reproject"
 
 _STATUS_REL = Path(".apo") / "watch-hooks.json"

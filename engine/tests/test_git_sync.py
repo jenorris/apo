@@ -62,8 +62,12 @@ class GitSyncHelpersTest(unittest.TestCase):
 
     def test_format_commit_message(self):
         dt = datetime(2026, 8, 3, 0, 35, tzinfo=ZoneInfo("America/New_York"))
-        msg = git_sync.format_commit_message("apo: sync {iso_local}", now=dt)
-        self.assertEqual(msg, "apo: sync 2026-08-03 00:35 ET")
+        with unittest.mock.patch.dict(os.environ, {"APO_TIMEZONE": "America/New_York"}):
+            msg = git_sync.format_commit_message("apo: sync {iso_local}", now=dt)
+        self.assertEqual(msg, "apo: sync 2026-08-03 00:35 EDT")
+        with unittest.mock.patch.dict(os.environ, {"APO_TIMEZONE": "Europe/Berlin"}):
+            msg = git_sync.format_commit_message("apo: sync {iso_local}", now=dt)
+        self.assertEqual(msg, "apo: sync 2026-08-03 06:35 CEST")
 
     def test_paths_summary_bits_top_folders_and_truncation(self):
         paths = [
@@ -90,14 +94,15 @@ class GitSyncHelpersTest(unittest.TestCase):
     def test_format_commit_message_path_tokens(self):
         dt = datetime(2026, 8, 4, 14, 27, tzinfo=ZoneInfo("America/New_York"))
         tmpl = "apo: sync {iso_local} · {path_count} paths · {top_folders}"
-        msg = git_sync.format_commit_message(
-            tmpl,
-            now=dt,
-            paths=["areas/threads/a.md", "inbox/daily/d.md"],
-        )
+        with unittest.mock.patch.dict(os.environ, {"APO_TIMEZONE": "America/New_York"}):
+            msg = git_sync.format_commit_message(
+                tmpl,
+                now=dt,
+                paths=["areas/threads/a.md", "inbox/daily/d.md"],
+            )
         self.assertEqual(
             msg,
-            "apo: sync 2026-08-04 14:27 ET · 2 paths · areas/threads, inbox/daily",
+            "apo: sync 2026-08-04 14:27 EDT · 2 paths · areas/threads, inbox/daily",
         )
         # Unknown tokens stay literal
         self.assertIn(

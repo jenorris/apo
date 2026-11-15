@@ -2,7 +2,7 @@
 
 **Status:** proposal for review. No code changed as part of this note — the watcher is a
 currently-running production daemon (see `docs/index-concurrency.md`: it's the **sole**
-`index.db` writer) and this is exactly the kind of change that shouldn't land without Jeremy
+`index.db` writer) and this is exactly the kind of change that shouldn't land without the maintainer
 picking the direction first.
 
 ## Problem
@@ -11,12 +11,12 @@ picking the direction first.
 `docs/index-concurrency.md` — be the sole `index.db` writer for its vault, and stay responsive
 enough that the read-after-write scheduling bound (`APO_WATCH_DEBOUNCE`, default 2s) holds.
 
-That loop also runs three pieces of unrelated business logic on every cycle:
+That loop also runs unrelated business logic on every cycle:
 
 | Call | Line | What it does |
 |------|------|---------------|
 | `sync_ctl.tick(...)` | `watch.py:461` | Git auto-commit/push (`git_sync.VaultSyncController`) |
-| `merge_ctl.tick(...)` | `watch.py:467` | Optima-vault-specific schedule merge (`optima_merge.VaultMergeController`) |
+| plugin hooks | `watch.py` | Hooks that installed packages register through the `apo.watch_hooks` entry point group |
 | `vault_project.maybe_reproject(...)` | `watch.py:422`, `watch.py:436` | Desk/contracts reprojection (called twice per cycle: once on contract-relevant file changes, once unconditionally as "desk-poll") |
 
 Each is wrapped in its own `try/except Exception`, but that only guards against a call that
@@ -35,7 +35,7 @@ index-write loop per hang, per vault) and only for git_sync's own subprocess cal
 
 Nothing else is bounded that way:
 
-- `merge_ctl.tick()` → `optima_merge.run_merge` is pure local file I/O (read/write YAML) —
+- A plugin hook that does local file I/O (for example reading and writing YAML) has
   no subprocess timeout to fall back on. A slow/blocked read (e.g. a flaky network mount) hangs
   with no ceiling at all.
 - `vault_project.maybe_reproject()` does mtime/signature comparisons and, on drift, a project
@@ -89,7 +89,7 @@ work is confirmed done in that worktree.
 
 **Status (implemented):** this section, and the logging fix from the companion review, landed —
 `engine/src/apo_engine/watch_health.py` tracks `last_tick_at` / `last_tick_seconds` / `ok` / `error`
-per hook (`git_sync`, `optima_merge`, `desk_reproject`) in a small per-vault
+per hook (`git_sync`, `desk_reproject`, and any plugin hook) in a small per-vault
 `.apo/watch-hooks.json`, read by `core.index_health()` (`hooks` field + `hook_error:*` /
 `hook_stale:*` flags) and printed by `apo-engine doctor`. The thread-per-hook scheduler above
 (direction 1–3) was **not** built — reviewed and rejected as overbuilt for a solo-maintainer loop

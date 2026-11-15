@@ -11,8 +11,9 @@ from unittest import mock
 
 import pytest
 
-from apo_engine import config, core, deferred, optima_merge, vaults, watch, watch_health
+from apo_engine import config, core, deferred, vaults, watch, watch_health
 from apo_engine.index_models import QueueStats
+from apo_engine import watch_hooks as watch_hooks_module
 from apo_engine.watch_hooks import WatchHooks
 
 
@@ -84,63 +85,6 @@ def test_exception_does_not_kill_worker():
     assert hooks.shutdown() == []
 
 
-@pytest.mark.parametrize(
-    ("merge_effect", "message"),
-    [
-        (RuntimeError("source exploded"), "source exploded"),
-        ({"ok": False, "message": "source contract invalid"}, "source contract invalid"),
-    ],
-)
-def test_optima_merge_failures_persist_and_noop_does_not_clear(
-    merge_effect: object, message: str
-) -> None:
-    root = Path(tempfile.mkdtemp(prefix="apo-watch-hooks-optima-"))
-    health = watch_health.HookHealthTracker(root)
-    hooks = WatchHooks(health, verbose=False)
-    controller = optima_merge.VaultMergeController(root, verbose=False)
-    controller._last_merge_at = time.monotonic() - 10
-
-    with (
-        mock.patch.object(optima_merge.optima_contract, "merge_enabled", return_value=True),
-        mock.patch.object(
-            optima_merge.optima_contract,
-            "merge_settings",
-            return_value=mock.Mock(interval_seconds=1),
-        ),
-        mock.patch.object(
-            optima_merge,
-            "run_merge",
-            side_effect=merge_effect if isinstance(merge_effect, Exception) else None,
-            return_value=merge_effect if isinstance(merge_effect, dict) else None,
-        ),
-    ):
-        hooks.register(
-            watch_health.OPTIMA_MERGE,
-            lambda: controller.tick(index_busy=False),
-        )
-        assert hooks.trigger(watch_health.OPTIMA_MERGE)
-        _wait_for(
-            lambda: f"hook_error:{watch_health.OPTIMA_MERGE}"
-            in watch_health.hook_health_flags(watch_health.read_hook_health(root))
-        )
-        failed = watch_health.read_hook_health(root)[watch_health.OPTIMA_MERGE]
-        assert failed["error"] == message
-
-        # The merge interval now makes this trigger a no-op. It must clear
-        # running state without replacing the persisted failed completion.
-        assert hooks.trigger(watch_health.OPTIMA_MERGE)
-        _wait_for(
-            lambda: not watch_health.read_hook_health(root)[
-                watch_health.OPTIMA_MERGE
-            ].get("running", False)
-        )
-        later = watch_health.read_hook_health(root)[watch_health.OPTIMA_MERGE]
-        assert later["ok"] is False
-        assert later["error"] == message
-
-    assert hooks.shutdown() == []
-
-
 def test_shutdown_is_bounded_when_hook_hangs():
     hooks = _hooks()
     entered = threading.Event()
@@ -181,6 +125,110 @@ def test_health_exposes_running_and_start_state():
 
 def test_generic_watch_module_has_no_optima_dependency():
     assert "optima" not in inspect.getsource(watch).lower()
+    assert "optima" not in inspect.getsource(watch_hooks_module).lower()
+
+
+def _fake_entry_point(name: str, loader):
+    ep = mock.Mock()
+    ep.name = name
+    ep.load.side_effect = loader
+    return ep
+
+
+def test_no_entry_points_means_no_plugin_hooks():
+    with mock.patch.object(watch_hooks_module.metadata, "entry_points", return_value=[]) as eps:
+        assert watch_hooks_module.load_entry_point_factories() == ()
+    eps.assert_called_once_with(group="apo.watch_hooks")
+
+
+def test_entry_point_factories_load_and_a_broken_one_is_skipped():
+    def good(binding, verbose):
+        return (("plug", lambda **kw: None),)
+
+    def boom():
+        raise ImportError("missing dependency")
+
+    with mock.patch.object(
+        watch_hooks_module.metadata,
+        "entry_points",
+        return_value=[_fake_entry_point("bad", boom), _fake_entry_point("good", lambda: good)],
+    ):
+        assert watch_hooks_module.load_entry_point_factories() == (good,)
+
+
+def _watch_one_registrations(hook_factories) -> list[str]:
+    """Run `_watch_one` for one idle cycle; return the hook names it registered."""
+    pytest.importorskip("watchdog")
+    root = Path(tempfile.mkdtemp(prefix="apo-watch-reg-"))
+    binding = vaults.VaultBinding("reg", root, root / "reg.db", "reg")
+    stop = threading.Event()
+    names: list[str] = []
+
+    class FakeQueue(queue.Queue):
+        def get(self, block=True, timeout=None):
+            if block and timeout is not None:
+                stop.set()
+                raise queue.Empty
+            return super().get(block, timeout)
+
+    class FakeHooks:
+        def __init__(self, *a, **k) -> None: ...
+        def register(self, name, hook) -> None:
+            names.append(name)
+
+        def shutdown(self, timeout=5.0) -> list[str]:
+            return []
+
+        def trigger_all(self, **kw) -> None: ...
+
+    with (
+        mock.patch.object(watch, "queue", SimpleNamespace(Queue=FakeQueue, Empty=queue.Empty)),
+        mock.patch.object(watch.watch_hooks, "WatchHooks", FakeHooks),
+        mock.patch("watchdog.observers.Observer"),
+        mock.patch.object(deferred, "wake_pending", lambda _c: False),
+        mock.patch.object(core, "process_queues", return_value=QueueStats()),
+        mock.patch.object(core, "_compile_ignore", return_value=[]),
+        mock.patch.object(core, "_load_ignore", return_value=[]),
+        mock.patch.object(core, "clear_index_lock_health"),
+        mock.patch.object(core, "checkpoint_wal_if_over_limit"),
+        mock.patch.object(core, "writer_close"),
+    ):
+        watch._watch_one(
+            binding, use_events=True, verbose=False, stop=stop, hook_factories=hook_factories
+        )
+    return names
+
+
+def test_watch_one_registers_factory_hooks_and_survives_a_raising_factory():
+    def raising(binding, verbose):
+        raise RuntimeError("factory exploded")
+
+    def fine(binding, verbose):
+        return (("plug", lambda **kw: None),)
+
+    names = _watch_one_registrations((raising, fine))
+    assert names == [watch_health.DESK_REPROJECT, watch_health.GIT_SYNC, "plug"]
+
+
+def test_watch_one_with_no_factories_registers_only_builtin_hooks():
+    assert _watch_one_registrations(()) == [watch_health.DESK_REPROJECT, watch_health.GIT_SYNC]
+
+
+def test_run_watch_passes_entry_point_factories_to_the_vault_watcher():
+    def plug(binding, verbose):
+        return ()
+
+    root = Path(tempfile.mkdtemp(prefix="apo-run-watch-"))
+    binding = vaults.VaultBinding("solo", root, root / "solo.db", "solo")
+    with (
+        mock.patch.object(watch, "_acquire_watch_lock", return_value=True),
+        mock.patch.object(watch_hooks_module, "load_entry_point_factories", return_value=(plug,)),
+        mock.patch.object(vaults, "load_bindings", return_value=("solo", {"solo": binding})),
+        mock.patch.object(vaults, "discovery_active", return_value=False),
+        mock.patch.object(watch, "_watch_one") as one,
+    ):
+        watch.run_watch(verbose=False)
+    assert one.call_args.kwargs["hook_factories"] == (plug,)
 
 
 def _run_idle_watch_cycles(

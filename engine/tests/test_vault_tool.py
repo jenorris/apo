@@ -156,7 +156,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             "default_vault": "meta",
             "vaults": {
                 "meta": {
-                    "root": "/Users/jnorris/Notes/Atlas",
+                    "root": "/Users/alice/Notes/Atlas",
                     "default": True,
                     "contracts": {
                         "usage-contract": {
@@ -193,7 +193,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
             "default_vault": "meta",
             "vaults": {"meta": {"root": "/tmp/x", "default": True, "contracts": {}}},
             "desk": {"habits": {}},
-            "desk_meta": {"source": "file", "path": "/home/jeremy/.apo/desk.yaml"},
+            "desk_meta": {"source": "file", "path": "/home/alice/.apo/desk.yaml"},
         }
         body = vault_project.render_desk_body(merge)
         self.assertNotIn("No `~/.apo/desk.yaml` found", body)
@@ -237,7 +237,7 @@ class WriteHabitsProjectTest(unittest.TestCase):
                             "data": {
                                 "never_commit": [".env"],
                                 "sync": {"on_block_command": "notify-send blocked"},
-                                "restore": {"owner": "jeremy", "drill": "quarterly"},
+                                "restore": {"owner": "alice", "drill": "quarterly"},
                             },
                         },
                         "telemetry-contract": {
@@ -967,10 +967,10 @@ class VaultOpTest(unittest.TestCase):
             "citations: absolute_markdown\n"
             "vault_roles:\n"
             "  alpha: pkb\n"
-            "  beta: employer\n"
+            "  beta: work\n"
             "role_notes:\n"
             "  pkb: 'Personal knowledge base only'\n"
-            "  employer: 'Acme Work only'\n"
+            "  work: 'Acme Work only'\n"
             "  household: 'Should never appear'\n"
             "pointers:\n"
             "  memory_policy: 'alpha:system/config/policy'\n"
@@ -1055,7 +1055,7 @@ class VaultOpTest(unittest.TestCase):
             "  session_vault: sessions\n"
             "vault_roles:\n"
             "  alpha: pkb\n"
-            "  beta: employer\n"
+            "  beta: work\n"
             "pointers:\n"
             "  memory_policy: 'alpha:system/config/policy'\n"
             "habits:\n"
@@ -1100,7 +1100,7 @@ class VaultOpTest(unittest.TestCase):
             "  session_vault: sessions\n"
             "vault_roles:\n"
             "  alpha: pkb\n"
-            "  beta: employer\n",
+            "  beta: work\n",
             encoding="utf-8",
         )
         with unittest.mock.patch.dict(os.environ, {"APO_DESK_CONFIG": str(desk)}):
@@ -1111,7 +1111,7 @@ class VaultOpTest(unittest.TestCase):
         self.assertEqual(out["desk"]["citations"], "absolute_markdown")
         self.assertFalse(out["merge_rules"]["cross_pollinate_contracts"])
         self.assertEqual(out["vaults"]["alpha"]["role"], "pkb")
-        self.assertEqual(out["vaults"]["beta"]["role"], "employer")
+        self.assertEqual(out["vaults"]["beta"]["role"], "work")
         self.assertIn("usage-contract", out["vaults"]["alpha"]["contract_ids"])
         self.assertNotIn("data", out["vaults"]["alpha"]["contracts"]["usage-contract"])
         self.assertEqual(out["desk_meta"]["source"], "file")

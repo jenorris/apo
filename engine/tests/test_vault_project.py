@@ -310,7 +310,7 @@ class WriteHabitsAcrossVaultsTest(unittest.TestCase):
         merge = {
             "default_vault": "work",
             "vaults": {
-                "optima": _usage_row(["folder_on_search", "known_path_current_first"]),
+                "ledger": _usage_row(["folder_on_search", "known_path_current_first"]),
                 "work": _usage_row(["folder_on_search", "fidelity_before_conclude"], default=True),
             },
             "desk": {"habits": {}},
@@ -322,15 +322,15 @@ class WriteHabitsAcrossVaultsTest(unittest.TestCase):
         self.assertEqual(len(universal), 1)
         self.assertNotIn("— vaults:", universal[0])
         self.assertIn("read_note(path=…)` that path **first**", body)
-        self.assertRegex(body, r"known paths.*— vaults: `optima`")
+        self.assertRegex(body, r"known paths.*— vaults: `ledger`")
         self.assertRegex(body, r"Fidelity gate.*— vaults: `work`")
         # Default vault's habits come first.
         self.assertLess(body.index("Fidelity gate"), body.index("known paths"))
 
     def test_scoped_projection_has_no_vault_tags(self):
         merge = {
-            "default_vault": "optima",
-            "vaults": {"optima": _usage_row(["known_path_current_first"], default=True)},
+            "default_vault": "ledger",
+            "vaults": {"ledger": _usage_row(["known_path_current_first"], default=True)},
             "desk": {"habits": {}},
         }
         body = vault_project.render_desk_body(merge)

@@ -98,11 +98,11 @@ class GeneratedEmissionTests(unittest.TestCase):
         content = (
             '---\nokf_type: Thread\ntype: Thread\ndescription: d\n'
             'timestamp: "2026-01-01T00:00:00Z"\ntitle: t\n'
-            'generated: { by: "human:jeremy", at: "2020-01-01T00:00:00Z" }\n---\n\n# A\n'
+            'generated: { by: "human:alice", at: "2020-01-01T00:00:00Z" }\n---\n\n# A\n'
         )
         r = self.stamp(content)
         self.assertNotIn("generated", r.stamped)
-        self.assertIn('by: "human:jeremy"', r.content)
+        self.assertIn('by: "human:alice"', r.content)
         self.assertIn('at: "2020-01-01T00:00:00Z"', r.content)
 
     def test_generated_refreshes_when_timestamp_bumps(self):

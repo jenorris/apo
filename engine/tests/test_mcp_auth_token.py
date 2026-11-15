@@ -25,7 +25,7 @@ from apo_engine.mcp_auth import (
 from test_mcp_auth_google import _HEADERS, _INIT_BODY, _WRITE_NOTE_BODY
 from test_patch_note_schema import _list_tools_lean
 
-OPTIMA_TOKEN = "optima-test-token-0123456789"
+SERVICE_TOKEN = "ledger-test-token-0123456789"
 
 
 def _digest(token: str) -> str:
@@ -34,18 +34,18 @@ def _digest(token: str) -> str:
 
 class StaticBearerTokenVerifierTest(unittest.TestCase):
     def setUp(self):
-        self.verifier = StaticBearerTokenVerifier({"optima-service": _digest(OPTIMA_TOKEN)})
+        self.verifier = StaticBearerTokenVerifier({"ledger-service": _digest(SERVICE_TOKEN)})
 
     def test_known_token_maps_to_client(self):
-        access = asyncio.run(self.verifier.verify_token(OPTIMA_TOKEN))
+        access = asyncio.run(self.verifier.verify_token(SERVICE_TOKEN))
         self.assertIsNotNone(access)
-        self.assertEqual(access.client_id, "optima-service")
+        self.assertEqual(access.client_id, "ledger-service")
 
     def test_unknown_token_rejected(self):
         self.assertIsNone(asyncio.run(self.verifier.verify_token("nope")))
 
     def test_digest_itself_is_not_a_valid_token(self):
-        self.assertIsNone(asyncio.run(self.verifier.verify_token(_digest(OPTIMA_TOKEN))))
+        self.assertIsNone(asyncio.run(self.verifier.verify_token(_digest(SERVICE_TOKEN))))
 
     def test_empty_digest_map_raises(self):
         with self.assertRaises(AuthConfigError):
@@ -61,15 +61,15 @@ class LoadTokenDigestsTest(unittest.TestCase):
         return Path(tmp.name)
 
     def test_valid_file_parses(self):
-        path = self._write({"clients": {"optima-service": {"sha256": _digest("x")}}})
-        self.assertEqual(load_token_digests(path), {"optima-service": _digest("x")})
+        path = self._write({"clients": {"ledger-service": {"sha256": _digest("x")}}})
+        self.assertEqual(load_token_digests(path), {"ledger-service": _digest("x")})
 
     def test_missing_file_raises(self):
         with self.assertRaises(AuthConfigError):
             load_token_digests(Path("/nonexistent/apo-tokens.json"))
 
     def test_bad_digest_raises(self):
-        path = self._write({"clients": {"optima-service": {"sha256": "short"}}})
+        path = self._write({"clients": {"ledger-service": {"sha256": "short"}}})
         with self.assertRaises(AuthConfigError):
             load_token_digests(path)
 
@@ -82,7 +82,7 @@ class TokenAuthGateTest(unittest.TestCase):
         cls._tmp = tempfile.TemporaryDirectory()
         tokens_path = Path(cls._tmp.name) / "mcp-tokens.json"
         tokens_path.write_text(
-            json.dumps({"clients": {"optima-service": {"sha256": _digest(OPTIMA_TOKEN)}}})
+            json.dumps({"clients": {"ledger-service": {"sha256": _digest(SERVICE_TOKEN)}}})
         )
         os.environ["APO_MCP_AUTH"] = "token"
         os.environ["APO_MCP_TOKENS_FILE"] = str(tokens_path)
@@ -115,7 +115,7 @@ class TokenAuthGateTest(unittest.TestCase):
         self.assertEqual(self._post(_INIT_BODY, token="wrong").status_code, 401)
 
     def test_valid_token_initializes(self):
-        self.assertEqual(self._post(_INIT_BODY, token=OPTIMA_TOKEN).status_code, 200)
+        self.assertEqual(self._post(_INIT_BODY, token=SERVICE_TOKEN).status_code, 200)
 
 
 if __name__ == "__main__":

@@ -47,7 +47,7 @@ export APO_DEFAULT_VAULT=atlas   # or rely on a unique memory.default_vault clai
 **Workbench (subset — never collection-root on all of Notes):**
 
 ```bash
-export APO_VAULT_PATHS="$HOME/Notes/Work:$HOME/Notes/Contracts:$HOME/Notes/Optima:$HOME/Workbench/compliance"
+export APO_VAULT_PATHS="$HOME/Notes/Work:$HOME/Notes/Contracts:$HOME/Workbench/compliance"
 export APO_DEFAULT_VAULT=work
 ```
 
@@ -57,7 +57,6 @@ MCP argv equivalent:
 apo-mcp \
   --vault-path ~/Notes/Work \
   --vault-path ~/Notes/Contracts \
-  --vault-path ~/Notes/Optima \
   --vault-path ~/Workbench/compliance \
   --default-vault work
 ```
@@ -87,7 +86,7 @@ Tool path / folder args accept an optional **`vault_id:relative/path`** prefix (
 
 **Writability gate:** the prefix (and `vault=`) must name a vault in **this MCP/watch process registry** — the live bindings from `APO_VAULTS_ROOT` / `APO_VAULT_PATHS` / `--vault` for that process — not every folder under `~/Notes` and not `desk.yaml`. Unknown prefix → `bad_vault` (no fall-through to the default vault). Prefix disagreeing with `vault=` → `bad_request`.
 
-Workbench example: registry = work, contracts, optima, compliance → `atlas:areas/…` is denied; `work:areas/threads/…` is allowed.
+Workbench example: registry = work, contracts, compliance → `atlas:areas/…` is denied; `work:areas/threads/…` is allowed.
 
 Successful reads and writes also return **`qualified_path`** (`vault:rel`) for copy-paste, while keeping relative `path` / `source` + `vault`. Search hits carry it only on fan-out (`vaults=` or `folders=`), next to the per-hit `vault`. A single-vault search names the vault once in the envelope.
 

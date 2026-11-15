@@ -379,24 +379,10 @@ def _cmd_doctor(args) -> int:
 
 
 def _cmd_watch(args) -> int:
-    def optima_hooks(binding, verbose):
-        from . import optima_contract, optima_merge, watch_health
-
-        if not optima_contract.optima_contract_active(binding.root):
-            return ()
-        controller = optima_merge.VaultMergeController(binding.root, verbose=verbose)
-        return (
-            (
-                watch_health.OPTIMA_MERGE,
-                lambda *, index_busy: controller.tick(index_busy=index_busy),
-            ),
-        )
-
     run_watch(
         interval=args.interval,
         use_events=not args.poll_only,
         verbose=True,
-        hook_factories=(optima_hooks,),
     )
     return 0
 
@@ -412,33 +398,6 @@ def _cmd_desk_project(args) -> int:
     out = vault_project.project_live(vaults=args.vaults or None, mode=mode)
     print(json.dumps(out, indent=2))
     return 0 if out.get("ok") else 1
-
-
-def _cmd_optima_merge(args) -> int:
-    """Stage B: merge domain schedules → Optima current.yaml (no gws)."""
-    from . import optima_merge
-
-    name = (getattr(args, "vault", None) or "").strip() or "optima"
-    cm, b = _bind_cli_vault(name)
-    with cm:
-        result = optima_merge.run_merge(b.root, dry_run=args.dry_run)
-    if args.json:
-        print(json.dumps(result, indent=2, default=str))
-    elif result.get("skipped"):
-        print(f"[{b.name}] optima-merge skipped: {result.get('reason')}", file=sys.stderr)
-    elif result.get("ok"):
-        print(
-            f"[{b.name}] optima-merge: {result.get('kind')} — "
-            f"{result.get('theme') or 'free'}"
-            + (" (degraded)" if result.get("degraded") else "")
-            + (" (dry-run)" if result.get("dry_run") else "")
-        )
-    else:
-        print(
-            f"[{b.name}] optima-merge failed: {result.get('message') or result}",
-            file=sys.stderr,
-        )
-    return 0 if result.get("ok") else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -597,19 +556,6 @@ def main(argv: list[str] | None = None) -> int:
     from . import okf_cli
 
     okf_cli.add_parser(sub)
-
-    po = sub.add_parser(
-        "optima-merge",
-        help="Stage B: merge Work/Meta schedules into Optima current.yaml",
-    )
-    po.add_argument(
-        "--vault",
-        default="optima",
-        help="usage-contract vault_id (default: optima)",
-    )
-    po.add_argument("--dry-run", action="store_true")
-    po.add_argument("--json", action="store_true")
-    po.set_defaults(func=_cmd_optima_merge)
 
     args = p.parse_args(argv)
     vaults.apply_discovery_namespace(args)

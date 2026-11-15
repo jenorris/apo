@@ -16,10 +16,9 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timezone
 from pathlib import Path
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
 from apo_engine import (
     archival_contract,
@@ -2684,30 +2683,28 @@ def graph_neighbors(
     return _stamp_qualified(out, vault=b.name, path=rel_path)
 
 
-_HISTORY_TZ = ZoneInfo("America/New_York")
-
-
 def _parse_history_bound(
     raw: str | None,
     *,
     end_of_day: bool,
 ) -> tuple[float | None, str | None]:
-    """Parse ``since`` / ``until`` to unix epoch. Date-only uses America/New_York."""
+    """Parse ``since`` / ``until`` to unix epoch. Date-only uses ``config.local_tzinfo()``."""
     s = (raw or "").strip()
     if not s:
         return None, None
+    tz = config.local_tzinfo()
     try:
         if len(s) == 10 and s[4] == "-" and s[7] == "-":
             d = datetime.strptime(s, "%Y-%m-%d").date()
             if end_of_day:
-                dt = datetime.combine(d, dt_time(23, 59, 59, 999999), tzinfo=_HISTORY_TZ)
+                dt = datetime.combine(d, dt_time(23, 59, 59, 999999), tzinfo=tz)
             else:
-                dt = datetime.combine(d, dt_time(0, 0, 0), tzinfo=_HISTORY_TZ)
+                dt = datetime.combine(d, dt_time(0, 0, 0), tzinfo=tz)
             return dt.timestamp(), None
         normalized = s.replace("Z", "+00:00")
         dt = datetime.fromisoformat(normalized)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_HISTORY_TZ)
+            dt = dt.replace(tzinfo=tz)
         return dt.timestamp(), None
     except ValueError:
         return None, (
@@ -2900,9 +2897,9 @@ def history(
     if offset:
         out["offset"] = offset
     if since_ts is not None:
-        out["since"] = datetime.fromtimestamp(since_ts, tz=_HISTORY_TZ).isoformat(timespec="seconds")
+        out["since"] = datetime.fromtimestamp(since_ts, tz=timezone.utc).astimezone(config.local_tzinfo()).isoformat(timespec="seconds")
     if until_ts is not None:
-        out["until"] = datetime.fromtimestamp(until_ts, tz=_HISTORY_TZ).isoformat(timespec="seconds")
+        out["until"] = datetime.fromtimestamp(until_ts, tz=timezone.utc).astimezone(config.local_tzinfo()).isoformat(timespec="seconds")
     if mode != "first":
         out["preview"] = mode
     if heading_clean:

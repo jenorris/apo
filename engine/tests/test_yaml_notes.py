@@ -91,9 +91,9 @@ class TestYamlFormatHelpers(unittest.TestCase):
 
     def test_nested_set_field(self):
         data: dict = {"meta": {"owner": "x"}}
-        set_field_path(data, "meta.owner", "jeremy")
+        set_field_path(data, "meta.owner", "alice")
         set_field_path(data, "meta.team", "platform")
-        self.assertEqual(data["meta"]["owner"], "jeremy")
+        self.assertEqual(data["meta"]["owner"], "alice")
         self.assertEqual(data["meta"]["team"], "platform")
 
     def test_list_index_and_id_selector(self):
@@ -187,14 +187,14 @@ class TestYamlOps(YamlVaultTestCase):
             "records/item.yaml",
             [
                 {"op": "set_field", "field": "status", "value": "done"},
-                {"op": "set_field", "field": "meta.owner", "value": "jeremy"},
+                {"op": "set_field", "field": "meta.owner", "value": "alice"},
             ],
             expected_mtime=r["mtime"],
         )
         self.assertTrue(patch["ok"], patch)
         data = parse_yaml_document((self.vault / "records/item.yaml").read_text())
         self.assertEqual(data["status"], "done")
-        self.assertEqual(data["meta"]["owner"], "jeremy")
+        self.assertEqual(data["meta"]["owner"], "alice")
 
         reject = apply_yaml_patch(
             "title: x\n",

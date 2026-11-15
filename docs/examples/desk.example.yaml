@@ -21,12 +21,12 @@ workspace: ""
 #   session_path_template: "inbox/daily/{date}.md"
 #   session_heading: "Session log"
 #   # Optional: writable domain vaults for end-of-turn notes (skips grc/audit by default).
-#   # domain_vaults: [work, contracts, optima]
+#   # domain_vaults: [work, contracts]
 
 vault_roles:
   atlas: pkb
-  norris: household
-  work: employer
+  home: household
+  work: team
   sessions: audit
   contracts: silo
 

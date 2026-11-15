@@ -36,9 +36,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
-from apo_engine import git_contract, vaults
+from apo_engine import config, git_contract, vaults
 
 # Child of the "apo" logger `watch.py` configures with a rotating, timestamped
 # handler — no separate wiring needed here (see `watch._configure_logging`).
@@ -636,11 +635,12 @@ def format_commit_message(
     ``{top_folders}``, ``{paths_summary}`` (alias of top_folders).
     Unknown ``{…}`` tokens are left literal.
     """
-    dt = now or datetime.now(ZoneInfo("America/New_York"))
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=ZoneInfo("America/New_York"))
-    local = dt.astimezone(ZoneInfo("America/New_York"))
-    iso_local = local.strftime("%Y-%m-%d %H:%M ET")
+    tz = config.local_tzinfo()
+    dt = now or datetime.now(timezone.utc)
+    if dt.tzinfo is None and tz is not None:
+        dt = dt.replace(tzinfo=tz)
+    local = dt.astimezone(tz)
+    iso_local = local.strftime("%Y-%m-%d %H:%M %Z").strip()
     iso_utc = dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     bits = paths_summary_bits(paths)
     msg = (

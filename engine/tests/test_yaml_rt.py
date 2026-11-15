@@ -24,7 +24,7 @@ title: Alpha Queue     # display name
 status: open
 # the meta block is read by the sweeper
 meta:
-  owner: jeremy        # current owner
+  owner: alice         # current owner
   tags: [ops, queue]   # flow style on purpose
   members:
     - alice
@@ -170,7 +170,7 @@ class TestYamlNoteComments(unittest.TestCase):
             COMMENTED_YAML, [{"op": "delete_field", "field": "meta"}]
         )
         self.assertTrue(result.ok, result.results)
-        self.assertNotIn("owner: jeremy", result.content)
+        self.assertNotIn("owner: alice", result.content)
         self.assertNotIn("# current owner", result.content)
         # Human model: "# the meta block…" annotates meta → goes with the delete.
         self.assertNotIn("# the meta block is read by the sweeper", result.content)
@@ -203,7 +203,7 @@ class TestYamlNoteComments(unittest.TestCase):
     def test_parse_dump_round_trip_through_note_format(self):
         data = parse_yaml_document(COMMENTED_YAML)
         self.assertIsInstance(data, dict)
-        self.assertEqual(data["meta"]["owner"], "jeremy")
+        self.assertEqual(data["meta"]["owner"], "alice")
         self.assertEqual(dump_yaml_document(data), COMMENTED_YAML)
 
     def test_parse_falls_back_for_documents_ruamel_refuses(self):
@@ -282,7 +282,7 @@ class TestFrontmatterComments(unittest.TestCase):
         src = (
             "meta:\n"
             "  # owner annotation\n"
-            "  owner: jeremy\n"
+            "  owner: alice\n"
             "  tags: [a]\n"
         )
         result = apply_yaml_patch(src, [{"op": "delete_field", "field": "meta.owner"}])
@@ -293,7 +293,7 @@ class TestFrontmatterComments(unittest.TestCase):
         kept = apply_yaml_patch(src, [{"op": "delete_field", "field": "meta.tags"}])
         self.assertTrue(kept.ok, kept.results)
         self.assertIn("# owner annotation", kept.content)
-        self.assertIn("owner: jeremy", kept.content)
+        self.assertIn("owner: alice", kept.content)
 
     def test_sequence_indent_survives_an_unrelated_edit(self):
         result = apply_patch(

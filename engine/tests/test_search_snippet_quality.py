@@ -1,7 +1,7 @@
 """Snippet value optimization: table collapsing, markdown decoration
 stripping, word-boundary truncation, and FTS5 query-anchored excerpts.
 
-See jeremy vault projects/apo-pkb/search-snippet-optimization.md for the
+See the maintainer vault projects/apo-pkb/search-snippet-optimization.md for the
 design note this implements (Phases 1-3; Phase 4 storage-time normalization
 is deferred pending a full reindex).
 """

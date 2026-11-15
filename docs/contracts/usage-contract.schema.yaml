@@ -14,7 +14,7 @@ usage_contract_version: "0.1"
 vault_id: myvault
 
 purpose: >
-  One-line what this vault is for (e.g. personal PKB, employer threads,
+  One-line what this vault is for (e.g. personal PKB, team threads,
   household PARA, audit session logs).
 
 in_scope:
@@ -60,7 +60,7 @@ write_habits:
   - no_direct_fs_mutate          # host FS writes under vault roots go through Apo mutators
   # - lint_before_conclude
   # - fidelity_before_conclude   # plan-fidelity gate before concluding large tasks
-  # - known_path_current_first   # vaults with contract-declared known paths (e.g. optima)
+  # - known_path_current_first   # vaults with contract-declared known paths
 
 # Authoring dialect + optional render profile (harness / desk projection).
 # Dialect = what agents may put in .md bodies. Render = export/publish only

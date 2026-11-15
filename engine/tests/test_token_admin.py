@@ -19,7 +19,7 @@ from test_mcp_auth_google import _HEADERS, _INIT_BODY
 from test_patch_note_schema import _list_tools_lean
 
 ADMIN_TOKEN = "admin-test-token-0123456789"
-OPTIMA_TOKEN = "optima-test-token-0123456789"
+SERVICE_TOKEN = "ledger-test-token-0123456789"
 
 
 def _digest(token: str) -> str:
@@ -29,7 +29,7 @@ def _digest(token: str) -> str:
 def _tokens_file(dirpath: str) -> Path:
     path = Path(dirpath) / "mcp-tokens.json"
     path.write_text(json.dumps({"clients": {
-        "optima-service": {"sha256": _digest(OPTIMA_TOKEN)},
+        "ledger-service": {"sha256": _digest(SERVICE_TOKEN)},
         "ops-admin": {"sha256": _digest(ADMIN_TOKEN), "admin": {"prefix": "ops-", "vaults": ["atlas", "grid", "family"]}},
         "ops-locked": {"sha256": _digest("x"), "admin": {"prefix": "ops-", "vaults": ["atlas"]}},
     }}))
@@ -58,12 +58,12 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual((entry["vaults"], entry["default_vault"], entry["issued_by"]), (["atlas", "grid"], "atlas", "ops-admin"))
         self.assertNotIn("token", self.reg.list(POLICY)[0])
         self.assertNotIn("sha256", self.reg.list(POLICY)[0])
-        self.assertIn("optima-service", self.clients(), "other entries are kept")
+        self.assertIn("ledger-service", self.clients(), "other entries are kept")
         self.assertEqual(oct(self.path.stat().st_mode & 0o777), "0o600")
 
     def test_policy_limits(self):
         cases = [
-            ("optima-x", ["atlas"], 403),          # outside the prefix
+            ("ledger-x", ["atlas"], 403),          # outside the prefix
             ("ops-", ["atlas"], 403),            # the bare prefix
             ("Cecil-Bad", ["atlas"], 400),         # name shape
             ("ops-lyra", ["lyra"], 403),         # beyond the vault ceiling
@@ -146,7 +146,7 @@ class VerifierReloadTest(unittest.TestCase):
         self.assertIsNone(self.verify(ADMIN_TOKEN))
         name, policy = self.verifier.verify_admin(ADMIN_TOKEN)
         self.assertEqual((name, policy.prefix), ("ops-admin", "ops-"))
-        self.assertIsNone(self.verifier.verify_admin(OPTIMA_TOKEN), "an ordinary client is not an admin")
+        self.assertIsNone(self.verifier.verify_admin(SERVICE_TOKEN), "an ordinary client is not an admin")
 
     def test_issued_and_revoked_clients_take_effect_without_restart(self):
         reg = TokenRegistry(self.path)
@@ -160,15 +160,15 @@ class VerifierReloadTest(unittest.TestCase):
     def test_a_deleted_tokens_file_revokes_until_it_returns(self):
         saved = self.path.read_text()
         self.path.unlink()
-        self.assertIsNone(self.verify(OPTIMA_TOKEN), "a missing file must not leave old clients in force")
+        self.assertIsNone(self.verify(SERVICE_TOKEN), "a missing file must not leave old clients in force")
         self.assertIsNone(self.verifier.verify_admin(ADMIN_TOKEN))
         self.path.write_text(saved)
-        self.assertEqual(self.verify(OPTIMA_TOKEN).client_id, "optima-service")
+        self.assertEqual(self.verify(SERVICE_TOKEN).client_id, "ledger-service")
 
     def test_a_broken_edit_keeps_the_previous_clients(self):
         time.sleep(0.01)
         self.path.write_text("{not json")
-        self.assertEqual(self.verify(OPTIMA_TOKEN).client_id, "optima-service")
+        self.assertEqual(self.verify(SERVICE_TOKEN).client_id, "ledger-service")
 
 
 class AdminHttpTest(unittest.TestCase):
@@ -199,7 +199,7 @@ class AdminHttpTest(unittest.TestCase):
     def test_admin_routes_need_an_admin_token(self):
         with self.client() as c:
             self.assertEqual(c.get("/admin/clients").status_code, 401)
-            self.assertEqual(c.get("/admin/clients", headers=self.auth(OPTIMA_TOKEN)).status_code, 401)
+            self.assertEqual(c.get("/admin/clients", headers=self.auth(SERVICE_TOKEN)).status_code, 401)
             self.assertEqual(c.get("/admin/clients", headers=self.auth(ADMIN_TOKEN)).status_code, 200)
 
     def test_issue_then_use_on_mcp_then_revoke(self):

@@ -4,6 +4,30 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Removed
+
+- **Optima is no longer part of Apo.** `optima_contract`, `optima_merge`,
+  `domain_projection`, the `optima-merge` subcommand (`apo-engine` and
+  `apo engine`), and `watch_health.OPTIMA_MERGE` are gone. The code lives in the
+  separate `apo-optima` package (`apo_optima`), which ships its own
+  `apo-optima-merge` command. The `optima-contract` shape check no longer runs in
+  the engine.
+
+### Added
+
+- **`apo.watch_hooks` entry point group.** `apo-engine watch` loads every entry
+  point in this group and calls it as `factory(binding, verbose)`, which returns
+  `(hook_name, callable)` pairs for that vault. With nothing installed the group
+  is empty and the watcher runs only its built-in hooks. A hook factory that
+  fails to import or raises is logged and skipped.
+- **`APO_TIMEZONE`.** Date-only `history` bounds and `{iso_local}` commit
+  messages use this IANA zone, or the machine's local zone when unset. They no
+  longer assume `America/New_York`. `{iso_local}` now ends in the zone
+  abbreviation (`EDT`) rather than a fixed `ET`.
+
+**Upgrade:** to keep the Optima merge tick, install `apo-optima` in the same
+environment as `apo-engine` and restart the watcher.
+
 ## [0.38.0] — 2026-11-14
 
 A token admin can issue and revoke scoped clients, and symlinks no longer get

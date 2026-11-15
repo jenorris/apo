@@ -119,12 +119,12 @@ class DiscoveryRegistryTests(unittest.TestCase):
     def test_apo_vaults_shim_ignores_json_keys(self):
         meta = self.root / "Meta"
         meta.mkdir()
-        _write_usage(meta, "jeremy")
+        _write_usage(meta, "alice")
         cfg = self.root / "vaults.json"
         cfg.write_text(
             json.dumps(
                 {
-                    "default": "jeremy",
+                    "default": "alice",
                     "vaults": {
                         "meta": {"root": str(meta), "collection": "ignored"},
                     },
@@ -134,8 +134,8 @@ class DiscoveryRegistryTests(unittest.TestCase):
         )
         os.environ["APO_VAULTS"] = str(cfg)
         default, bindings = vaults.load_bindings()
-        self.assertEqual(default, "jeremy")
-        self.assertEqual(set(bindings), {"jeremy"})
+        self.assertEqual(default, "alice")
+        self.assertEqual(set(bindings), {"alice"})
         self.assertNotIn("meta", bindings)
 
     def test_disabled_marker_skips_vault(self):

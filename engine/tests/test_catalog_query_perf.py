@@ -51,7 +51,7 @@ _VALUES: list = [
     5, 7, 5.0, 1000.0, 0, True, False, None,
     ["active"], ["Active", "x"], ["done", "y"], ["x"], [], [1, "active"], [None], [5],
     [{"name": "a", "v": 3}, {"name": "b", "v": 9}], [{"name": "c"}], ["x", {"name": "a"}],
-    {"a": 1}, {"owner": "jeremy"},
+    {"a": 1}, {"owner": "alice"},
 ]
 _KEYS = ["status", "tags", "count", "date", "items"]
 
@@ -90,7 +90,7 @@ def _filter_fixture(n: int = 400) -> sqlite3.Connection:
     for i in range(n):
         fm = {k: rng.choice(_VALUES) for k in _KEYS if rng.random() < 0.8}
         if rng.random() < 0.3:
-            fm["meta"] = {"owner": rng.choice(["jeremy", "Jeremy", "fotini"])}
+            fm["meta"] = {"owner": rng.choice(["alice", "Alice", "bob"])}
         folder = rng.choice(["areas", "areas/threads", "projects", "Projects"])
         # Deliberate mtime ties: ordering among equal mtimes must follow scan order.
         db.execute(
@@ -135,8 +135,8 @@ def _where_cases() -> list[dict]:
         {"items": {"$elemMatch": {"v": {"$gt": 4}}}},
         {"items": {"$elemMatch": {}}},
         {"tags": {"$elemMatch": {"name": "a"}}},
-        {"meta.owner": "jeremy"},
-        {"meta.owner": {"$in": ["jeremy", "fotini"]}},
+        {"meta.owner": "alice"},
+        {"meta.owner": {"$in": ["alice", "bob"]}},
         {"items[name=a].v": {"$gt": 1}},
         {"status": {"$exists": True}, "tags": "x"},
         {"status": {"$exists": False}, "count": {"$gt": 1}},
@@ -145,7 +145,7 @@ def _where_cases() -> list[dict]:
         {"status": {}},
         {"status": {"$bogus": 1}},
         {"status": "active", "tags": {"$in": ["x", "done"]}, "count": {"$gte": 0}},
-        {"status": "active", "meta.owner": "jeremy"},
+        {"status": "active", "meta.owner": "alice"},
         {"status": "Active", "date": {"$lt": "2026-02-01"}},
     ]
     return cases
@@ -174,7 +174,7 @@ class FilterNotesPrefilterParityTest(unittest.TestCase):
             {"status": {"$ne": "done"}},
             {"date": {"$gte": "2026-01-01"}},
             {"items": {"$elemMatch": {"name": "a"}}},
-            {"meta.owner": "jeremy"},
+            {"meta.owner": "alice"},
         ]
         combos = itertools.product(
             wheres,
@@ -203,7 +203,7 @@ class FilterNotesPrefilterParityTest(unittest.TestCase):
 
     def test_unsafe_keys_and_dotted_paths_are_not_prefiltered(self):
         clauses, _ = retrieval._fm_prefilter_predicates(
-            {"meta.owner": "jeremy", "items[name=a].v": 1, "bad key": "x", "ok": {"$exists": True}}
+            {"meta.owner": "alice", "items[name=a].v": 1, "bad key": "x", "ok": {"$exists": True}}
         )
         self.assertEqual(clauses, [])
 

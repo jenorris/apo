@@ -53,8 +53,8 @@ class RetrievalGapsTest(unittest.TestCase):
             "---\ntitle: GitHub — human PR review queue (org-wide)\npermalink: github-pr-review-queue\n---\n\n# Review queue\n\norg-wide human review backlog routing\n",
             encoding="utf-8",
         )
-        (threads / "github-jenorris-open-prs.md").write_text(
-            "---\ntitle: GitHub — Jeremy open PRs (merge / review queue)\npermalink: github-jenorris-open-prs\n---\n\n# Jeremy PRs\n\nauthor open pull requests\n",
+        (threads / "github-octocat-open-prs.md").write_text(
+            "---\ntitle: GitHub — Octocat open PRs (merge / review queue)\npermalink: github-octocat-open-prs\n---\n\n# Octocat PRs\n\nauthor open pull requests\n",
             encoding="utf-8",
         )
         (self.vault / "system" / "contracts").mkdir(parents=True)
@@ -187,7 +187,7 @@ class RetrievalGapsTest(unittest.TestCase):
         self.assertNotIn("areas/threads/apo-qmd-retrieval-pilot.md", tops)
         self.assertEqual(tops[0], "areas/threads/itops-713-rippling-stripe-scim.md")
 
-    def test_github_review_queue_beats_jenorris_open_prs(self):
+    def test_github_review_queue_beats_octocat_open_prs(self):
         out = ops.search(
             "github pull request review queue routing",
             folder="areas/threads",

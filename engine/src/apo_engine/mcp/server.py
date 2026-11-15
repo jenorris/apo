@@ -1003,11 +1003,11 @@ async def history(
     vault: Annotated[str, Field(description=_VAULT_ARG_DESC)] = "",
     since: Annotated[
         str,
-        Field(description="Browse only: mtime lower bound (YYYY-MM-DD or ISO datetime, ET for date-only)."),
+        Field(description="Browse only: mtime lower bound (YYYY-MM-DD or ISO datetime, local time for date-only)."),
     ] = "",
     until: Annotated[
         str,
-        Field(description="Browse only: mtime upper bound (YYYY-MM-DD = end of that ET day, or ISO datetime)."),
+        Field(description="Browse only: mtime upper bound (YYYY-MM-DD = end of that local day, or ISO datetime)."),
     ] = "",
     preview: Annotated[
         Literal["first", "last"],
