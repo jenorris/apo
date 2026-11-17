@@ -149,6 +149,12 @@ class OversizeIndexCase(VaultTestCase):
 
 
 class TestOversizeIndexing(OversizeIndexCase):
+    def test_embed_input_is_hard_capped_without_a_plan(self):
+        """JSON-sized rows have no oversize plan. The embedder still sees a bounded string."""
+        huge = "x" * (config.EMBED_MAX_CHARS + 50)
+        text = core._pending_index_text(("rel", 0, "", huge, 1, 1, 0, "id", "h", len(huge), None))
+        self.assertEqual(len(text), config.EMBED_MAX_CHARS)
+
     def test_no_embed_input_exceeds_budget(self):
         self.write("leaf.md", self.leaf_note())
         core.index_vault(verbose=False)

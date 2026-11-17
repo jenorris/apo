@@ -250,7 +250,7 @@ _load_vaults()
 
 
 def _maybe_warm_query_embed() -> None:
-    """Preload Ollama embed model + hydrate disk query cache on MCP process start."""
+    """Preload the embed backend + hydrate the disk query cache on MCP process start."""
     if not getattr(apo_config, "QUERY_EMBED_WARM_ON_START", True):
         return
     if not VAULTS:

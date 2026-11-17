@@ -378,8 +378,11 @@ def _pending_index_text(row: "PendingChunk | tuple") -> str:
     """
     meta = row[10] if len(row) > 10 else None
     if isinstance(meta, dict) and meta.get("embed_text"):
-        return meta["embed_text"]
-    return _index_text_for_embedding(row[3], _pending_chunk_kind(row))
+        text = str(meta["embed_text"])
+    else:
+        text = _index_text_for_embedding(row[3], _pending_chunk_kind(row))
+    limit = int(config.EMBED_MAX_CHARS or 0)
+    return text[:limit] if limit > 0 and len(text) > limit else text
 
 
 def _build_snippet(
@@ -430,7 +433,7 @@ def _hits_for_ids(
     placeholders = ",".join("?" * len(ids))
     by_id: dict[int, tuple] = {}
     for row in db.execute(
-        f"""SELECT c.id, c.path, c.heading, c.text, c.chunk_hash, c.heading_level,
+        f"""SELECT c.id, c.path, c.heading, substr(c.text, 1, {int(config.SEARCH_HYDRATE_CHARS)}), c.chunk_hash, c.heading_level,
                    c.start_line, c.end_line, f.mtime, COALESCE(f.bytes, 0),
                    COALESCE(c.section_bytes, LENGTH(c.text)),
                    COALESCE(c.content_hash, ''),
@@ -1061,7 +1064,7 @@ def search(
     if ids:
         placeholders = ",".join("?" * len(ids))
         for row in db.execute(
-            f"""SELECT c.id, c.path, c.heading, c.text, c.chunk_hash, c.heading_level,
+            f"""SELECT c.id, c.path, c.heading, substr(c.text, 1, {int(config.SEARCH_HYDRATE_CHARS)}), c.chunk_hash, c.heading_level,
                        c.start_line, c.end_line, f.mtime, COALESCE(f.bytes, 0),
                        COALESCE(c.section_bytes, LENGTH(c.text)),
                        COALESCE(c.content_hash, ''),

@@ -77,18 +77,21 @@ def _get_http_client() -> Any:
     return _http_client or None
 
 
-def _post_json(url: str, body: dict[str, Any]) -> dict[str, Any]:
+def _post_json(url: str, body: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
     client = _get_http_client()
     if client is not None:
         try:
-            resp = client.post(url, json=body)
+            kwargs: dict[str, Any] = {}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            resp = client.post(url, json=body, **kwargs)
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
     payload = json.dumps(body).encode()
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=120 if timeout is None else timeout) as resp:
         return json.load(resp)
 
 
@@ -111,23 +114,25 @@ def _ollama_embed_request(
     texts: list[str],
     *,
     keep_alive: str | int | None = None,
+    timeout: float | None = None,
 ) -> list[list[float]]:
     url = f"{config.OLLAMA_URL}/api/embed"
     body: dict[str, Any] = {"model": config.MODEL_NAME, "input": texts}
     if keep_alive is not None and keep_alive != "":
         body["keep_alive"] = keep_alive
-    data = _post_json(url, body)
+    data = _post_json(url, body, timeout=timeout)
     embs = data.get("embeddings")
     if not embs or len(embs) != len(texts):
         raise RuntimeError(f"Ollama returned {len(embs) if embs else 0} embeddings for {len(texts)} inputs")
     return embs
 
 
-def _llamacpp_embed_request(texts: list[str]) -> list[list[float]]:
+def _llamacpp_embed_request(texts: list[str], *, timeout: float | None = None) -> list[list[float]]:
     """POST /v1/embeddings to a ``llama-server --embeddings`` process."""
     data = _post_json(
         f"{config.LLAMACPP_URL}/v1/embeddings",
         {"model": config.MODEL_NAME, "input": texts},
+        timeout=timeout,
     )
     rows = sorted(data.get("data") or [], key=lambda r: r.get("index", 0))
     if len(rows) != len(texts):
@@ -139,10 +144,11 @@ def _server_embed_request(
     texts: list[str],
     *,
     keep_alive: str | int | None = None,
+    timeout: float | None = None,
 ) -> list[list[float]]:
     if config.EMBED_BACKEND == "llamacpp":
-        return _llamacpp_embed_request(texts)
-    return _ollama_embed_request(texts, keep_alive=keep_alive)
+        return _llamacpp_embed_request(texts, timeout=timeout)
+    return _ollama_embed_request(texts, keep_alive=keep_alive, timeout=timeout)
 
 
 def _truncate_dim(vec: list[float] | None) -> list[float] | None:
@@ -160,6 +166,7 @@ def _embed_batch_resilient(
     poisoned: list[int],
     *,
     keep_alive: str | int | None = None,
+    timeout: float | None = None,
 ) -> list[list[float] | None]:
     """Embed a batch; on HTTP error or NaN output, bisect to isolate and skip only the
     poisoned input(s) — a numerically-unstable chunk shouldn't fail the whole reindex.
@@ -172,7 +179,7 @@ def _embed_batch_resilient(
     content must never land in logs (this engine indexes compliance/employer-sensitive notes).
     """
     try:
-        embs = _server_embed_request(texts, keep_alive=keep_alive)
+        embs = _server_embed_request(texts, keep_alive=keep_alive, timeout=timeout)
         if not any(has_nan(v) for v in embs):
             return embs
     except (urllib.error.HTTPError, urllib.error.URLError, RuntimeError, TimeoutError):
@@ -182,8 +189,8 @@ def _embed_batch_resilient(
         return [None]
     mid = len(texts) // 2
     return _embed_batch_resilient(
-        texts[:mid], poisoned, keep_alive=keep_alive
-    ) + _embed_batch_resilient(texts[mid:], poisoned, keep_alive=keep_alive)
+        texts[:mid], poisoned, keep_alive=keep_alive, timeout=timeout
+    ) + _embed_batch_resilient(texts[mid:], poisoned, keep_alive=keep_alive, timeout=timeout)
 
 
 def embed_concurrency() -> int:
@@ -203,13 +210,14 @@ def _embed_ollama(
     verbose: bool = False,
     *,
     keep_alive: str | int | None = None,
+    timeout: float | None = None,
 ) -> list[list[float] | None]:
     batch = batch or _embed_commit_batch()
     out: list[list[float] | None] = []
     poisoned: list[int] = []
     parts = [texts[i : i + batch] for i in range(0, len(texts), batch)]
     for _, vecs in iter_embedded_in_order(
-        lambda part: _embed_batch_resilient(part, poisoned, keep_alive=keep_alive), parts
+        lambda part: _embed_batch_resilient(part, poisoned, keep_alive=keep_alive, timeout=timeout), parts
     ):
         out.extend(vecs)
     if poisoned and verbose:
@@ -256,15 +264,22 @@ def embed(
     *,
     keep_alive: str | int | None = None,
     as_query: bool = False,
+    timeout: float | None = None,
 ) -> list[list[float] | None]:
     """Embed texts. Passages get ``DOC_PREFIX``; ``as_query`` texts are used as given
-    (the caller already applied ``QUERY_PREFIX``). Output is cut to ``EMBED_DIM``."""
+    (the caller already applied ``QUERY_PREFIX``). Output is cut to ``EMBED_DIM``.
+
+    Query embeds (``as_query``) use ``QUERY_EMBED_TIMEOUT`` unless ``timeout`` is set.
+    Index embeds keep the shared client's 120s timeout.
+    """
     if not texts:
         return []
+    if as_query and timeout is None:
+        timeout = config.QUERY_EMBED_TIMEOUT
     if config.DOC_PREFIX and not as_query:
         texts = [config.DOC_PREFIX + t for t in texts]
     if config.EMBED_BACKEND in ("ollama", "llamacpp"):
-        out = _embed_ollama(texts, verbose=verbose, keep_alive=keep_alive)
+        out = _embed_ollama(texts, verbose=verbose, keep_alive=keep_alive, timeout=timeout)
     else:
         out = _embed_fastembed(texts)
     return [_truncate_dim(v) for v in out]
@@ -453,16 +468,25 @@ def _hydrate_query_embed_from_disk(*, limit: int | None = None) -> int:
 
 
 def warm_query_embed(*, preload_ollama: bool | None = None) -> dict[str, Any]:
-    """Hydrate query-embed disk cache and optionally preload the Ollama embed model."""
-    stats: dict[str, Any] = {"disk_hydrated": 0, "ollama_warmed": False}
+    """Hydrate the query-embed disk cache and preload the configured embed backend.
+
+    ``ollama_warmed`` stays Ollama-specific. ``backend_warmed`` is true for either
+    Ollama or llama-server. The desk index uses llama.cpp; warming only Ollama
+    left the first search of a process on a cold server.
+    """
+    stats: dict[str, Any] = {"disk_hydrated": 0, "ollama_warmed": False, "backend_warmed": False}
     stats["disk_hydrated"] = _hydrate_query_embed_from_disk()
     if preload_ollama is None:
         preload_ollama = getattr(config, "QUERY_EMBED_WARM_ON_START", True)
-    if preload_ollama and config.EMBED_BACKEND == "ollama":
+    if preload_ollama and config.EMBED_BACKEND in ("ollama", "llamacpp"):
         keep_alive = getattr(config, "QUERY_EMBED_KEEP_ALIVE", "5m") or "5m"
         try:
-            _ollama_embed_request(["."], keep_alive=keep_alive)
-            stats["ollama_warmed"] = True
+            _server_embed_request(
+                ["."],
+                keep_alive=keep_alive if config.EMBED_BACKEND == "ollama" else None,
+            )
+            stats["backend_warmed"] = True
+            stats["ollama_warmed"] = config.EMBED_BACKEND == "ollama"
         except (urllib.error.HTTPError, urllib.error.URLError, RuntimeError, TimeoutError, OSError):
             pass
     return stats

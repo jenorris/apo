@@ -91,8 +91,18 @@ class QueryEmbedWarmTests(unittest.TestCase):
         with mock.patch.object(core, "_ollama_embed_request", return_value=[[0.0]]) as req:
             stats = core.warm_query_embed(preload_ollama=True)
         self.assertTrue(stats["ollama_warmed"])
+        self.assertTrue(stats["backend_warmed"])
         req.assert_called_once()
         self.assertEqual(req.call_args.kwargs.get("keep_alive"), config.QUERY_EMBED_KEEP_ALIVE)
+
+    def test_warm_query_embed_preloads_llamacpp(self):
+        core.clear_query_embed_cache()
+        config.EMBED_BACKEND = "llamacpp"
+        with mock.patch.object(core, "_llamacpp_embed_request", return_value=[[0.0]]) as req:
+            stats = core.warm_query_embed(preload_ollama=True)
+        self.assertFalse(stats["ollama_warmed"])
+        self.assertTrue(stats["backend_warmed"])
+        req.assert_called_once()
 
 
 if __name__ == "__main__":

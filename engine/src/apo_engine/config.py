@@ -134,6 +134,13 @@ PREAMBLE_WARN_BYTES: int = int(os.environ.get("APO_PREAMBLE_WARN_BYTES", "4096")
 # starts to truncate dense notes and where llama.cpp rejects the input outright.
 # Changing it only takes effect for a file the next time that file is re-indexed.
 EMBED_MAX_CHARS: int = int(os.environ.get("APO_EMBED_MAX_CHARS", "6000"))
+# JSON catalog notes are one chunk. Above this many serialized chars, the index
+# stores a scalar projection instead of the whole document so one export cannot
+# land a multi-megabyte FTS row or embed request. 0 disables the cap.
+JSON_CHUNK_MAX_CHARS: int = int(os.environ.get("APO_JSON_CHUNK_MAX_CHARS", "65536"))
+# Search hydrates this many leading chars of chunks.text. FTS still covers the
+# full section. Stops one oversized row from being pulled into ranking/rerank.
+SEARCH_HYDRATE_CHARS: int = int(os.environ.get("APO_SEARCH_HYDRATE_CHARS", "65536"))
 # Trailing context repeated at the head of the next leaf window.
 EMBED_WINDOW_OVERLAP: int = int(os.environ.get("APO_EMBED_WINDOW_OVERLAP", "400"))
 
@@ -165,6 +172,10 @@ DB_READ_TIMEOUT: float = float(os.environ.get("APO_DB_READ_TIMEOUT", "3"))
 
 # WAL size soft cap (bytes). Writer checkpoints when exceeded.
 WAL_LIMIT_BYTES: int = int(os.environ.get("APO_WAL_LIMIT_BYTES", str(64 * 1024 * 1024)))
+# Minimum seconds between WAL TRUNCATE checkpoints. PASSIVE runs whenever the
+# file is over the cap; TRUNCATE takes an exclusive lock and must not run on
+# every watcher tick (that stalls in-flight searches).
+WAL_TRUNCATE_INTERVAL: float = float(os.environ.get("APO_WAL_TRUNCATE_INTERVAL", "60"))
 
 # Consecutive embed drops of the same file hash before quarantine (no vectors).
 EMBED_FAIL_QUARANTINE: int = int(os.environ.get("APO_EMBED_FAIL_QUARANTINE", "5"))
@@ -234,6 +245,10 @@ SCOPED_VECTOR_FULL_SCAN_MAX: int = int(os.environ.get("APO_SCOPED_VECTOR_FULL_SC
 
 # Cache identical query embeddings (seconds TTL; 0 disables in-memory LRU).
 QUERY_EMBED_TTL: float = float(os.environ.get("APO_QUERY_EMBED_TTL", "600"))
+# Query-embed HTTP timeout (seconds). Index embeds keep the 120s client default.
+# A stuck llama-server then degrades search to keyword results instead of hanging
+# the agent for two minutes. Comfortably above a warm embeddinggemma call (~100ms).
+QUERY_EMBED_TIMEOUT: float = float(os.environ.get("APO_QUERY_EMBED_TIMEOUT", "8"))
 QUERY_EMBED_CACHE_SIZE: int = int(os.environ.get("APO_QUERY_EMBED_CACHE", "128"))
 # Persist query embeddings in a sidecar ``<index>.qcache.db`` across MCP process restarts (0 disables).
 QUERY_EMBED_DISK_CACHE: bool = env_bool("APO_QUERY_EMBED_DISK_CACHE", True)

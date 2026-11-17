@@ -562,13 +562,37 @@ def _finalize_index_writes(db: sqlite3.Connection, *, optimize: bool = False) ->
         pass
 
 
+# Process-local. PASSIVE does not shrink the -wal file, so a size check alone
+# would TRUNCATE on every watcher tick once the file crossed the cap.
+_last_wal_truncate = 0.0
+
+
 def checkpoint_wal_if_over_limit(*, verbose: bool = False) -> bool:
-    """TRUNCATE checkpoint when the -wal file exceeds ``WAL_LIMIT_BYTES``."""
+    """Checkpoint when the -wal file exceeds ``WAL_LIMIT_BYTES``.
+
+    Always tries ``PASSIVE`` (no wait). ``TRUNCATE`` runs only when no reader
+    is holding frames and at most once per ``WAL_TRUNCATE_INTERVAL``. A truncate
+    on every watch loop takes an exclusive lock and stalls searches.
+    """
+    global _last_wal_truncate
     if not is_wal_over_limit():
         return False
     try:
         db = writer_connect()
+        row = db.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+    except sqlite3.Error:
+        writer_reset()
+        return False
+    busy, log, checkpointed = row if row and len(row) == 3 else (1, 0, 0)
+    pending = max(0, int(log) - int(checkpointed))
+    if int(busy) or pending > 0:
+        return False
+    now = time.monotonic()
+    if now - _last_wal_truncate < config.WAL_TRUNCATE_INTERVAL:
+        return False
+    try:
         db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        _last_wal_truncate = now
         if verbose:
             print(
                 f"  wal checkpoint truncate (wal now {wal_bytes()} bytes)",

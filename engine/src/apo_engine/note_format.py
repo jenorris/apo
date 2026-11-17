@@ -215,13 +215,59 @@ def chunk_yaml_note(
     return [("", 0, search, 1, end)]
 
 
+def project_large_json(data: dict[str, Any]) -> dict[str, Any]:
+    """Top-level scalars only. Nested objects and arrays become a length marker.
+
+    A multi-megabyte export (IAM dumps, CloudWatch inventories) must not become
+    one FTS document or one embed request. Small objects never take this path.
+    """
+    projected: dict[str, Any] = {}
+    for key, val in data.items():
+        if isinstance(val, dict):
+            projected[key] = {"_omitted": "object", "len": len(val)}
+        elif isinstance(val, list):
+            projected[key] = {"_omitted": "array", "len": len(val)}
+        elif isinstance(val, str) and len(val) > 500:
+            projected[key] = val[:500] + "…"
+        else:
+            projected[key] = val
+    return projected
+
+
+def json_index_documents(data: dict[str, Any], *, max_chars: int) -> tuple[str, str]:
+    """``(search_chunk_text, frontmatter_json)`` for one JSON catalog note.
+
+    Under ``max_chars`` both are the full document (search text is key-sorted).
+    Over the cap both are :func:`project_large_json`. ``max_chars <= 0`` disables
+    the cap. The search string is hard-cut if the projection itself is still long.
+    """
+    searchable = json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
+    fm = json.dumps(data, ensure_ascii=False, default=str)
+    if max_chars <= 0 or (len(searchable) <= max_chars and len(fm) <= max_chars):
+        return searchable, fm
+    projected = project_large_json(data)
+    searchable = json.dumps(projected, ensure_ascii=False, sort_keys=True, default=str)
+    fm = json.dumps(projected, ensure_ascii=False, default=str)
+    if len(searchable) > max_chars:
+        searchable = searchable[:max_chars]
+    if len(fm) > max_chars:
+        fm = json.dumps({"_apo_omitted": "json exceeds index cap"}, ensure_ascii=False)
+    return searchable, fm
+
+
 def chunk_json_note(
     text: str,
     rel: str,
     data: dict[str, Any],
 ) -> list[tuple[str, int, str, int, int]]:
-    """One searchable chunk for a JSON object, including every key and value."""
-    searchable = json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
+    """One searchable chunk for a JSON object.
+
+    Objects that serialize under ``JSON_CHUNK_MAX_CHARS`` keep every key and
+    value. Larger ones store a scalar projection so the chunk cannot be megabytes.
+    """
+    from apo_engine import config
+
+    searchable, _fm = json_index_documents(data, max_chars=config.JSON_CHUNK_MAX_CHARS)
     end = max(1, text.count("\n") + (0 if text.endswith("\n") else 1))
     return [("", 0, searchable, 1, end)]
 

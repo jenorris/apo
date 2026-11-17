@@ -235,12 +235,15 @@ def _index_vault_impl(
             is_json_catalog,
             is_mmd_note,
             is_yaml_note,
+            json_index_documents,
             parse_yaml_document,
         )
 
         if is_json_catalog(rel):
             assert json_data is not None
-            fm_json = json.dumps(json_data, ensure_ascii=False, default=str)
+            fm_json = json_index_documents(
+                json_data, max_chars=config.JSON_CHUNK_MAX_CHARS
+            )[1]
             id_prefix = f"json:{rel}"
             note_rows = []
             for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
@@ -451,6 +454,7 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
             is_json_catalog,
             is_mmd_note,
             is_yaml_note,
+            json_index_documents,
             parse_json_object,
             parse_yaml_document,
         )
@@ -460,7 +464,9 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
             if data is None:
                 purge_rels.append(rel)
                 continue
-            plan.frontmatter_json = json.dumps(data, ensure_ascii=False, default=str)
+            plan.frontmatter_json = json_index_documents(
+                data, max_chars=config.JSON_CHUNK_MAX_CHARS
+            )[1]
             id_prefix = f"json:{plan.rel}"
             for ordi, (heading, hlevel, ctext, start_line, end_line) in enumerate(
                 chunk_json_note(text, rel, data)

@@ -4,6 +4,36 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.39.2] — 2026-11-17
+
+Search stays responsive when a vault contains a huge JSON export, and the
+watcher no longer truncates the index WAL on every tick.
+
+### Fixed
+
+- **Oversized JSON catalogs no longer become one chunk** (`note_format.py`).
+  A JSON note whose serialization exceeds `APO_JSON_CHUNK_MAX_CHARS` (64KB)
+  is indexed as its top-level scalars. Nested objects and arrays are stored
+  as a length marker. The same projection is what `files.frontmatter` keeps.
+  Smaller JSON notes are unchanged. Reindex (`apo-engine index`, or touch the
+  file) to drop a multi-megabyte chunk already in `index.db`.
+- **Search no longer reads a whole oversized chunk into ranking**
+  (`retrieval.py`). Hit text is the first `APO_SEARCH_HYDRATE_CHARS` (64KB).
+  FTS still matches the full section.
+- **Embed requests are hard-capped at `APO_EMBED_MAX_CHARS`** even when a row
+  has no oversize plan, so a JSON body cannot occupy llama-server for the
+  length of the file. `0` still means unlimited.
+- **Query embeds time out after 8s** (`APO_QUERY_EMBED_TIMEOUT`) and search
+  falls back to keyword results. Index embeds keep the 120s client timeout.
+- **MCP startup warms llama-server**, not only Ollama. The desk embed backend
+  is llama.cpp; the old warm path never touched it.
+- **WAL `TRUNCATE` no longer runs on every watcher tick.** Crossing
+  `APO_WAL_LIMIT_BYTES` used to truncate on each loop, which takes an
+  exclusive lock and stalls in-flight searches. The watcher now runs a
+  `PASSIVE` checkpoint whenever the file is over the cap, and truncates at
+  most once per `APO_WAL_TRUNCATE_INTERVAL` (60s) and only when no reader is
+  holding frames.
+
 ## [0.39.1] — 2026-11-17
 
 Faster search/read/write hot paths and fewer agent tool-call errors.
