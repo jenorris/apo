@@ -33,6 +33,16 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = _unique(
             "read_note has no snippet_chars — use max_chars to truncate, "
             "or search_notes(snippet_chars=…) for search hit previews."
         ),
+        "max_bytes": (
+            "read_note has no max_bytes — use max_chars= (character limit), "
+            "or start_line=/end_line=."
+        ),
+        "max_lines": (
+            "read_note has no max_lines — use start_line=/end_line= or max_chars=."
+        ),
+        "offset": (
+            "read_note has no offset — use start_line=/end_line= for line slicing."
+        ),
         "top_k": "read_note has no top_k — use search_notes(limit=…) then read_note(path=… or chunk_hash=…).",
         "limit": "read_note has no limit — use max_chars / start_line / end_line, or search_notes(limit=…).",
         "query": (
@@ -78,6 +88,9 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = _unique(
         ),
     },
     patch_note={
+        "operations": "patch_note uses ops=[…] (not operations=).",
+        "edits": "patch_note uses ops=[…] (not edits=).",
+        "updates": "patch_note uses ops=[…] (not updates=).",
         "text": "patch_note mutates via ops[] — put text on an op (append/replace_section), not top-level.",
         "content": "patch_note has no content — use write_note for full overwrite, or ops with replace_section/replace_text.",
         "find": "find belongs inside an op: {\"op\":\"replace_text\",\"find\":\"…\",\"replace\":\"…\"}.",
@@ -114,6 +127,8 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = _unique(
             "pass folder= or folders=[], not both. Single folder: folder=… instead."
         ),
         "top_k": "search_notes uses limit= (not top_k).",
+        "k": "search_notes uses limit= (not k=).",
+        "max_results": "search_notes uses limit= (not max_results=).",
         "branch": (
             "search_notes uses ref= for FTS-only body recall at a git tip "
             "(no embeddings). Follow up with read_note(path=…, ref=…)."
@@ -126,6 +141,8 @@ _TOOL_PARAM_HINTS: dict[str, dict[str, str]] = _unique(
         ),
         "top_k": "filter_notes uses limit= (and offset=), not top_k.",
         "filters": "filter_notes uses where= (not filters=).",
+        "fields_only": "filter_notes uses fields=[\"key\", ...] to project frontmatter keys.",
+        "select": "filter_notes uses fields=[\"key\", ...] to project frontmatter keys.",
         "order_by": "filter_notes uses sort= (mtime or FM key) and order=asc|desc, not order_by.",
         "branch": (
             "filter_notes uses ref= for a git branch/bookmark tip catalog "
@@ -306,6 +323,24 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
                     "set_field→field; replace_text→find; append/replace_section→text/heading."
                 )
                 continue
+
+        if etype == "value_error":
+            clean_msg = msg.removeprefix("Value error, ").strip()
+            if "conflicting target and heading" in clean_msg:
+                hints.append(
+                    "target= is an alias for heading= (pass only one). "
+                    "replace_section keeps the existing heading; to rename a heading use replace_text."
+                )
+                continue
+            if clean_msg:
+                hints.append(f"{name}: {clean_msg}.")
+                continue
+
+        if etype == "list_type" and loc_tail:
+            hints.append(
+                f"{name} {loc_tail}= must be a JSON array, not a string."
+            )
+            continue
 
     # Dedup while preserving order
     seen: set[str] = set()

@@ -209,14 +209,17 @@ def check_write_precondition(
             return None
 
     # mtime missing/mismatch — try region hashes (explicit or same-mtime cache).
+    # If a caller truncated mtime to integer seconds (e.g. from shell stat/ISO),
+    # allow matching the cached touch from that same second — region blake2b hashes
+    # below still reject any actual edit in the touched bytes.
     cached: PathTouch | None = None
-    if (
-        touch is not None
-        and has_mtime
-        and touch.mtime is not None
-        and abs(float(touch.mtime) - float(expected_mtime)) <= 1e-6
-    ):
-        cached = touch
+    if touch is not None and has_mtime and touch.mtime is not None:
+        exp_f = float(expected_mtime)
+        touch_f = float(touch.mtime)
+        if abs(touch_f - exp_f) <= 1e-6 or (
+            exp_f.is_integer() and int(touch_f) == int(exp_f)
+        ):
+            cached = touch
 
     if content is None:
         return _stale(path, expected_mtime, actual_mtime, reason="whole_file")

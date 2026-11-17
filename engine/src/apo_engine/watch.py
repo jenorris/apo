@@ -504,11 +504,14 @@ def _watch_one(
             logger.exception("[%s] watch hook factory %r failed; skipped", label, factory)
 
     ignore_res = core._compile_ignore(core._load_ignore())
-    contracts_dirty = threading.Event()
+    contracts_lock = threading.Lock()
+    contracts_dirty = False
 
     def on_fs_event(raw: str) -> None:
+        nonlocal contracts_dirty
         if _contracts_event_rel(raw, root) is not None:
-            contracts_dirty.set()
+            with contracts_lock:
+                contracts_dirty = True
             event_queue.put("contracts")
         if _event_path_noise(raw, root, ignore_res):
             return
@@ -633,8 +636,9 @@ def _watch_one(
                 ready = debouncer.ready(now=now)
                 # Contract files are ignore-listed, so they never reach `ready`;
                 # on_fs_event flags them before the ignore filter instead.
-                contracts_changed = contracts_dirty.is_set()
-                contracts_dirty.clear()
+                with contracts_lock:
+                    contracts_changed = contracts_dirty
+                    contracts_dirty = False
                 if ready:
                     stats.indexed += _index_paths(ready, verbose=verbose)
                     from . import vault_project

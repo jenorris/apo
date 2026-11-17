@@ -287,6 +287,51 @@ class FormatToolValidationErrorTest(unittest.TestCase):
         self.assertIn("Invalid arguments for foo", msg)
         self.assertNotIn("errors.pydantic.dev", msg)
 
+    def test_observed_telemetry_param_hints(self):
+        class FakeK(Exception):
+            def errors(self, include_url: bool = True):
+                return [{"type": "unexpected_keyword_argument", "loc": ("k",), "msg": "x", "input": 5}]
+
+        exc = Exception("err")
+        exc.__cause__ = FakeK()
+        self.assertIn("limit=", format_tool_validation_error("search_notes", exc))
+
+        class FakeMaxBytes(Exception):
+            def errors(self, include_url: bool = True):
+                return [{"type": "unexpected_keyword_argument", "loc": ("max_bytes",), "msg": "x", "input": 100}]
+
+        exc2 = Exception("err")
+        exc2.__cause__ = FakeMaxBytes()
+        self.assertIn("max_chars=", format_tool_validation_error("read_note", exc2))
+
+        class FakeOperations(Exception):
+            def errors(self, include_url: bool = True):
+                return [{"type": "unexpected_keyword_argument", "loc": ("operations",), "msg": "x", "input": []}]
+
+        exc3 = Exception("err")
+        exc3.__cause__ = FakeOperations()
+        self.assertIn("ops=", format_tool_validation_error("patch_note", exc3))
+
+    def test_conflicting_target_and_heading_hint(self):
+        exc = _patch_ops_validation_error(
+            [{"op": "replace_section", "heading": "Old", "target": "## New", "text": "body"}]
+        )
+        msg = format_tool_validation_error("patch_note", exc)
+        self.assertIn("alias for heading=", msg)
+        self.assertIn("replace_text", msg)
+        self.assertNotIn("GetMcpTools", msg)
+
+    def test_list_type_stringified_ops_hint(self):
+        class FakeList(Exception):
+            def errors(self, include_url: bool = True):
+                return [{"type": "list_type", "loc": ("ops",), "msg": "Input should be a valid list", "input": "[]"}]
+
+        exc = Exception("err")
+        exc.__cause__ = FakeList()
+        msg = format_tool_validation_error("patch_note", exc)
+        self.assertIn("ops=", msg)
+        self.assertIn("JSON array", msg)
+
 
 class FlattenPatchFailureErrorTest(unittest.TestCase):
     def test_nested_dict(self):

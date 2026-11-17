@@ -340,6 +340,7 @@ def writer_close(*, index_key: str | None = None) -> None:
     """Close writer connection(s). Default: active index only; pass '' to close all."""
     conns = _tls_map(_writer_local, "conns")
     pings = _tls_map(_writer_local, "ping_at")
+    ready_map = _tls_map(_writer_local, "links_ready")
     if index_key == "":
         keys = list(conns)
     else:
@@ -347,6 +348,7 @@ def writer_close(*, index_key: str | None = None) -> None:
     for key in keys:
         db = conns.pop(key, None)
         pings.pop(key, None)
+        ready_map.pop(key, None)
         if db is None:
             continue
         try:
@@ -395,6 +397,7 @@ def reader_close(*, index_key: str | None = None) -> None:
     """Close reader connection(s). Default: active index only; pass '' to close all."""
     conns = _tls_map(_reader_local, "conns")
     pings = _tls_map(_reader_local, "ping_at")
+    ready_map = _tls_map(_reader_local, "links_ready")
     if index_key == "":
         keys = list(conns)
     else:
@@ -402,12 +405,34 @@ def reader_close(*, index_key: str | None = None) -> None:
     for key in keys:
         db = conns.pop(key, None)
         pings.pop(key, None)
+        ready_map.pop(key, None)
         if db is None:
             continue
         try:
             db.close()
         except sqlite3.Error:
             pass
+
+
+def _cached_conn_links_ready(db: sqlite3.Connection) -> bool | None:
+    """Return cached links_ready for a thread-local reader/writer connection, else None."""
+    for local in (_reader_local, _writer_local):
+        conns = _tls_map(local, "conns")
+        ready_map = _tls_map(local, "links_ready")
+        for key, conn in conns.items():
+            if conn is db:
+                return ready_map.get(key)
+    return None
+
+
+def _set_cached_conn_links_ready(db: sqlite3.Connection, ready: bool) -> None:
+    for local in (_reader_local, _writer_local):
+        conns = _tls_map(local, "conns")
+        ready_map = _tls_map(local, "links_ready")
+        for key, conn in conns.items():
+            if conn is db:
+                ready_map[key] = ready
+                return
 
 
 def _index_key() -> str:
@@ -1385,4 +1410,4 @@ def index_health() -> dict[str, Any]:
         "flags": flags,
     }
 
-__owned__ = ['reader_connect', '_schema_ready', '_hash_algo_ready', '_writer_local', '_reader_local', '_index_health_lock', '_index_health', 'IndexBusyError', 'HASH_ALGO', '_ensure_files_columns', '_ensure_chunk_columns', '_health_key', 'index_lock_backoff_active', 'note_index_lock_error', 'clear_index_lock_health', 'wal_bytes', 'is_wal_over_limit', '_MMAP_BYTES', '_open_sqlite', 'connect', '_tls_map', 'writer_connect', 'writer_reset', 'writer_close', 'reader_close', '_index_key', 'RRF_K', 'ensure_fts', '_insert_pending_chunks', '_finalize_index_writes', 'checkpoint_wal_if_over_limit', '_files_embed_state', '_is_embed_quarantined', '_embed_retry_backoff_active', '_record_embed_drops', '_retry_failed_embeds_degraded', '_embed_and_store_pending', '_ensure_vec_table', '_load_ignore', '_prune_dir_names', '_iter_notes', '_stamp_hash_algo', '_migrate_hash_algo', '_ensure_hash_algo', 'PendingChunk', 'count_chunks', 'lookup_chunk', 'note_chunk_order', '_deserialize_vec', '_l2_sq_blob', '_L2_BATCH_SIZE', '_l2_sq_batch', '_folder_vector_via_global_knn', '_collapse_part_hits', '_folder_path_ranges', '_scoped_vector_hits', '_vectors_by_content_hash', 'stats', 'BACKLINKS_PER_FILE_WARN', 'index_health']
+__owned__ = ['reader_connect', '_schema_ready', '_hash_algo_ready', '_writer_local', '_reader_local', '_index_health_lock', '_index_health', 'IndexBusyError', 'HASH_ALGO', '_ensure_files_columns', '_ensure_chunk_columns', '_health_key', 'index_lock_backoff_active', 'note_index_lock_error', 'clear_index_lock_health', 'wal_bytes', 'is_wal_over_limit', '_MMAP_BYTES', '_open_sqlite', 'connect', '_tls_map', 'writer_connect', 'writer_reset', 'writer_close', 'reader_close', '_cached_conn_links_ready', '_set_cached_conn_links_ready', '_index_key', 'RRF_K', 'ensure_fts', '_insert_pending_chunks', '_finalize_index_writes', 'checkpoint_wal_if_over_limit', '_files_embed_state', '_is_embed_quarantined', '_embed_retry_backoff_active', '_record_embed_drops', '_retry_failed_embeds_degraded', '_embed_and_store_pending', '_ensure_vec_table', '_load_ignore', '_prune_dir_names', '_iter_notes', '_stamp_hash_algo', '_migrate_hash_algo', '_ensure_hash_algo', 'PendingChunk', 'count_chunks', 'lookup_chunk', 'note_chunk_order', '_deserialize_vec', '_l2_sq_blob', '_L2_BATCH_SIZE', '_l2_sq_batch', '_folder_vector_via_global_knn', '_collapse_part_hits', '_folder_path_ranges', '_scoped_vector_hits', '_vectors_by_content_hash', 'stats', 'BACKLINKS_PER_FILE_WARN', 'index_health']

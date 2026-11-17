@@ -322,7 +322,7 @@ OPS_FIELD_DESC = (
     "Keys: field/find/replace — never path/key/old/new/old_text/new_text (aliases accepted). "
     "Ops: set_field(field,value); delete_field(field); "
     "replace_text(find,replace,scope.heading|heading|chunk_hash); "
-    "replace_section(heading|target|chunk_hash,text); "
+    "replace_section(heading|chunk_hash,text; target=heading alias — use replace_text to rename headings); "
     "append/prepend(text,heading|target|chunk_hash); append_eof(text); "
     "place(src,dst,overwrite?,fields?,allow_cross_vault?). "
     "Standalone add → append_note. Multi-path batch → apo-local/apo `patch --items` "

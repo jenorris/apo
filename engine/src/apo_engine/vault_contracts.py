@@ -42,6 +42,7 @@ _LEGACY_FILES: dict[str, str] = {
 
 _yaml_cache_lock = threading.Lock()
 _yaml_cache: dict[tuple[str, int, int], dict[str, Any]] = {}
+_parsed_cache: dict[tuple[str, str, int, int], "ContractParse"] = {}
 _YAML_CACHE_MAX = 64
 
 
@@ -102,10 +103,38 @@ def load_yaml_cached(path: Path) -> dict[str, Any] | None:
     return dict(data)
 
 
+def load_parsed_cached(
+    path: Path,
+    family: str,
+    parser: Callable[[dict[str, Any]], ContractParse],
+) -> ContractParse | None:
+    """Parse and normalize a contract YAML once per ``(family, path, mtime_ns, size)``."""
+    resolved = path.expanduser().resolve()
+    try:
+        st = resolved.stat()
+        pkey = (family, str(resolved), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    with _yaml_cache_lock:
+        hit = _parsed_cache.get(pkey)
+    if hit is not None:
+        return hit
+    data = load_yaml_cached(resolved)
+    if data is None:
+        return None
+    parsed = parser(data)
+    with _yaml_cache_lock:
+        if len(_parsed_cache) > _YAML_CACHE_MAX:
+            _parsed_cache.clear()
+        _parsed_cache[pkey] = parsed
+    return parsed
+
+
 def clear_yaml_cache() -> None:
     """Drop the shared contract YAML cache (tests; contract rewrites in-process)."""
     with _yaml_cache_lock:
         _yaml_cache.clear()
+        _parsed_cache.clear()
 
 
 # --- shape-check helpers ---------------------------------------------------------

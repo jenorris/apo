@@ -173,6 +173,44 @@ class SearchPerfTest(unittest.TestCase):
             ranking._backlink_count(path)
             rc.assert_not_called()
 
+    def test_links_ready_cached_on_reader_connect(self):
+        from apo_engine import index_db, link_index
+
+        db = index_db.reader_connect()
+        self.assertTrue(link_index.links_ready(db))
+        with mock.patch.object(
+            link_index, "_cached_conn_links_ready", return_value=True
+        ) as cached_check:
+            self.assertTrue(link_index.links_ready(db))
+            cached_check.assert_called_once_with(db)
+
+    def test_qcache_connection_reused_and_reset_on_clear(self):
+        core.clear_query_embed_cache()
+        c1 = embeddings._qcache_connect(create=True)
+        c2 = embeddings._qcache_connect(create=True)
+        self.assertIsNotNone(c1)
+        self.assertIs(c1, c2)
+        core.clear_query_embed_cache()
+        c3 = embeddings._qcache_connect(create=True)
+        self.assertIsNotNone(c3)
+        self.assertIsNot(c1, c3)
+
+    def test_parsed_contract_cache_reused_and_invalidated(self):
+        from apo_engine import search_contract, vault_contracts
+
+        vault_contracts.clear_yaml_cache()
+        sc_path = self.vault / "system" / "contracts" / "search-contract.schema.yaml"
+        sc_path.write_text("search_contract_version: 1\nboost_vocab:\n  - gateway\n", encoding="utf-8")
+        with mock.patch.object(
+            search_contract, "parse_contract", wraps=search_contract.parse_contract
+        ) as spy:
+            self.assertEqual(search_contract.load_boost_vocab(self.vault), ["gateway"])
+            self.assertEqual(search_contract.load_boost_vocab(self.vault), ["gateway"])
+            self.assertEqual(spy.call_count, 1)
+            vault_contracts.clear_yaml_cache()
+            self.assertEqual(search_contract.load_boost_vocab(self.vault), ["gateway"])
+            self.assertEqual(spy.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

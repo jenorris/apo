@@ -153,12 +153,28 @@ def _record_path_touch(
     content: str | None = None,
     *,
     heading: str | None = None,
+    frontmatter_hash: str | None = None,
+    body_hash: str | None = None,
+    section_hash: str | None = None,
 ) -> None:
     """Record a successful read/expand/write so a follow-up write can tip expected_mtime."""
     now = time.monotonic()
     with _touches_lock:
         _prune_recent_touches(now)
         key = _write_key(vault, path)
+        if frontmatter_hash is not None or body_hash is not None:
+            touch = PathTouch(
+                mono=now,
+                mtime=file_mtime,
+                frontmatter_hash=frontmatter_hash,
+                body_hash=body_hash,
+            )
+            if heading and section_hash:
+                from apo_engine.markdown_patch import _normalize_heading
+
+                touch.sections[_normalize_heading(heading)] = section_hash
+            _recent_touches[key] = touch
+            return
         if content is not None:
             _recent_touches[key] = snapshot_from_content(
                 now, file_mtime, content, heading=heading
@@ -204,17 +220,20 @@ def _attach_mtime_tip(
             file_mtime = float(new_mtime) if isinstance(new_mtime, (int, float)) else (
                 prior.mtime if prior else None
             )
-            if content is not None:
+            fm = out.get("frontmatter_hash")
+            body = out.get("body_hash")
+            if isinstance(fm, str) or isinstance(body, str):
+                _recent_touches[key] = PathTouch(
+                    mono=now,
+                    mtime=file_mtime,
+                    frontmatter_hash=fm if isinstance(fm, str) else None,
+                    body_hash=body if isinstance(body, str) else None,
+                )
+            elif content is not None:
                 _recent_touches[key] = snapshot_from_content(now, file_mtime, content)
             elif prior is not None:
                 prior.mono = now
                 prior.mtime = file_mtime
-                fm = out.get("frontmatter_hash")
-                body = out.get("body_hash")
-                if isinstance(fm, str):
-                    prior.frontmatter_hash = fm
-                if isinstance(body, str):
-                    prior.body_hash = body
             else:
                 _recent_touches[key] = PathTouch(mono=now, mtime=file_mtime)
     return out

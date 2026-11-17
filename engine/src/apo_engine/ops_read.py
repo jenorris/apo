@@ -302,7 +302,17 @@ def _read_from_chunk(
             elif body:
                 out_sec["content_hash"] = region_content_hash(body)
         _record_path_touch(
-            b.name, rel, float(file_mtime), file_text, heading=heading_label or None
+            b.name,
+            rel,
+            float(file_mtime),
+            heading=heading_label or None,
+            frontmatter_hash=out_sec.get("frontmatter_hash"),
+            body_hash=out_sec.get("body_hash"),
+            section_hash=(
+                None
+                if chunk_kind in ("table_row", "table_header")
+                else out_sec.get("content_hash")
+            ),
         )
         if fields is not None:
             raw_fm = core.note_frontmatter(file_text, rel)
@@ -601,7 +611,13 @@ def read_note(
 
     attach_region_hashes(out, text, heading=heading)
     _record_path_touch(
-        b.name, path_s, float(out["mtime"]), text, heading=heading
+        b.name,
+        path_s,
+        float(out["mtime"]),
+        heading=heading,
+        frontmatter_hash=out.get("frontmatter_hash"),
+        body_hash=out.get("body_hash"),
+        section_hash=out.get("content_hash") if heading else None,
     )
     if lint:
         from apo_engine import vaults as _vaults

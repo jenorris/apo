@@ -52,7 +52,46 @@ def normalize_query(query: str) -> str:
 _query_embed_cache: OrderedDict[str, tuple[float, list[float]]] = OrderedDict()
 _query_embed_lock = threading.Lock()
 _query_embed_inflight: dict[tuple[str, str, str], Future[list[float]]] = {}
+# >1 so concurrent MCP searches (each already on a worker thread) can embed in parallel.
 # Reused across search() calls — avoid ThreadPoolExecutor create/teardown per query.
+_http_client: Any = None
+_http_client_lock = threading.Lock()
+
+
+def _get_http_client() -> Any:
+    """Shared keep-alive HTTP client for Ollama / llama-server (None if httpx absent)."""
+    global _http_client
+    if _http_client is not None:
+        return _http_client or None
+    with _http_client_lock:
+        if _http_client is None:
+            try:
+                import httpx
+
+                _http_client = httpx.Client(
+                    timeout=120.0,
+                    limits=httpx.Limits(max_keepalive_connections=8, max_connections=16),
+                )
+            except ImportError:
+                _http_client = False
+    return _http_client or None
+
+
+def _post_json(url: str, body: dict[str, Any]) -> dict[str, Any]:
+    client = _get_http_client()
+    if client is not None:
+        try:
+            resp = client.post(url, json=body)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+    payload = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        return json.load(resp)
+
+
 # --------------------------------------------------------------------------- #
 # Embedding backends
 # --------------------------------------------------------------------------- #
@@ -77,10 +116,7 @@ def _ollama_embed_request(
     body: dict[str, Any] = {"model": config.MODEL_NAME, "input": texts}
     if keep_alive is not None and keep_alive != "":
         body["keep_alive"] = keep_alive
-    payload = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.load(resp)
+    data = _post_json(url, body)
     embs = data.get("embeddings")
     if not embs or len(embs) != len(texts):
         raise RuntimeError(f"Ollama returned {len(embs) if embs else 0} embeddings for {len(texts)} inputs")
@@ -89,14 +125,10 @@ def _ollama_embed_request(
 
 def _llamacpp_embed_request(texts: list[str]) -> list[list[float]]:
     """POST /v1/embeddings to a ``llama-server --embeddings`` process."""
-    body = json.dumps({"model": config.MODEL_NAME, "input": texts}).encode()
-    req = urllib.request.Request(
+    data = _post_json(
         f"{config.LLAMACPP_URL}/v1/embeddings",
-        data=body,
-        headers={"Content-Type": "application/json"},
+        {"model": config.MODEL_NAME, "input": texts},
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.load(resp)
     rows = sorted(data.get("data") or [], key=lambda r: r.get("index", 0))
     if len(rows) != len(texts):
         raise RuntimeError(f"llama-server returned {len(rows)} embeddings for {len(texts)} inputs")
@@ -252,6 +284,9 @@ def _query_embed_disk_ttl() -> float:
 
 _QCACHE_PRUNE_INTERVAL = 600.0
 _qcache_last_prune: dict[str, float] = {}
+_qcache_local = threading.local()
+_qcache_ready: set[str] = set()
+_qcache_ready_lock = threading.Lock()
 
 
 def query_embed_cache_path() -> Path:
@@ -260,21 +295,59 @@ def query_embed_cache_path() -> Path:
     return index.with_name(f"{index.stem}.qcache.db")
 
 
+def _qcache_conns() -> dict[str, sqlite3.Connection]:
+    conns = getattr(_qcache_local, "conns", None)
+    if conns is None:
+        conns = {}
+        _qcache_local.conns = conns
+    return conns
+
+
+def _qcache_reset(path: Path | None = None) -> None:
+    target = query_embed_cache_path() if path is None else path
+    key = str(target.resolve())
+    with _qcache_ready_lock:
+        _qcache_ready.discard(key)
+    db = _qcache_conns().pop(key, None)
+    if db is not None:
+        try:
+            db.close()
+        except sqlite3.Error:
+            pass
+
+
 def _qcache_connect(*, create: bool) -> sqlite3.Connection | None:
     path = query_embed_cache_path()
+    key = str(path.resolve())
     if not create and not path.exists():
+        _qcache_reset(path)
         return None
+    conns = _qcache_conns()
+    db = conns.get(key)
+    if db is not None:
+        with _qcache_ready_lock:
+            ready = key in _qcache_ready
+        if ready and path.exists():
+            return db
+        _qcache_reset(path)
     db = sqlite3.connect(str(path), timeout=0.25)
     try:
-        db.execute("PRAGMA journal_mode=WAL")
-        db.execute(
-            "CREATE TABLE IF NOT EXISTS qemb "
-            "(key TEXT PRIMARY KEY, model TEXT, at REAL, q TEXT, vec BLOB)"
-        )
-        db.execute("CREATE INDEX IF NOT EXISTS qemb_model_at ON qemb(model, at)")
+        db.execute("PRAGMA synchronous=NORMAL")
+        with _qcache_ready_lock:
+            ready = key in _qcache_ready
+        if not ready:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS qemb "
+                "(key TEXT PRIMARY KEY, model TEXT, at REAL, q TEXT, vec BLOB)"
+            )
+            db.execute("CREATE INDEX IF NOT EXISTS qemb_model_at ON qemb(model, at)")
+            with _qcache_ready_lock:
+                _qcache_ready.add(key)
     except sqlite3.Error:
         db.close()
         raise
+    conns[key] = db
     return db
 
 
@@ -292,17 +365,15 @@ def _load_query_embed_disk(norm_query: str) -> list[float] | None:
         db = _qcache_connect(create=False)
         if db is None:
             return None
-        try:
-            row = db.execute(
-                "SELECT vec FROM qemb WHERE key=? AND model=? AND at>=?",
-                (_query_embed_meta_key(norm_query), config.MODEL_NAME, time.time() - ttl),
-            ).fetchone()
-        finally:
-            db.close()
+        row = db.execute(
+            "SELECT vec FROM qemb WHERE key=? AND model=? AND at>=?",
+            (_query_embed_meta_key(norm_query), config.MODEL_NAME, time.time() - ttl),
+        ).fetchone()
         if not row or not row[0]:
             return None
         return _unpack_vec(row[0]) or None
     except (OSError, sqlite3.Error, struct.error, TypeError, ValueError):
+        _qcache_reset()
         return None
 
 
@@ -314,27 +385,26 @@ def _save_query_embed_disk(norm_query: str, vec: list[float]) -> None:
         return
     try:
         db = _qcache_connect(create=True)
-        try:
-            now = time.time()
-            db.execute(
-                "INSERT OR REPLACE INTO qemb(key, model, at, q, vec) VALUES (?,?,?,?,?)",
-                (
-                    _query_embed_meta_key(norm_query),
-                    config.MODEL_NAME,
-                    now,
-                    norm_query,
-                    sqlite_vec.serialize_float32(vec),
-                ),
-            )
-            path_key = str(query_embed_cache_path())
-            if now - _qcache_last_prune.get(path_key, 0.0) >= _QCACHE_PRUNE_INTERVAL:
-                db.execute("DELETE FROM qemb WHERE at < ?", (now - ttl,))
-                _qcache_last_prune[path_key] = now
-            db.commit()
-        finally:
-            db.close()
+        if db is None:
+            return
+        now = time.time()
+        db.execute(
+            "INSERT OR REPLACE INTO qemb(key, model, at, q, vec) VALUES (?,?,?,?,?)",
+            (
+                _query_embed_meta_key(norm_query),
+                config.MODEL_NAME,
+                now,
+                norm_query,
+                sqlite_vec.serialize_float32(vec),
+            ),
+        )
+        path_key = str(query_embed_cache_path())
+        if now - _qcache_last_prune.get(path_key, 0.0) >= _QCACHE_PRUNE_INTERVAL:
+            db.execute("DELETE FROM qemb WHERE at < ?", (now - ttl,))
+            _qcache_last_prune[path_key] = now
+        db.commit()
     except (OSError, sqlite3.Error, struct.error, TypeError, ValueError):
-        pass
+        _qcache_reset()
 
 
 def _hydrate_query_embed_from_disk(*, limit: int | None = None) -> int:
@@ -351,14 +421,12 @@ def _hydrate_query_embed_from_disk(*, limit: int | None = None) -> int:
         db = _qcache_connect(create=False)
         if db is None:
             return 0
-        try:
-            rows = db.execute(
-                "SELECT q, vec FROM qemb WHERE model=? AND at>=? ORDER BY at DESC LIMIT ?",
-                (config.MODEL_NAME, time.time() - ttl, cap),
-            ).fetchall()
-        finally:
-            db.close()
+        rows = db.execute(
+            "SELECT q, vec FROM qemb WHERE model=? AND at>=? ORDER BY at DESC LIMIT ?",
+            (config.MODEL_NAME, time.time() - ttl, cap),
+        ).fetchall()
     except (OSError, sqlite3.Error):
+        _qcache_reset()
         return 0
     now_mono = time.monotonic()
     candidates: list[tuple[str, list[float]]] = []
@@ -474,13 +542,12 @@ def clear_query_embed_cache() -> None:
     try:
         qdb = _qcache_connect(create=False)
         if qdb is not None:
-            try:
-                qdb.execute("DELETE FROM qemb")
-                qdb.commit()
-            finally:
-                qdb.close()
+            qdb.execute("DELETE FROM qemb")
+            qdb.commit()
     except (OSError, sqlite3.Error):
         pass
+    finally:
+        _qcache_reset()
     try:
         # Legacy rows from when the cache lived in index.db meta.
         # Call-time import: index_db imports this module at load time.
@@ -492,4 +559,4 @@ def clear_query_embed_cache() -> None:
     except (OSError, sqlite3.Error):
         pass
 
-__owned__ = ['_embed_commit_batch', 'has_nan', 'normalize_query', '_query_embed_cache', '_query_embed_lock', '_fastembed', '_embed_fastembed', '_ollama_embed_request', '_llamacpp_embed_request', '_server_embed_request', '_truncate_dim', '_embed_batch_resilient', 'embed_concurrency', '_embed_ollama', 'iter_embedded_in_order', 'embed', '_query_embed_meta_key', '_query_embed_disk_ttl', '_QCACHE_PRUNE_INTERVAL', '_qcache_last_prune', 'query_embed_cache_path', '_qcache_connect', '_unpack_vec', '_load_query_embed_disk', '_save_query_embed_disk', '_hydrate_query_embed_from_disk', 'warm_query_embed', 'query_embed', 'clear_query_embed_cache']
+__owned__ = ['_embed_commit_batch', 'has_nan', 'normalize_query', '_query_embed_cache', '_query_embed_lock', '_http_client', '_http_client_lock', '_get_http_client', '_post_json', '_fastembed', '_embed_fastembed', '_ollama_embed_request', '_llamacpp_embed_request', '_server_embed_request', '_truncate_dim', '_embed_batch_resilient', 'embed_concurrency', '_embed_ollama', 'iter_embedded_in_order', 'embed', '_query_embed_meta_key', '_query_embed_disk_ttl', '_QCACHE_PRUNE_INTERVAL', '_qcache_last_prune', '_qcache_local', '_qcache_ready', '_qcache_ready_lock', 'query_embed_cache_path', '_qcache_conns', '_qcache_reset', '_qcache_connect', '_unpack_vec', '_load_query_embed_disk', '_save_query_embed_disk', '_hydrate_query_embed_from_disk', 'warm_query_embed', 'query_embed', 'clear_query_embed_cache']

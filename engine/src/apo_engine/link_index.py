@@ -34,7 +34,12 @@ except ImportError:
 
 from . import config, links, oversize, ref_catalog, rerank, table_markdown, vaults
 from .content import _known_vault_ids, note_catalog_json
-from .index_db import reader_connect, writer_connect
+from .index_db import (
+    _cached_conn_links_ready,
+    _set_cached_conn_links_ready,
+    reader_connect,
+    writer_connect,
+)
 from .index_models import Hit, IndexStats, QueueStats
 
 def _note_links(
@@ -266,15 +271,22 @@ def _ensure_link_columns(db: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS backlinks_target_path ON backlinks(target_path);
         """
     )
+    _set_cached_conn_links_ready(db, True)
 
 
 def links_ready(db: sqlite3.Connection) -> bool:
     """True when this index has the typed-link schema (readers on an un-migrated index fall back)."""
+    cached = _cached_conn_links_ready(db)
+    if cached is True:
+        return True
     try:
         cols = {row[1] for row in db.execute("PRAGMA table_info(backlinks)").fetchall()}
     except sqlite3.Error:
         return False
-    return "status" in cols
+    ready = "status" in cols
+    if ready:
+        _set_cached_conn_links_ready(db, True)
+    return ready
 _LINK_COLS = "source, target_key, target_path, kind, status, line, text, alias, heading, target_vault"
 
 

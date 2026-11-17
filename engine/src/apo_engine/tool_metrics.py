@@ -248,18 +248,11 @@ def _insert_events(
     if not events:
         return
     coll = (collection or "default").strip() or "default"
+    params_list = []
     for event in events:
         flags = {k: event.get(k) for k in _FLAG_KEYS if k in event}
-        conn.execute(
-            """
-            INSERT INTO tool_calls (
-                ts, collection, tool, ok, error, duration_ms, req_bytes, resp_bytes,
-                folder_set, fields_set, expected_mtime_set, used_alias, ops_count, error_shape,
-                vault_id, conversation_id, note_path, path_hash, heading, chunk_hash, apo_version,
-                flaws_emitted, flaws_auto_fixed, surface
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
+        params_list.append(
+            (
                 event.get("ts"),
                 coll,
                 event.get("tool"),
@@ -290,8 +283,19 @@ def _insert_events(
                 if flags.get("flaws_auto_fixed") is not None
                 else None,
                 event.get("surface") or None,
-            ],
+            )
         )
+    conn.executemany(
+        """
+        INSERT INTO tool_calls (
+            ts, collection, tool, ok, error, duration_ms, req_bytes, resp_bytes,
+            folder_set, fields_set, expected_mtime_set, used_alias, ops_count, error_shape,
+            vault_id, conversation_id, note_path, path_hash, heading, chunk_hash, apo_version,
+            flaws_emitted, flaws_auto_fixed, surface
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        params_list,
+    )
 
 
 def _migrate_jsonl_once(db_path: Path) -> None:
@@ -338,8 +342,11 @@ def _write_batch(batch: list[tuple[Path, str, dict[str, Any]]]) -> None:
                 try:
                     conn.execute("BEGIN IMMEDIATE")
                     try:
+                        by_coll: dict[str, list[dict[str, Any]]] = defaultdict(list)
                         for collection, event in rows:
-                            _insert_events(conn, collection, [event])
+                            by_coll[collection].append(event)
+                        for collection, coll_events in by_coll.items():
+                            _insert_events(conn, collection, coll_events)
                     except BaseException:
                         conn.execute("ROLLBACK")
                         raise

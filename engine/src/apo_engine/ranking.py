@@ -28,6 +28,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -98,14 +99,48 @@ def clear_architecture_vocab_cache() -> None:
 
 
 _TICKET_ID_RE = re.compile(r"\b([a-z]{2,10})-(\d{2,6})\b", re.I)
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_STEM_SPLIT_RE = re.compile(r"[-_]")
 _EVAL_ARTIFACT_STEMS = frozenset({"apo-qmd-retrieval-pilot", "search-eval"})
 _STEM_PHRASE_STOP = frozenset({"core", "api", "thread", "the", "and", "for"})
 
 
-def _phrase_stem_boost(path: str, query: str) -> float:
+@dataclass(frozen=True)
+class _QueryFeatures:
+    """Pre-tokenized query attributes reused across all hits in one search."""
+
+    q_lower: str
+    q_words: list[str]
+    q_tokens_gt1: frozenset[str]
+    q_tokens_gt2: frozenset[str]
+    ticket_needles: tuple[str, ...]
+    stem_phrases: tuple[tuple[str, float], ...]
+
+
+def _compile_query_features(query: str) -> _QueryFeatures:
+    q_lower = (query or "").lower()
+    words = _WORD_RE.findall(q_lower)
+    needles = tuple(f"{m.group(1).lower()}-{m.group(2)}" for m in _TICKET_ID_RE.finditer(q_lower))
+    return _QueryFeatures(
+        q_lower=q_lower,
+        q_words=words,
+        q_tokens_gt1=frozenset(t for t in words if len(t) > 1),
+        q_tokens_gt2=frozenset(t for t in words if len(t) > 2),
+        ticket_needles=needles,
+        stem_phrases=tuple(_stem_phrases(words)),
+    )
+
+
+def _phrase_stem_boost(
+    path: str, query: str, *, q_features: _QueryFeatures | None = None
+) -> float:
     """Boost when consecutive query words appear hyphenated in the filename stem."""
-    words = re.findall(r"[a-z0-9]+", (query or "").lower())
-    return _phrase_stem_score(Path(path).stem.lower(), _stem_phrases(words))
+    phrases = (
+        q_features.stem_phrases
+        if q_features is not None
+        else _stem_phrases(_WORD_RE.findall((query or "").lower()))
+    )
+    return _phrase_stem_score(_stem_lower(path), phrases)
 
 
 def _stem_phrases(words: list[str]) -> list[tuple[str, float]]:
@@ -197,24 +232,26 @@ def _frontmatter_boost_fields(path: str) -> dict[str, str]:
     return fields
 
 
-def _title_frontmatter_boost(path: str, query: str) -> float:
+def _title_frontmatter_boost(
+    path: str, query: str, *, q_features: _QueryFeatures | None = None
+) -> float:
     """Boost when cached title/permalink tokens align with the query (beyond filename)."""
-    q_lower = (query or "").lower()
-    q_tokens = {t for t in re.findall(r"[a-z0-9]+", q_lower) if len(t) > 2}
+    qf = q_features if q_features is not None else _compile_query_features(query)
+    q_tokens = qf.q_tokens_gt2
     if len(q_tokens) < 2:
         return 1.0
-    stem_tokens = set(re.split(r"[-_]", Path(path).stem.lower()))
+    stem_tokens = set(_STEM_SPLIT_RE.split(_stem_lower(path)))
     stem_overlap = len(q_tokens & stem_tokens) / len(q_tokens)
     if stem_overlap < 0.30:
         return 1.0
     fm = _frontmatter_boost_fields(path)
     best = 1.0
-    q_words = re.findall(r"[a-z0-9]+", q_lower)
+    q_words = qf.q_words
     for key in ("title", "permalink", "description"):
         text = (fm.get(key) or "").lower()
         if not text:
             continue
-        t_tokens = {t for t in re.findall(r"[a-z0-9]+", text) if len(t) > 2}
+        t_tokens = {t for t in _WORD_RE.findall(text) if len(t) > 2}
         if t_tokens:
             overlap = len(q_tokens & t_tokens) / len(q_tokens)
             if overlap >= 0.45:
@@ -226,34 +263,35 @@ def _title_frontmatter_boost(path: str, query: str) -> float:
     return best
 
 
-def _slug_ticket_boost(path: str, query: str) -> float:
+def _slug_ticket_boost(
+    path: str, query: str, *, q_features: _QueryFeatures | None = None
+) -> float:
     """Boost when query ticket/slug tokens match the note filename stem."""
-    stem = Path(path).stem.lower()
-    q = (query or "").lower()
+    qf = q_features if q_features is not None else _compile_query_features(query)
+    stem = _stem_lower(path)
     best = 1.0
-    for m in _TICKET_ID_RE.finditer(q):
-        prefix = m.group(1).lower()
-        num = m.group(2)
-        needle = f"{prefix}-{num}"
+    for needle in qf.ticket_needles:
         if needle in stem or stem.startswith(needle + "-") or stem == needle:
             best = max(best, 1.38)
     if best > 1.0:
         return best
-    q_tokens = {t for t in re.findall(r"[a-z0-9]+", q) if len(t) > 1}
-    stem_tokens = set(re.split(r"[-_]", stem))
+    q_tokens = qf.q_tokens_gt1
     if len(q_tokens) >= 2:
+        stem_tokens = set(_STEM_SPLIT_RE.split(stem))
         overlap = len(q_tokens & stem_tokens) / len(q_tokens)
         if overlap >= 0.6:
             best = max(best, 1.0 + 0.22 * overlap)
     return best
 
 
-def _eval_table_demotion(path: str, chunk_kind: str, query: str) -> float:
+def _eval_table_demotion(
+    path: str, chunk_kind: str, query: str, *, q_features: _QueryFeatures | None = None
+) -> float:
     """Demote table_row hits from eval/meta notes when filename doesn't match ticket ids."""
     if chunk_kind != "table_row":
         return 1.0
-    stem = Path(path).stem.lower()
-    if _slug_ticket_boost(path, query) > 1.0:
+    stem = _stem_lower(path)
+    if _slug_ticket_boost(path, query, q_features=q_features) > 1.0:
         return 1.0
     if stem in _EVAL_ARTIFACT_STEMS or stem.endswith("-eval"):
         return 0.62
@@ -312,7 +350,7 @@ def _backlink_count(path: str) -> int:
     cached = _boost_cache_get(_backlink_count_cache, _backlink_count_lock, key, now)
     if cached is not None:
         return cached[1]
-    stem = Path(rel).name.lower()
+    stem = lowered.rsplit("/", 1)[-1]
     targets = {lowered, stem}
     rows = link_index.list_backlinks(
         targets, limit=500, target_path=path.replace("\\", "/")
@@ -562,6 +600,7 @@ def _path_retrieval_boost(
     query: str,
     *,
     text: str = "",
+    q_features: _QueryFeatures | None = None,
 ) -> tuple[float, dict[str, float]]:
     """Post-fusion multipliers for slug/ticket recall and backlink rank.
 
@@ -569,10 +608,11 @@ def _path_retrieval_boost(
     the chunk's own text when available so ``table_header`` demotion can inspect
     its column list.
     """
-    slug = _slug_ticket_boost(path, query)
-    phrase = _phrase_stem_boost(path, query)
-    title_fm = _title_frontmatter_boost(path, query)
-    demote = _eval_table_demotion(path, chunk_kind, query)
+    qf = q_features if q_features is not None else _compile_query_features(query)
+    slug = _slug_ticket_boost(path, query, q_features=qf)
+    phrase = _phrase_stem_boost(path, query, q_features=qf)
+    title_fm = _title_frontmatter_boost(path, query, q_features=qf)
+    demote = _eval_table_demotion(path, chunk_kind, query, q_features=qf)
     generic_header = _generic_table_header_demotion(chunk_kind, text)
     bl = _backlink_search_boost(path)
     combined = slug * phrase * title_fm * demote * generic_header * bl
@@ -595,7 +635,7 @@ def _neighbor_paths_for(top_paths: list[str], *, limit: int = 80) -> set[str]:
         rel = raw.replace("\\", "/")
         if not rel.endswith(".md"):
             rel = f"{rel}.md"
-        stem = Path(rel).stem.lower()
+        stem = _stem_lower(rel)
         keys = {rel.removesuffix(".md").lower(), stem}
         queries.append({"target_path": rel, "target_keys": keys, "limit": limit})
         queries.append({"source": rel, "limit": limit})
@@ -617,6 +657,7 @@ def _neighbor_rank_boost(
     query: str,
     *,
     explain: bool = False,
+    q_features: _QueryFeatures | None = None,
 ) -> list[Hit]:
     """Promote 1-hop link neighbors of top hits (GBrain-style graph signal, lite)."""
     if len(hits) < 2:
@@ -625,18 +666,17 @@ def _neighbor_rank_boost(
     neighbor_paths = _neighbor_paths_for(top_paths)
     if not neighbor_paths:
         return hits
+    qf = q_features if q_features is not None else _compile_query_features(query)
     top_set = set(top_paths)
-    boosted = False
     for h in hits:
         if h.path in top_set or h.path not in neighbor_paths:
             continue
-        overlap = _slug_ticket_boost(h.path, query)
+        overlap = _slug_ticket_boost(h.path, query, q_features=qf)
         mult = 1.14 if overlap > 1.0 else 1.08
         h.score = round(h.score * mult, 4)
         if explain:
             h.explain = h.explain or {}
             h.explain["neighbor_boost"] = mult
-        boosted = True
     return hits
 
 
@@ -654,8 +694,11 @@ def _apply_path_boosts_to_hits(
     folder_prefix = folder.replace("\\", "/").strip("/")
     if folder_prefix:
         hits, _ = _inject_phrase_stem_hits(hits, query, folder_prefix, explain=explain)
+    qf = _compile_query_features(query)
     for h in hits:
-        mult, detail = _path_retrieval_boost(h.path, h.chunk_kind or "section", query, text=h.text)
+        mult, detail = _path_retrieval_boost(
+            h.path, h.chunk_kind or "section", query, text=h.text, q_features=qf
+        )
         h.score = round(h.score * mult, 4)
         if explain:
             h.explain = h.explain or {}
@@ -663,7 +706,7 @@ def _apply_path_boosts_to_hits(
             h.explain["final_score"] = h.score
     hits.sort(key=lambda x: x.score, reverse=True)
     if neighbor:
-        hits = _neighbor_rank_boost(hits, query, explain=explain)
+        hits = _neighbor_rank_boost(hits, query, explain=explain, q_features=qf)
         hits.sort(key=lambda x: x.score, reverse=True)
     return hits
 
@@ -689,6 +732,8 @@ def _catalog_retrieval_boost(
     chunk_kind: str,
     folder_prefix: str,
     query: str = "",
+    *,
+    is_arch: bool | None = None,
 ) -> float:
     """Post-fusion score multiplier for mermaid catalog diagram recall.
 
@@ -706,7 +751,11 @@ def _catalog_retrieval_boost(
     folder_scoped = bool(
         folder_prefix and "mermaid-catalog" in folder_prefix.replace("\\", "/")
     )
-    vault_wide = (not folder_prefix) and in_catalog and _is_architecture_query(query)
+    vault_wide = (
+        (not folder_prefix)
+        and in_catalog
+        and (_is_architecture_query(query) if is_arch is None else is_arch)
+    )
     if not folder_scoped and not vault_wide:
         return 1.0
 

@@ -4,6 +4,52 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.39.1] — 2026-11-17
+
+Faster search/read/write hot paths and fewer agent tool-call errors.
+
+### Changed
+
+- **Persistent HTTP keep-alive & thread-local `qcache` connections**
+  (`embeddings.py`). Ollama and llama-server embed requests reuse a persistent
+  `httpx.Client` connection pool when `httpx` is installed (falling back to
+  `urllib` otherwise), and `<index>.qcache.db` keeps a thread-local SQLite
+  connection instead of re-opening and running `PRAGMA journal_mode=WAL` + DDL
+  twice per cold query.
+- **Lower per-search & per-call overhead** (`retrieval.py`, `ranking.py`,
+  `link_index.py`, `index_db.py`, `vault_contracts.py`, `tool_metrics.py`).
+  Folder-scoped searches skip the `SELECT COUNT(*) FROM chunks` full scan;
+  `links_ready(db)` is cached on the thread-local reader/writer connection
+  instead of calling `PRAGMA table_info(backlinks)` on every search/graph call;
+  query tokenization, ticket-id matching, phrase-stem lists, and architecture
+  vocabulary checks are hoisted once per search; parsed search and telemetry
+  contracts are cached by `(family, path, mtime_ns, size)`; tool-metrics
+  drains batch per-collection inserts with `executemany`.
+- **Single-pass region hashing on reads & writes** (`ops_guard.py`,
+  `ops_read.py`). `_record_path_touch` and `_attach_mtime_tip` reuse the
+  `frontmatter_hash`, `body_hash`, and `content_hash` already computed for the
+  response instead of re-splitting lines and re-hashing the note.
+- **Bounded `_lint_sweep_cache`** (`ops_vault.py`) caps in-memory cached lint
+  sweeps at 32 LRU entries.
+
+### Fixed
+
+- **Integer-truncated `expected_mtime` false `stale_write`** (`write_guard.py`).
+  When a caller passes a whole-second `expected_mtime` matching the cached
+  `PathTouch` second, `check_write_precondition` now proceeds to verify the
+  blake2b region hashes against disk — unchanged files succeed while real
+  same-second edits still reject with `stale_write`.
+- **Actionable MCP validation hints for observed telemetry misses**
+  (`validation_hints.py`, `patch_ops.py`). Added parameter hints for
+  `search_notes(k= / max_results=)`, `read_note(max_bytes= / max_lines= / offset=)`,
+  `patch_note(operations= / edits= / updates=)`, and `filter_notes(fields_only= / select=)`;
+  added `value_error` and `list_type` rewrites (including `replace_section`
+  `conflicting target and heading` → explains `target` is an alias for
+  `heading` and points to `replace_text` for heading renames).
+- **Watcher contract-dirty event race** (`watch.py`). Guarded the
+  `contracts_dirty` flag with a lock so an FS event on `system/contracts/`
+  arriving mid-cycle is never cleared before being handled.
+
 ## [0.39.0] — 2026-11-14
 
 Optima leaves the engine, tool-use metrics are SQLite, and note writes share

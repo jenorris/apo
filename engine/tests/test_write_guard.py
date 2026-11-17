@@ -206,6 +206,37 @@ class WriteGuardTest(unittest.TestCase):
         self.assertIn("content_hash", out["results"][0])
         self.assertEqual(len(out["results"][0]["content_hash"]), 16)
 
+    def test_integer_truncated_expected_mtime_uses_region_hash(self):
+        base_sec = 1794236165
+        full = self._full()
+        os.utime(full, (base_sec + 0.91, base_sec + 0.91))
+        read = ops.read_note(self.path)
+        self.assertEqual(int(read["mtime"]), base_sec)
+
+        # Unchanged file + integer-truncated expected_mtime should succeed via region hashes.
+        ok = ops.patch_note(
+            self.path,
+            [{"op": "set_field", "field": "status", "value": "waiting"}],
+            expected_mtime=float(base_sec),
+        )
+        self.assertTrue(ok["ok"], ok)
+
+        # Same-second external FM edit must still reject with stale_write!
+        os.utime(full, (base_sec + 0.95, base_sec + 0.95))
+        read2 = ops.read_note(self.path)
+        text = full.read_text(encoding="utf-8")
+        full.write_text(text.replace("status: waiting", "status: external"), encoding="utf-8")
+        os.utime(full, (base_sec + 0.99, base_sec + 0.99))
+
+        bad = ops.patch_note(
+            self.path,
+            [{"op": "set_field", "field": "status", "value": "mine"}],
+            expected_mtime=float(int(read2["mtime"])),
+        )
+        self.assertFalse(bad["ok"], bad)
+        self.assertEqual(bad["error"], "stale_write")
+        self.assertEqual(bad["stale_region"], "frontmatter")
+
 
 if __name__ == "__main__":
     unittest.main()

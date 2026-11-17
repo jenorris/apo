@@ -171,8 +171,13 @@ def policy_from_contract(data: dict[str, Any] | None) -> TelemetryPolicy:
 def policy_for_vault(vault_root: Path | None) -> TelemetryPolicy:
     if vault_root is None:
         return TelemetryPolicy()
-    data = load_telemetry_contract(vault_root)
-    return policy_from_contract(data)
+    path = resolve_telemetry_contract_path(vault_root)
+    if path is None:
+        return TelemetryPolicy()
+    parsed = vc.load_parsed_cached(path, "telemetry", parse_contract)
+    if parsed is None:
+        return TelemetryPolicy()
+    return parsed.normalized
 
 
 def normalize_note_path(raw: str) -> str:

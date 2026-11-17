@@ -107,15 +107,19 @@ def resolve_search_exclude(
     if caller_exclude:
         return list(caller_exclude), None, "caller"
     root = vault_root.resolve()
-    contract_data = load_search_contract(root)
-    parsed = parse_contract(contract_data or {})
-    data = parsed.normalized
+    contract_path = resolve_search_contract_path(root)
+    parsed = (
+        vc.load_parsed_cached(contract_path, "search", parse_contract)
+        if contract_path is not None
+        else None
+    )
+    data = parsed.normalized if parsed is not None else None
     if folder_clean:
         folder_ex = _folder_exclude_globs(data or {}, folder_clean=folder_clean, query=query)
         if folder_ex:
             return folder_ex, folder_ex, "folder_exclude"
         return None, None, "folder"
-    if contract_data is not None:
+    if data is not None:
         vault_defaults = data["default_exclude"]
         if vault_defaults:
             return vault_defaults, vault_defaults, "vault"
@@ -133,8 +137,11 @@ def load_boost_vocab(vault_root: Path, explicit: str | None = None) -> list[str]
     ``boost_vocab`` key — callers must treat that as "no boost", never a
     fallback to some other vault's vocabulary.
     """
-    data = load_search_contract(vault_root, explicit)
-    return parse_contract(data or {}).normalized["boost_vocab"] if data else []
+    contract_path = resolve_search_contract_path(vault_root, explicit)
+    if contract_path is None:
+        return []
+    parsed = vc.load_parsed_cached(contract_path, "search", parse_contract)
+    return parsed.normalized["boost_vocab"] if parsed is not None else []
 
 
 def clear_default_exclude_cache() -> None:

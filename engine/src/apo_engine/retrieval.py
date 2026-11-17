@@ -3,30 +3,18 @@
 from __future__ import annotations
 
 import fnmatch
-import hashlib
-import heapq
 import json
-import logging
-import os
 import re
 import sqlite3
-import struct
-import threading
-import time
 import urllib.error
 import urllib.request
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar, copy_context
-from dataclasses import dataclass, field
 from functools import cmp_to_key
-from itertools import islice
 from operator import itemgetter
-from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 import sqlite_vec
-import yaml
 
 try:
     import numpy as _np
@@ -533,7 +521,7 @@ def search_lex_only(
     fts_ready = db.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
     if not (fts_ready and fts_ready[0] == "1"):
         return []
-    total_chunks = int(db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] or 0)
+    total_chunks = int(db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] or 0) if (exclude and not folder_prefix) else 0
     fetch_n, _ = _hybrid_candidate_pools(
         k,
         exclude=bool(exclude),
@@ -589,7 +577,7 @@ def search_vector_only(
     db = reader_connect()
     folder_prefix = folder.replace("\\", "/").strip("/")
     excl_prefixes, excl_globs = _compile_excludes(exclude)
-    total_chunks = int(db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] or 0)
+    total_chunks = 0 if folder_prefix else int(db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] or 0)
     _, fetch_n = _hybrid_candidate_pools(
         k,
         exclude=bool(exclude),
@@ -743,7 +731,7 @@ def search_expanded(
     folder_prefix = folder.replace("\\", "/").strip("/")
     excl_prefixes, excl_globs = _compile_excludes(exclude)
     db = reader_connect()
-    total_chunks = int(db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] or 0)
+    total_chunks = 0 if folder_prefix else int(db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] or 0)
     pool_n, _ = _hybrid_candidate_pools(
         k,
         exclude=bool(exclude),
@@ -972,7 +960,7 @@ def search(
 
     folder_prefix = folder.replace("\\", "/").strip("/")
     excl_prefixes, excl_globs = _compile_excludes(exclude)
-    total_chunks = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    total_chunks = 0 if folder_prefix else db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     fts_n, vec_n = _hybrid_candidate_pools(
         k,
         exclude=bool(exclude),
@@ -1102,6 +1090,8 @@ def search(
     overflow_texts: list[str] = []
     group_counts: dict[str, int] = {}
     diversity_cap = int(getattr(config, "RESULT_DIVERSITY_CAP", 2))
+    q_features = ranking._compile_query_features(query)
+    root = vaults.notes_root()
     for rid in ids:
         row = by_id.get(rid)
         if row is None:
@@ -1128,10 +1118,10 @@ def search(
             continue
         fused_norm = fused[rid] / top
         catalog_mult = ranking._catalog_retrieval_boost(
-            path, chunk_kind or "section", folder_prefix, query=query
+            path, chunk_kind or "section", folder_prefix, query=query, is_arch=vault_wide_arch
         )
         path_mult, path_detail = ranking._path_retrieval_boost(
-            path, chunk_kind or "section", query, text=text
+            path, chunk_kind or "section", query, text=text, q_features=q_features
         )
         score = fused_norm * catalog_mult * path_mult
         hit_explain: dict[str, Any] = {}
@@ -1163,7 +1153,7 @@ def search(
             heading_level=int(hlevel or 0),
             start_line=int(start_line or 1),
             end_line=int(end_line or 1),
-            source=str(vaults.notes_root() / path),
+            source=str(root / path),
             mtime=float(mtime or 0.0),
             file_bytes=int(file_bytes or 0),
             section_bytes=int(section_bytes or 0),

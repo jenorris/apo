@@ -3,6 +3,7 @@ and its lint sweep cache."""
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import hashlib
 import threading
 import time
@@ -31,9 +32,10 @@ from apo_engine.ops_guard import _enqueue_index
 from apo_engine.ops_read import graph_export
 
 
-_lint_sweep_cache: dict[tuple[str, str, bool], tuple[float, dict[str, Any]]] = {}
+_lint_sweep_cache: OrderedDict[tuple[str, str, bool, str], tuple[float, dict[str, Any]]] = OrderedDict()
 _lint_sweep_cache_lock = threading.Lock()
 _LINT_SWEEP_CACHE_TTL = 120.0
+_LINT_SWEEP_CACHE_MAX = 32
 
 
 def _lint_cache_fingerprint(root: Path) -> str:
@@ -57,6 +59,7 @@ def _vault_lint_merged_payload(
         with _lint_sweep_cache_lock:
             hit = _lint_sweep_cache.get(cache_key)
             if hit is not None and now - hit[0] < _LINT_SWEEP_CACHE_TTL:
+                _lint_sweep_cache.move_to_end(cache_key)
                 return hit[1]
     data = archival_contract.load_archival_contract(root)
     if data is not None:
@@ -106,6 +109,9 @@ def _vault_lint_merged_payload(
     if not fix:
         with _lint_sweep_cache_lock:
             _lint_sweep_cache[cache_key] = (now, payload)
+            _lint_sweep_cache.move_to_end(cache_key)
+            while len(_lint_sweep_cache) > _LINT_SWEEP_CACHE_MAX:
+                _lint_sweep_cache.popitem(last=False)
     return payload
 
 
