@@ -4,6 +4,14 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+### Changed
+
+- **`just setup` installs the `otlp` extra.** A re-sync no longer removes the
+  span exporter from a desk that sets `APO_METRICS_BACKEND=otlp|both`. The
+  exporter stays inert unless that backend is selected. MCP tool spans are
+  under service `apo-engine` with `apo.*` attributes since 0.39.0 (they were
+  `apo-mcp` and unprefixed names under the removed forwarder).
+
 ## [0.39.3] — 2026-11-17
 
 Watcher reliability, truthful tool metrics, and fewer rejected agent calls.

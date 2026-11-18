@@ -26,7 +26,7 @@ default:
 # Sync the authoritative lockfile and link its console scripts onto PATH.
 setup:
     command -v uv >/dev/null 2>&1 || { echo "uv not found on PATH — install it first (e.g. brew install uv)"; exit 1; }
-    cd engine && uv sync --locked --extra mcp --extra dev
+    cd engine && uv sync --locked --extra mcp --extra dev --extra otlp
     mkdir -p "${HOME}/.local/bin"
     for bin in apo apo-engine apo-local apo-mcp; do ln -sfn "{{ justfile_directory() }}/engine/.venv/bin/$bin" "${HOME}/.local/bin/$bin"; done
     @echo "ready — ensure ~/.local/bin is on PATH, then run 'just ollama', 'just index', and 'just mcp'"
