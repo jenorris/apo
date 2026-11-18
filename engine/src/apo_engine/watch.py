@@ -125,6 +125,51 @@ class PathDebouncer:
             return max(0.0, self.delay - (ts - oldest))
 
 
+# Consecutive failed index batches before a path is left to the reconcile walk.
+INDEX_RETRY_LIMIT = 3
+
+
+class IndexRetry:
+    """Put the paths of a failed index batch back in the debouncer.
+
+    ``PathDebouncer.ready`` pops paths, so a batch that fails would otherwise wait
+    for the reconcile walk. A path that fails ``INDEX_RETRY_LIMIT`` times in a row
+    is not requeued again (no hot loop on a permanent failure). Watcher thread only.
+    """
+
+    def __init__(self, debouncer: PathDebouncer, *, label: str = "") -> None:
+        self._debouncer = debouncer
+        self._label = label
+        self._fails: dict[Path, int] = {}
+
+    def failed(self, paths: list[Path]) -> None:
+        retry: list[Path] = []
+        gave_up: list[Path] = []
+        for p in paths:
+            n = self._fails.get(p, 0) + 1
+            self._fails[p] = n
+            if n < INDEX_RETRY_LIMIT:
+                retry.append(p)
+            elif n == INDEX_RETRY_LIMIT:
+                gave_up.append(p)
+        if retry:
+            self._debouncer.touch(retry)
+        if gave_up:
+            logger.warning(
+                "[%s] index failed %d times in a row for %d path(s); "
+                "left to the reconcile walk: %s",
+                self._label,
+                INDEX_RETRY_LIMIT,
+                len(gave_up),
+                ", ".join(str(p) for p in gave_up[:5]),
+            )
+
+    def succeeded(self, paths: list[Path]) -> None:
+        if self._fails:
+            for p in paths:
+                self._fails.pop(p, None)
+
+
 def _note_path(root: Path, raw: str) -> Path | None:
     if not raw:
         return None
@@ -238,8 +283,14 @@ def _format_indexed_summary(
     return ", ".join(parts)
 
 
-def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
-    """Index ready paths in one embed batch. Returns files updated or purged."""
+def _index_paths(
+    paths: set[Path] | list[Path], *, verbose: bool, retry: IndexRetry | None = None
+) -> int:
+    """Index ready paths in one embed batch. Returns files updated or purged.
+
+    ``retry`` requeues the batch when it fails, whether the error is swallowed
+    here or raised to the watch loop.
+    """
     items = list(paths)
     if not items:
         return 0
@@ -247,11 +298,19 @@ def _index_paths(paths: set[Path] | list[Path], *, verbose: bool) -> int:
         n = core.index_files(items, verbose=verbose)
         # index_files counts active updates; also count pure deletes for the log.
         purged = sum(1 for p in items if not Path(p).is_file())
+        if retry is not None:
+            retry.succeeded(items)
         return n if n else purged
     except (OSError, ValueError) as e:
         if verbose:
             logger.warning("skip batch: %s", e)
+        if retry is not None:
+            retry.failed(items)
         return 0
+    except Exception:
+        if retry is not None:
+            retry.failed(items)
+        raise
 
 
 HookFactory = Callable[[Any, bool], Iterable[tuple[str, Callable[..., Any]]]]
@@ -480,6 +539,7 @@ def _watch_one(
         stop = threading.Event()
 
     debouncer = PathDebouncer(debounce_s)
+    index_retry = IndexRetry(debouncer, label=label)
     event_queue: queue.Queue[str] = queue.Queue()
     sync_ctl = git_sync.VaultSyncController(root, verbose=verbose)
     hook_health = watch_health.HookHealthTracker(root)
@@ -640,7 +700,9 @@ def _watch_one(
                     contracts_changed = contracts_dirty
                     contracts_dirty = False
                 if ready:
-                    stats.indexed += _index_paths(ready, verbose=verbose)
+                    stats.indexed += _index_paths(
+                        ready, verbose=verbose, retry=index_retry
+                    )
                     from . import vault_project
 
                     try:

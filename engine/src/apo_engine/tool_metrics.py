@@ -108,6 +108,13 @@ def extract_arg_flags(
         flags["used_alias"] = True
     if name == "write_note" and args.get("body") is not None:
         flags["used_alias"] = True
+    # Aliases the MCP coercion middleware renames (k→limit, operations→ops, …).
+    # The middleware runs inside metrics, so ``args`` here is what the agent sent.
+    from apo_engine.arg_coercion import coerce_arguments
+
+    coerced, aliased = coerce_arguments(name, args)
+    if aliased:
+        flags["used_alias"] = True
     if args.get("folder") or args.get("folders"):
         flags["folder_set"] = True
     if args.get("chunk_hash"):
@@ -116,7 +123,7 @@ def extract_arg_flags(
         flags["fields_set"] = True
     if args.get("expected_mtime") is not None:
         flags["expected_mtime_set"] = True
-    ops = args.get("ops")
+    ops = coerced.get("ops")
     if isinstance(ops, list):
         flags["ops_count"] = len(ops)
     return flags

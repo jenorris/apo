@@ -177,8 +177,9 @@ just watch-install   # or just watch-start after merging a fixed engine
 ```
 
 Normal operation: the watcher calls `writer_reset()` on sqlite errors, exponential backoff on
-lock/busy, `PRAGMA wal_checkpoint(PASSIVE)` after each successful index finalize, and
-`wal_checkpoint(TRUNCATE)` when the `-wal` file exceeds `APO_WAL_LIMIT_BYTES`. MCP readers use
+lock/busy, SQLite's default auto-checkpoint (1000 pages) between commits, and
+`wal_checkpoint(PASSIVE)` then `wal_checkpoint(TRUNCATE)` (at most once a minute per index, 1 s
+lock wait) when the `-wal` file exceeds `APO_WAL_LIMIT_BYTES`. MCP readers use
 `mode=ro` with the short read timeout and return `{ok: false, error: "index_busy"}` instead of
 hanging until Cursor kills stdio.
 

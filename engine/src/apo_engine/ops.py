@@ -112,6 +112,7 @@ from apo_engine.ops_common import (
     _safe_resolve,
     _require_note_path,
     _mtime,
+    _io_error,
     _top_level_dirs,
     _FOLDER_TIP,
     _attach_tip,
@@ -188,6 +189,7 @@ from apo_engine.ops_read import (
     history,
 )
 from apo_engine.ops_mutate import (
+    _write_atomic,
     _assemble_structured_note,
     _write_body_args_provided,
     write_note,

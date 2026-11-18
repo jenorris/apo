@@ -289,6 +289,11 @@ mcp.add_middleware(SessionContextMiddleware())
 mcp.add_middleware(
     ToolMetricsMiddleware(vault_resolver=_metrics_vault_for_args)
 )
+# Between metrics and validation: metrics records the arguments the agent sent
+# (so alias use is counted); validation sees the coerced ones.
+from apo_engine.arg_coercion_middleware import ArgCoercionMiddleware  # noqa: E402
+
+mcp.add_middleware(ArgCoercionMiddleware())
 mcp.add_middleware(AgentValidationMiddleware())
 # Innermost: runs after validation sees the caller's original args; enforces
 # a token client's vault scope (no-op for unscoped callers).

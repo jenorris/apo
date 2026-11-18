@@ -4,6 +4,89 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
 
 ## [Unreleased]
 
+## [0.39.3] — 2026-11-17
+
+Watcher reliability, truthful tool metrics, and fewer rejected agent calls.
+No tool schema changed. Restart the watcher and the MCP server to pick it up.
+
+### Fixed
+
+- **A failed embed no longer removes a note from search** (`indexing.py`).
+  The batch index path keeps the note's previous chunks, vectors and
+  backlinks until a later pass embeds the edited version.
+- **A watch cycle that fails no longer loses its batch** (`watch.py`). The
+  paths go back into the debouncer and retry after the backoff. A path that
+  fails 3 times in a row is left to the reconcile walk, with one warning.
+- **`UNIQUE constraint failed: chunks.id` when two writers index at once**
+  (`index_db.py`). Chunk ids are allocated under the write lock
+  (`BEGIN IMMEDIATE`).
+- **A locked or busy index during a note delete no longer orphans
+  `vec_chunks`/`chunks_fts` rows.** Only a missing table is ignored.
+- **One vault's WAL truncate no longer suppresses the other vaults' for
+  60s.** The interval is tracked per index.
+- **Tool metrics recorded every app-level MCP failure as a success**
+  (`tool_metrics_middleware.py`). `stale_write`, `match_not_found`,
+  `not_found` and the rest were stored `ok=1` with a wrong `resp_bytes`,
+  because the middleware summarized the FastMCP `ToolResult` wrapper. It now
+  unwraps it. Write-flaw metrics, lost the same way, are recorded again.
+- **Tool metrics labelled every `ToolError` as `validation_error`.** One with
+  no validation shape is now `tool_error`. A metrics failure can no longer
+  fail a tool call.
+- **Filesystem errors on the write path reached agents as a raw
+  `[Errno 13] … /abs/path/.name.<hex>.tmp`.** `write_note`, `append_note`,
+  `patch_note`, `patch_table` and place/move return `error: io_error` with
+  the OS reason and the vault-relative path.
+- **`replace_text` with `find=""` inserted text before the frontmatter**;
+  `count=-1` replaced everything and `count=0` returned a misleading
+  `match_not_found`. Empty `find` and `count < 1` are rejected (MCP and
+  non-MCP callers).
+- **`patch_note` rewrote the file and bumped its mtime when nothing
+  changed**, which invalidated other writers' `expected_mtime`. A no-op patch
+  skips the write and returns `noop: true`. `ops=[]` returns `bad_request`.
+- **False `stale_write` when `expected_mtime` was rounded to milliseconds**
+  (`write_guard.py`). The cached-read lookup tolerates 2ms. Region hashes
+  still reject real edits.
+- **Validation hints for a bad key inside `ops[]` pointed at tool-level
+  arguments** (`validation_hints.py`). They now name `ops[N] (<op>)`, list
+  that op's valid keys and suggest the nearest. Unknown `op` values get the
+  same treatment.
+
+### Changed
+
+- **Unambiguous argument near-misses are accepted instead of rejected**
+  (`arg_coercion.py`): `k` / `max_results` / `num_results` → `limit` on
+  `search_notes` and `filter_notes`; `operations` / `edits` / `updates` →
+  `ops` on `patch_note`, with `ops` also accepted as a JSON string or a
+  single object; `where` and `vault(request=)` accepted as JSON strings;
+  `body` / `text` → `content` on `write_note`; `content` / `body` → `text` on
+  `append_note`; `null` for an optional non-nullable parameter is dropped. A
+  call that gives both an alias and the real name still fails validation.
+  Alias use is counted in `used_alias`.
+- **`stale_write` responses carry the current `frontmatter_hash`,
+  `body_hash`, `content_hash`** and a `tip` naming the `expected_mtime` to
+  retry with.
+- **Partial `patch_note` results (`strict=false`) add top-level `warning`,
+  `first_error` and `op_index`.** `ok` is unchanged.
+- **The unknown-argument hint lists the tool's parameter names** instead of
+  pointing at Cursor's `GetMcpTools`.
+- **No `wal_checkpoint(PASSIVE)` after every index commit.** SQLite's
+  auto-checkpoint and the over-limit checkpoint cover it. Saves an fsync pair
+  on every single-file save.
+- **The WAL `TRUNCATE` checkpoint waits at most 1s for its lock**, then
+  restores the writer's busy timeout.
+- **Phrase-stem search hits cap hydrated text at `APO_SEARCH_HYDRATE_CHARS`**,
+  like every other hit.
+- **Frontmatter parses with libyaml's `CSafeLoader` when PyYAML has it**
+  (about 7× faster), with the same invalid-timestamp tolerance.
+
+### Known gaps
+
+- The reconcile-walk index path (`index_vault`) still deletes a note's
+  chunks before embedding, so a failed embed there removes the note from
+  search until the next pass.
+- A note quarantined after repeated embed failures now keeps its previous
+  chunks; `docs/` still describes quarantine as "no vectors".
+
 ## [0.39.2] — 2026-11-17
 
 Search stays responsive when a vault contains a huge JSON export, and the

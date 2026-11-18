@@ -328,8 +328,11 @@ def _delete_path(db: sqlite3.Connection, rel: str) -> None:
         for tbl in ("vec_chunks", "chunks_fts"):
             try:
                 db.execute(f"DELETE FROM {tbl} WHERE rowid IN ({qs})", ids)
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as e:
+                # Only a missing table is fine. A locked/busy error must not fall
+                # through to the chunks delete and orphan the vec/fts rows.
+                if "no such table" not in str(e).lower():
+                    raise
         db.execute(f"DELETE FROM chunks WHERE id IN ({qs})", ids)
     db.execute("DELETE FROM backlinks WHERE source=?", (rel,))
 @dataclass
@@ -543,9 +546,19 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
     elif verbose and active:
         print(f"  reused all chunks for {len(active)} file(s) (no embed)", flush=True)
 
+    # Before the delete loop: a file whose embed failed keeps its previous chunks and
+    # backlinks (stale but searchable) until a later pass embeds it. Only its files
+    # row changes (_record_embed_drops), which is what makes the next pass retry.
+    dropped = {
+        pending_owner[i]
+        for i, vec in enumerate(all_vectors)
+        if vec is None and i < len(pending_owner)
+    }
     for rel in purge_rels:
         _delete_path_by_rel(db, rel)
     for plan in active:
+        if plan.rel in dropped:
+            continue
         prev = known.get(plan.rel)
         _delete_path(db, plan.rel)
         if not (prev is not None and prev[1] == ""):
@@ -554,11 +567,6 @@ def _index_files_impl(paths: list[Path] | set[Path], *, verbose: bool = False) -
     for st_mtime, rel in mtime_updates:
         db.execute("UPDATE files SET mtime=? WHERE path=?", (st_mtime, rel))
 
-    dropped = {
-        pending_owner[i]
-        for i, vec in enumerate(all_vectors)
-        if vec is None and i < len(pending_owner)
-    }
     # Notes with no chunks never appear in all_vectors — they are not dropped.
     if all_pending:
         for i in range(0, len(all_pending), _embed_commit_batch()):

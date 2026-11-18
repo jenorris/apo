@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -49,6 +50,37 @@ def _tool_arguments(context: MiddlewareContext[Any]) -> dict[str, Any]:
         if isinstance(nested, dict):
             return nested
     return {}
+
+
+def _result_payload(result: Any) -> Any:
+    """Unwrap a FastMCP ``ToolResult`` to the tool's own return value.
+
+    ``call_next`` returns a ``ToolResult``, not the tool's dict: prefer
+    ``structured_content``, else the first text block parsed as JSON. Anything
+    else (plain dicts in unit tests, unparseable text) is returned unchanged.
+    """
+    if isinstance(result, dict):
+        return result
+    structured = getattr(result, "structured_content", None)
+    if isinstance(structured, dict):
+        return structured
+    content = getattr(result, "content", None)
+    if isinstance(content, (list, tuple)) and content:
+        text = getattr(content[0], "text", None)
+        if isinstance(text, str):
+            try:
+                return json.loads(text)
+            except ValueError:
+                return result
+    return result
+
+
+def _record_call(**kwargs: Any) -> None:
+    """``tool_metrics.record_call`` that can never fail the tool call itself."""
+    try:
+        tool_metrics.record_call(**kwargs)
+    except Exception:
+        pass
 
 
 _SKIP_METRICS_TOOLS = frozenset({"telemetry", "apo_admin"})
@@ -119,14 +151,18 @@ class ToolMetricsMiddleware(Middleware):
         except ToolError as e:
             duration_ms = (time.perf_counter() - t0) * 1000.0
             err_flags = dict(flags)
-            shape = _validation_error_shape(e)
+            try:
+                shape = _validation_error_shape(e)
+            except Exception:
+                shape = []
             if shape:
                 err_flags["error_shape"] = shape
-            tool_metrics.record_call(
+            _record_call(
                 collection=collection,
                 tool=tool,
                 ok=False,
-                error="validation_error",
+                # A ToolError with no pydantic shape wraps a tool-body failure.
+                error="validation_error" if shape else "tool_error",
                 duration_ms=duration_ms,
                 req_bytes=req_bytes,
                 resp_bytes=tool_metrics.estimate_bytes(str(e)),
@@ -139,7 +175,7 @@ class ToolMetricsMiddleware(Middleware):
             raise
         except Exception as e:
             duration_ms = (time.perf_counter() - t0) * 1000.0
-            tool_metrics.record_call(
+            _record_call(
                 collection=collection,
                 tool=tool,
                 ok=False,
@@ -156,15 +192,16 @@ class ToolMetricsMiddleware(Middleware):
             raise
 
         duration_ms = (time.perf_counter() - t0) * 1000.0
-        ok, error, resp_bytes = tool_metrics.summarize_result(result)
         result_flags = dict(flags)
         try:
+            payload = _result_payload(result)
+            ok, error, resp_bytes = tool_metrics.summarize_result(payload)
             from apo_engine import note_lint as _note_lint
 
-            result_flags.update(_note_lint.extract_flaws_metrics(result))
+            result_flags.update(_note_lint.extract_flaws_metrics(payload))
         except Exception:
-            pass
-        tool_metrics.record_call(
+            ok, error, resp_bytes = True, None, 0
+        _record_call(
             collection=collection,
             tool=tool,
             ok=ok,

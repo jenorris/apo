@@ -525,7 +525,7 @@ def _inject_phrase_stem_hits(
         if path in existing:
             continue
         row = db.execute(
-            """SELECT c.path, c.heading, c.text, c.chunk_hash, c.heading_level,
+            f"""SELECT c.path, c.heading, substr(c.text, 1, {int(config.SEARCH_HYDRATE_CHARS)}), c.chunk_hash, c.heading_level,
                       c.start_line, c.end_line, f.mtime, COALESCE(f.bytes, 0),
                       COALESCE(c.section_bytes, LENGTH(c.text)),
                       COALESCE(c.content_hash, ''),

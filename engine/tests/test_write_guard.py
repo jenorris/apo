@@ -206,6 +206,69 @@ class WriteGuardTest(unittest.TestCase):
         self.assertIn("content_hash", out["results"][0])
         self.assertEqual(len(out["results"][0]["content_hash"]), 16)
 
+    def test_ms_rounded_expected_mtime_uses_region_hash(self):
+        full = self._full()
+        # Sub-millisecond digits so rounding to ms really moves the value.
+        os.utime(full, ns=(1794236165_123_456_789, 1794236165_123_456_789))
+        read = ops.read_note(self.path)
+        rounded = round(read["mtime"], 3)
+        self.assertGreater(abs(rounded - read["mtime"]), 1e-6)
+
+        # Unchanged file: the rounded value misses the exact fast path but
+        # matches the cached touch, and the region hashes agree.
+        ok = ops.patch_note(
+            self.path,
+            [{"op": "set_field", "field": "status", "value": "waiting"}],
+            expected_mtime=rounded,
+        )
+        self.assertTrue(ok["ok"], ok)
+
+        # Edited in between (same millisecond): hashes still reject it.
+        read2 = ops.read_note(self.path)
+        ns = full.stat().st_mtime_ns
+        text = full.read_text(encoding="utf-8")
+        full.write_text(text.replace("status: waiting", "status: external"), encoding="utf-8")
+        os.utime(full, ns=(ns + 400_000, ns + 400_000))
+
+        bad = ops.patch_note(
+            self.path,
+            [{"op": "set_field", "field": "status", "value": "mine"}],
+            expected_mtime=round(read2["mtime"], 3),
+        )
+        self.assertFalse(bad["ok"], bad)
+        self.assertEqual(bad["error"], "stale_write")
+        self.assertEqual(bad["stale_region"], "frontmatter")
+        self.assertIn("status: external", full.read_text(encoding="utf-8"))
+
+    def test_stale_write_payload_carries_current_hashes_and_retry_tip(self):
+        read = ops.read_note(self.path)
+        full = self._full()
+        text = full.read_text(encoding="utf-8")
+        full.write_text(text.replace("status: active", "status: external"), encoding="utf-8")
+        self._bump_mtime_only()
+
+        bad = ops.patch_note(
+            self.path,
+            [{"op": "set_field", "field": "status", "value": "mine"}],
+            expected_mtime=read["mtime"],
+        )
+        self.assertEqual(bad["error"], "stale_write", bad)
+        regions = file_region_hashes(full.read_text(encoding="utf-8"))
+        self.assertEqual(bad["frontmatter_hash"], regions.frontmatter_hash)
+        self.assertEqual(bad["body_hash"], regions.body_hash)
+        self.assertEqual(bad["content_hash"], regions.body_hash)
+        self.assertEqual(bad["actual_mtime"], full.stat().st_mtime)
+        self.assertIn(f"expected_mtime={bad['actual_mtime']!r}", bad["tip"])
+        self.assertIn("re-read", bad["tip"])
+
+        # The tip is sufficient: retrying with actual_mtime goes through.
+        retry = ops.patch_note(
+            self.path,
+            [{"op": "set_field", "field": "status", "value": "mine"}],
+            expected_mtime=bad["actual_mtime"],
+        )
+        self.assertTrue(retry["ok"], retry)
+
     def test_integer_truncated_expected_mtime_uses_region_hash(self):
         base_sec = 1794236165
         full = self._full()

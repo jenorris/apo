@@ -198,8 +198,55 @@ def _input_keys(err: dict[str, Any]) -> list[str]:
     return []
 
 
-def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
-    """Turn a FastMCP/Pydantic ValidationError into a one-shot agent hint."""
+def _op_models() -> dict[str, Any]:
+    """op name → pydantic model, for every patch_note / patch_table op."""
+    from typing import get_args
+
+    from apo_engine.patch_ops import PatchOp
+
+    out: dict[str, Any] = {}
+    for model in get_args(get_args(PatchOp)[0]):
+        for tag in get_args(model.model_fields["op"].annotation):
+            out[str(tag)] = model
+    return out
+
+
+def _ops_loc(err: dict[str, Any]) -> tuple[int, str | None] | None:
+    """``(index, op name)`` when the error ``loc`` is inside ``ops[N]``, else None.
+
+    Pydantic locs look like ``('ops', 0, 'set_field', 'text')``; the op name is
+    absent when the discriminator itself is bad.
+    """
+    loc = tuple(err.get("loc") or ())
+    for i, part in enumerate(loc[:-1]):
+        if part == "ops" and isinstance(loc[i + 1], int):
+            nxt = loc[i + 2] if len(loc) > i + 2 else None
+            op = nxt if isinstance(nxt, str) and nxt in _op_models() else None
+            return loc[i + 1], op
+    return None
+
+
+def _nearest(word: str, options: list[str]) -> str:
+    """`` Did you mean 'x'?`` suffix for the closest option, or empty."""
+    import difflib
+
+    # A shared prefix beats edit distance: "replace" means replace_text, not place.
+    match = [o for o in options if word and o.startswith(str(word))][:1]
+    match = match or difflib.get_close_matches(str(word), options, n=1, cutoff=0.5)
+    return f" Did you mean {match[0]!r}?" if match else ""
+
+
+def format_tool_validation_error(
+    tool_name: str,
+    exc: BaseException,
+    *,
+    valid_params: list[str] | None = None,
+) -> str:
+    """Turn a FastMCP/Pydantic ValidationError into a one-shot agent hint.
+
+    ``valid_params`` (the tool's parameter names, when the caller knows them)
+    feeds the unknown-argument fallback.
+    """
     name = canonical_tool((tool_name or "").strip()) or "tool"
     errors = _pydantic_errors(exc)
     hints: list[str] = []
@@ -210,6 +257,23 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
         msg = str(err.get("msg") or "")
 
         loc_str = str(err.get("loc") or ())
+        ops_loc = _ops_loc(err)
+        if etype == "union_tag_invalid" and "ops" in loc_str:
+            ctx = err.get("ctx") or {}
+            tag = str(ctx.get("tag") or "")
+            valid = [
+                t.strip().strip("'\"")
+                for t in str(ctx.get("expected_tags") or "").split(",")
+                if t.strip()
+            ]
+            # loc ends at the op itself here: ('ops', N).
+            where = f"ops[{loc_tail}]" if str(loc_tail).isdigit() else "ops[]"
+            hints.append(
+                f"{name} {where}: unknown op {tag!r}; valid ops: {', '.join(valid)}."
+                f"{_nearest(tag, valid)}"
+            )
+            continue
+
         is_ops_tag = etype == "union_tag_not_found" or (
             "discriminator" in msg.lower() and "ops" in loc_str
         )
@@ -220,8 +284,18 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
             continue
 
         if etype in ("unexpected_keyword_argument", "extra_forbidden") and loc_tail:
+            if ops_loc is not None and ops_loc[1]:
+                # Key on an op, not a tool argument: answer from the op model,
+                # never from the tool-level hint table.
+                idx, op_name = ops_loc
+                valid = [k for k in _op_models()[op_name].model_fields if k != "op"]
+                hints.append(
+                    f"{name} ops[{idx}] ({op_name}): unknown key {loc_tail!r}; "
+                    f"valid keys: {', '.join(valid)}.{_nearest(loc_tail, valid)}"
+                )
+                continue
             tool_map = _TOOL_PARAM_HINTS.get(name, {})
-            if loc_tail in tool_map:
+            if loc_tail in tool_map and ops_loc is None:
                 hints.append(tool_map[loc_tail])
                 continue
             if name == "patch_note" and loc_tail in ("old", "new", "key", "value") and "ops" in str(
@@ -229,10 +303,17 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
             ):
                 hints.append(_OPS_HINT)
                 continue
-            hints.append(
-                f"{name} does not accept argument {loc_tail!r}. "
-                f"Call GetMcpTools for {name}'s schema, or drop the unknown kw."
-            )
+            if valid_params:
+                hints.append(
+                    f"{name} does not accept argument {loc_tail!r}. "
+                    f"Valid arguments: {', '.join(valid_params)}."
+                    f"{_nearest(loc_tail, list(valid_params))}"
+                )
+            else:
+                hints.append(
+                    f"{name} does not accept argument {loc_tail!r}; drop it or "
+                    f"check {name}'s parameter names."
+                )
             continue
 
         if etype == "missing_argument" and loc_tail:
@@ -326,14 +407,19 @@ def format_tool_validation_error(tool_name: str, exc: BaseException) -> str:
 
         if etype == "value_error":
             clean_msg = msg.removeprefix("Value error, ").strip()
+            # Name the failing op when the loc carries it: "ops[N] (<op>)".
+            where = ""
+            if ops_loc is not None:
+                where = f"ops[{ops_loc[0]}]" + (f" ({ops_loc[1]})" if ops_loc[1] else "")
             if "conflicting target and heading" in clean_msg:
                 hints.append(
-                    "target= is an alias for heading= (pass only one). "
+                    (f"{where}: " if where else "")
+                    + "target= is an alias for heading= (pass only one). "
                     "replace_section keeps the existing heading; to rename a heading use replace_text."
                 )
                 continue
             if clean_msg:
-                hints.append(f"{name}: {clean_msg}.")
+                hints.append(f"{name} {where}: {clean_msg}." if where else f"{name}: {clean_msg}.")
                 continue
 
         if etype == "list_type" and loc_tail:

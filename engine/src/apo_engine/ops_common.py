@@ -155,6 +155,19 @@ def _mtime(full: Path) -> float:
     return full.stat().st_mtime
 
 
+def _io_error(exc: OSError, full: Path, path: str, **kw: Any) -> dict[str, Any]:
+    """Map a write-path ``OSError`` to an ``io_error`` payload.
+
+    Carries the OS reason and the vault-relative ``path`` only: the absolute
+    target (and its sibling temp file) never reaches the caller.
+    """
+    reason = str(exc.strerror or type(exc).__name__)
+    for absolute in (str(full), str(full.parent)):
+        reason = reason.replace(absolute, path)
+    fields = kw or {"path": path}
+    return _err(**fields, error="io_error", message=f"cannot write {path}: {reason}")
+
+
 def _top_level_dirs(root: Path) -> list[str]:
     if not root.exists():
         return []

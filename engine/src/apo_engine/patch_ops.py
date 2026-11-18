@@ -124,6 +124,18 @@ class ReplaceTextOp(_OpBase):
             scope["chunk_hash"] = top_ch
         return {**data, "scope": scope}
 
+    @model_validator(mode="after")
+    def _require_find_and_count(self) -> ReplaceTextOp:
+        # Validator (not Field constraints) so the published tool schema is unchanged.
+        if self.find == "":
+            raise ValueError("replace_text requires a non-empty find")
+        if self.count < 1:
+            raise ValueError(
+                f"replace_text count must be >= 1 (got {self.count}); "
+                "count is the exact number of replacements, there is no replace-all value"
+            )
+        return self
+
 
 class ReplaceSectionOp(_OpBase):
     op: Literal["replace_section"]

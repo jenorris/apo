@@ -42,6 +42,7 @@ from apo_engine.ops_common import (
     _attach_tip,
     _binding,
     _err,
+    _io_error,
     _mtime,
     _require_note_path,
     _resolve_binding_and_rel,
@@ -63,6 +64,15 @@ from apo_engine.ops_place import place_note
 ###############################################################################
 # Writes — enqueue index; watcher is sole index.db writer
 ###############################################################################
+
+def _write_atomic(full: Path, text: str, path: str) -> dict[str, Any] | None:
+    """Atomic write (creates parent dirs). Returns an ``io_error`` dict on OSError."""
+    try:
+        atomic_write_text(full, text)
+    except OSError as e:
+        return _io_error(e, full, path)
+    return None
+
 
 def _assemble_structured_note(
     frontmatter: dict[str, Any] | None,
@@ -231,8 +241,8 @@ def write_note(
             ):
                 return guard
             existed = full.exists()
-            full.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(full, content)
+            if io_err := _write_atomic(full, content, path):
+                return io_err
             # Enqueue every valid JSON change. The indexer catalogs objects and
             # purges a formerly indexed object when it becomes an array or scalar.
             _enqueue_index(b, full)
@@ -294,8 +304,8 @@ def write_note(
             okf.content, path=path, vault=b.name, okf_result=okf
         )
 
-        full.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(full, to_write)
+        if io_err := _write_atomic(full, to_write, path):
+            return io_err
         _enqueue_index(b, full)
 
         out: dict[str, Any] = {
@@ -470,8 +480,8 @@ def append_note(
                     error="not_found",
                     message="note not found (pass create=true to create)",
                 )
-            full.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(full, minimal_note_stub(path))
+            if io_err := _write_atomic(full, minimal_note_stub(path), path):
+                return io_err
             prior_text = full.read_text(encoding="utf-8")
 
         content = prior_text if prior_text is not None else full.read_text(encoding="utf-8")
@@ -501,7 +511,8 @@ def append_note(
         new_content, write_flaws = _prepare_write_content(
             new_content, path=path, vault=b.name, format_only=True
         )
-        atomic_write_text(full, new_content)
+        if io_err := _write_atomic(full, new_content, path):
+            return io_err
         _enqueue_index(b, full)
 
         out: dict[str, Any] = {
@@ -922,7 +933,8 @@ def _apply_table_ops(
     if dry_run:
         return {"ok": True, "path": rel, "dry_run": True, "applied": applied, "results": results, "vault": b.name}
 
-    atomic_write_text(full, new_content)
+    if io_err := _write_atomic(full, new_content, rel):
+        return io_err
     _enqueue_index(b, full)
 
     # New content_hash per touched row — keyed by (table_id, row_key) so multi-table
@@ -986,6 +998,13 @@ def patch_note(
         _require_note_path(path, root=root, full=full)
     except OpsError as e:
         return _err(path=path, error=e.code, message=e.message)
+
+    if not ops:
+        return _err(
+            path=path,
+            error="bad_request",
+            message="ops is empty; pass at least one op (nothing was written)",
+        )
 
     with note_write_lock(full):
         if not full.exists():
@@ -1098,10 +1117,16 @@ def patch_note(
         to_write = result.content
         okf_meta: dict[str, Any] = {}
         write_flaws: list[dict[str, Any]] = []
-        if is_json_catalog(path):
+        # Nothing changed: leave the file (and its mtime / updated stamp) alone so
+        # other writers' expected_mtime stays valid.
+        noop = result.content == content
+        if noop:
+            pass
+        elif is_json_catalog(path):
             # Raw catalog: no OKF stamp or lint auto-fix. JSON patching only accepts
             # objects, so every successful mutation remains an indexable record.
-            atomic_write_text(full, to_write)
+            if io_err := _write_atomic(full, to_write, path):
+                return io_err
             _enqueue_index(b, full)
         else:
             okf = apo_okf.process_concept(
@@ -1126,7 +1151,8 @@ def patch_note(
                 to_write, path=path, vault=b.name, okf_result=okf
             )
 
-            atomic_write_text(full, to_write)
+            if io_err := _write_atomic(full, to_write, path):
+                return io_err
             _enqueue_index(b, full)
 
         failed = sum(1 for r in result.results if r.get("status") == "error")
@@ -1141,6 +1167,21 @@ def patch_note(
             "results": result.results,
             "vault": b.name,
         }
+        if noop:
+            out["noop"] = True
+        if failed and isinstance(result.error, dict):
+            # Partial apply keeps ok=true; surface the first failure at top level
+            # so it is not only visible inside results[].
+            out["warning"] = (
+                f"partial patch: {failed} of {len(result.results)} op(s) failed "
+                "and were not applied; see first_error / results[]"
+            )
+            out["first_error"] = {
+                "code": str(result.error.get("code") or "patch_failed"),
+                "message": str(result.error.get("message") or "patch failed"),
+            }
+            if result.error.get("op_index") is not None:
+                out["op_index"] = result.error["op_index"]
         out.update(okf_meta)
         out = _attach_flaws(out, write_flaws)
         attach_region_hashes(out, to_write)

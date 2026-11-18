@@ -487,6 +487,10 @@ def _insert_pending_chunks(
     # limitation) — an aborted batch can leave orphaned rows in vec_chunks/chunks_fts
     # that outlive the rolled-back chunks insert. Recomputing from chunks.id alone
     # would then re-collide with that debris on every retry, forever. Skip past it.
+    # Take the write lock before reading MAX, or a second writer (another watcher,
+    # CLI index) can read the same MAX and allocate the same ids.
+    if not db.in_transaction:
+        db.execute("BEGIN IMMEDIATE")
     start_id = max(
         int(db.execute("SELECT COALESCE(MAX(id), 0) FROM chunks").fetchone()[0]),
         int(db.execute("SELECT COALESCE(MAX(rowid), 0) FROM vec_chunks").fetchone()[0]),
@@ -556,15 +560,16 @@ def _finalize_index_writes(db: sqlite3.Connection, *, optimize: bool = False) ->
         db.execute("ANALYZE")
         db.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')")
         db.commit()
-    try:
-        db.execute("PRAGMA wal_checkpoint(PASSIVE)")
-    except sqlite3.Error:
-        pass
 
 
-# Process-local. PASSIVE does not shrink the -wal file, so a size check alone
-# would TRUNCATE on every watcher tick once the file crossed the cap.
-_last_wal_truncate = 0.0
+# Process-local, keyed by index path (one watcher thread per vault). PASSIVE does
+# not shrink the -wal file, so a size check alone would TRUNCATE on every watcher
+# tick once the file crossed the cap.
+_last_wal_truncate: dict[str, float] = {}
+_last_wal_truncate_lock = threading.Lock()
+# Bound the wait for the exclusive lock TRUNCATE needs; the writer's normal
+# busy_timeout (DB_TIMEOUT) would stall the watch loop behind a long reader.
+_WAL_TRUNCATE_BUSY_MS = 1000
 
 
 def checkpoint_wal_if_over_limit(*, verbose: bool = False) -> bool:
@@ -574,7 +579,6 @@ def checkpoint_wal_if_over_limit(*, verbose: bool = False) -> bool:
     is holding frames and at most once per ``WAL_TRUNCATE_INTERVAL``. A truncate
     on every watch loop takes an exclusive lock and stalls searches.
     """
-    global _last_wal_truncate
     if not is_wal_over_limit():
         return False
     try:
@@ -588,11 +592,20 @@ def checkpoint_wal_if_over_limit(*, verbose: bool = False) -> bool:
     if int(busy) or pending > 0:
         return False
     now = time.monotonic()
-    if now - _last_wal_truncate < config.WAL_TRUNCATE_INTERVAL:
+    key = _index_key()
+    with _last_wal_truncate_lock:
+        last = _last_wal_truncate.get(key)
+    if last is not None and now - last < config.WAL_TRUNCATE_INTERVAL:
         return False
     try:
-        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        _last_wal_truncate = now
+        prev_busy = db.execute("PRAGMA busy_timeout").fetchone()
+        db.execute(f"PRAGMA busy_timeout={_WAL_TRUNCATE_BUSY_MS}")
+        try:
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            db.execute(f"PRAGMA busy_timeout={int(prev_busy[0])}")
+        with _last_wal_truncate_lock:
+            _last_wal_truncate[key] = now
         if verbose:
             print(
                 f"  wal checkpoint truncate (wal now {wal_bytes()} bytes)",

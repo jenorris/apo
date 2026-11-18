@@ -381,6 +381,14 @@ def apply_replace_text(
     count: int = 1,
     scope_heading: str | None = None,
 ) -> tuple[list[str], str]:
+    if find == "":
+        raise PatchError("invalid_op", "replace_text requires a non-empty find")
+    if count < 1:
+        raise PatchError(
+            "invalid_op",
+            f"replace_text count must be >= 1 (got {count}); "
+            "count is the exact number of replacements, there is no replace-all value",
+        )
     if scope_heading:
         section = find_section(lines, scope_heading)
         segment = "\n".join(lines[section.body_start : section.body_end])

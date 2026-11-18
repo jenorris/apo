@@ -30,4 +30,18 @@ class AgentValidationMiddleware(Middleware):
                 if not tool_name:
                     params = getattr(msg, "params", None)
                     tool_name = str(getattr(params, "name", "") or "")
-            raise ToolError(format_tool_validation_error(tool_name, e)) from e
+            raise ToolError(
+                format_tool_validation_error(
+                    tool_name, e, valid_params=await _valid_params(context, tool_name)
+                )
+            ) from e
+
+
+async def _valid_params(context: MiddlewareContext[Any], tool_name: str) -> list[str] | None:
+    """The tool's parameter names for the unknown-argument hint (best-effort)."""
+    try:
+        server = context.fastmcp_context.fastmcp  # type: ignore[union-attr]
+        tool = await server.get_tool(tool_name)
+        return list((tool.parameters or {}).get("properties") or {}) or None
+    except Exception:
+        return None

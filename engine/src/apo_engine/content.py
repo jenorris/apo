@@ -90,8 +90,12 @@ def _construct_yaml_timestamp(loader: yaml.SafeLoader, node: yaml.Node):
         return loader.construct_scalar(node)
 
 
-class _FrontmatterLoader(yaml.SafeLoader):
-    """SafeLoader that tolerates invalid YAML 1.1 timestamp scalars."""
+class _FrontmatterLoader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
+    """SafeLoader that tolerates invalid YAML 1.1 timestamp scalars.
+
+    Based on libyaml's ``CSafeLoader`` when PyYAML was built with it (several times
+    faster on frontmatter); the pure-Python ``SafeLoader`` otherwise.
+    """
 
 
 _FrontmatterLoader.add_constructor(

@@ -165,6 +165,10 @@ def _touch_section_hash(touch: PathTouch | None, heading: str) -> str | None:
     return touch.sections.get(_normalize_heading(heading))
 
 
+# Cached-touch lookup only: accepts an expected_mtime rounded to milliseconds.
+_TOUCH_MTIME_TOLERANCE = 2e-3
+
+
 def _resolve_expected(
     *,
     explicit: str | None,
@@ -211,12 +215,14 @@ def check_write_precondition(
     # mtime missing/mismatch — try region hashes (explicit or same-mtime cache).
     # If a caller truncated mtime to integer seconds (e.g. from shell stat/ISO),
     # allow matching the cached touch from that same second — region blake2b hashes
-    # below still reject any actual edit in the touched bytes.
+    # below still reject any actual edit in the touched bytes. The same holds for
+    # a float rounded to milliseconds, hence the wider tolerance on this lookup
+    # only (the exact fast path above stays at 1e-6).
     cached: PathTouch | None = None
     if touch is not None and has_mtime and touch.mtime is not None:
         exp_f = float(expected_mtime)
         touch_f = float(touch.mtime)
-        if abs(touch_f - exp_f) <= 1e-6 or (
+        if abs(touch_f - exp_f) <= _TOUCH_MTIME_TOLERANCE or (
             exp_f.is_integer() and int(touch_f) == int(exp_f)
         ):
             cached = touch
@@ -243,18 +249,20 @@ def check_write_precondition(
                     path,
                     expected_mtime,
                     actual_mtime,
+                    current=current,
                     reason="body",
                     expected_hash=want_body,
                     actual_hash=current.body_hash,
                 )
             return None
         if want_fm is None or want_body is None:
-            return _stale(path, expected_mtime, actual_mtime, reason="whole_file")
+            return _stale(path, expected_mtime, actual_mtime, current=current, reason="whole_file")
         if want_fm != current.frontmatter_hash:
             return _stale(
                 path,
                 expected_mtime,
                 actual_mtime,
+                current=current,
                 reason="frontmatter",
                 expected_hash=want_fm,
                 actual_hash=current.frontmatter_hash,
@@ -264,6 +272,7 @@ def check_write_precondition(
                 path,
                 expected_mtime,
                 actual_mtime,
+                current=current,
                 reason="body",
                 expected_hash=want_body,
                 actual_hash=current.body_hash,
@@ -276,12 +285,13 @@ def check_write_precondition(
             from_touch=cached.frontmatter_hash if cached else None,
         )
         if want is None:
-            return _stale(path, expected_mtime, actual_mtime, reason="frontmatter")
+            return _stale(path, expected_mtime, actual_mtime, current=current, reason="frontmatter")
         if want != current.frontmatter_hash:
             return _stale(
                 path,
                 expected_mtime,
                 actual_mtime,
+                current=current,
                 reason="frontmatter",
                 expected_hash=want,
                 actual_hash=current.frontmatter_hash,
@@ -293,12 +303,13 @@ def check_write_precondition(
             from_touch=cached.body_hash if cached else None,
         )
         if want is None:
-            return _stale(path, expected_mtime, actual_mtime, reason="body")
+            return _stale(path, expected_mtime, actual_mtime, current=current, reason="body")
         if want != current.body_hash:
             return _stale(
                 path,
                 expected_mtime,
                 actual_mtime,
+                current=current,
                 reason="body",
                 expected_hash=want,
                 actual_hash=current.body_hash,
@@ -320,12 +331,13 @@ def check_write_precondition(
             ):
                 continue
             if want is None:
-                return _stale(path, expected_mtime, actual_mtime, reason="section")
+                return _stale(path, expected_mtime, actual_mtime, current=current, reason="section")
             if want != actual_sec:
                 return _stale(
                     path,
                     expected_mtime,
                     actual_mtime,
+                    current=current,
                     reason="section",
                     expected_hash=want,
                     actual_hash=actual_sec,
@@ -335,7 +347,7 @@ def check_write_precondition(
         try:
             section = find_section(lines, heading)
         except Exception:
-            return _stale(path, expected_mtime, actual_mtime, reason="section")
+            return _stale(path, expected_mtime, actual_mtime, current=current, reason="section")
         actual_sec = section_content_hash(lines, section)
         want = None
         if len(regions.sections) == 1:
@@ -350,12 +362,13 @@ def check_write_precondition(
         ):
             continue
         if want is None:
-            return _stale(path, expected_mtime, actual_mtime, reason="section")
+            return _stale(path, expected_mtime, actual_mtime, current=current, reason="section")
         if want != actual_sec:
             return _stale(
                 path,
                 expected_mtime,
                 actual_mtime,
+                current=current,
                 reason="section",
                 expected_hash=want,
                 actual_hash=actual_sec,
@@ -389,6 +402,7 @@ def _stale(
     reason: str,
     expected_hash: str | None = None,
     actual_hash: str | None = None,
+    current: RegionHashes | None = None,
 ) -> dict[str, Any]:
     msg = {
         "frontmatter": (
@@ -413,6 +427,19 @@ def _stale(
         out["expected_hash"] = expected_hash
     if actual_hash is not None:
         out["actual_hash"] = actual_hash
+    if current is not None:
+        # Current on-disk hashes (already computed by the caller) so a retry can
+        # pass them without guessing. content_hash is the stale section's hash
+        # when known, else the body hash (same as an unscoped read_note).
+        out.update(current.as_dict())
+        sec_hash = actual_hash if reason == "section" else None
+        if sec_hash or current.body_hash is not None:
+            out["content_hash"] = sec_hash or current.body_hash
+    if actual_mtime is not None:
+        out["tip"] = (
+            f"re-read the changed region ({reason}), then retry with "
+            f"expected_mtime={float(actual_mtime)!r}"
+        )
     return out
 
 

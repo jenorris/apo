@@ -14,6 +14,7 @@ from apo_engine.validation_hints import flatten_patch_failure_error
 from apo_engine.ops_common import (
     _attach_flaws,
     _err,
+    _io_error,
     _mtime,
     _require_note_path,
     _resolve_binding_and_rel,
@@ -298,9 +299,12 @@ def move_note(
                 message="pass overwrite=true to replace",
             )
 
-        dst_full.parent.mkdir(parents=True, exist_ok=True)
         src_abs = str(src_full.resolve())
-        os.replace(src_full, dst_full)
+        try:
+            dst_full.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(src_full, dst_full)
+        except OSError as e:
+            return _io_error(e, dst_full, dst, src=src, dst=dst)
 
         purged = _enqueue_purge(b, Path(src_abs))
         index_deferred.requeue_move(b.collection, src_abs, str(dst_full.resolve()))
@@ -408,8 +412,10 @@ def _copy_into_vault(
             to_write, path=dst, vault=b.name, okf_result=okf
         )
 
-        dst_full.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(dst_full, to_write)
+        try:
+            atomic_write_text(dst_full, to_write)
+        except OSError as e:
+            return _io_error(e, dst_full, dst, src=src_display, dst=dst)
         _enqueue_index(b, dst_full)
 
         out: dict[str, Any] = {
