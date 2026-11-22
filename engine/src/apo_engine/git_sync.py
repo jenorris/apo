@@ -66,6 +66,8 @@ _TRANSIENT_NETWORK_MARKERS = (
     "couldn't connect to server",
     "connection timed out",
     "operation timed out",
+    # curl error 28 from our own http.lowSpeedLimit/lowSpeedTime (_NETWORK_GIT_CONFIG)
+    "operation too slow",
     "connection refused",
     "network is unreachable",
     "the remote end hung up unexpectedly",

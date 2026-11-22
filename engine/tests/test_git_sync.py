@@ -507,6 +507,8 @@ class GitSyncOfflineTest(_VaultRepoCase):
             "ssh: connect to host github.com port 22: Network is unreachable",
             "fatal: the remote end hung up unexpectedly",
             "git push: Operation timed out after 30s",
+            # Raised by our own http.lowSpeedLimit=1000 / lowSpeedTime=20 abort.
+            "fatal: unable to access 'https://github.com/x/y.git/': Operation too slow. Less than 1000 bytes/sec transferred the last 20 seconds",
         ]
         for err in transient:
             self.assertTrue(git_sync._is_transient_network_error(err), err)
