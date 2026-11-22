@@ -708,6 +708,13 @@ def commit_and_push(
         write_status(vault_root, st)
         return {"ok": True, "committed": False, "pushed": False, "paths": [], "status": read_status(vault_root)}
 
+    # A deletion already staged (e.g. `git rm`) is absent from both the work
+    # tree and the index, so `git add <path>` fails with "pathspec did not
+    # match". It is already in the index; commit it without re-adding.
+    staged_del = _run_git(vault_root, "diff", "--cached", "--name-only", "--diff-filter=D", "-z")
+    already_staged = {p for p in (staged_del.stdout or "").split("\0") if p}
+    to_add = [p for p in paths if not (p in already_staged and not os.path.lexists(vault_root / p))]
+
     # Paths go over stdin (no ARG_MAX ceiling) and literally (a name containing
     # glob or pathspec-magic characters must not be reinterpreted as a pattern).
     add = _run_git(
@@ -716,8 +723,8 @@ def commit_and_push(
         "add",
         "--pathspec-from-file=-",
         "--pathspec-file-nul",
-        stdin_data="\0".join(paths),
-    )
+        stdin_data="\0".join(to_add),
+    ) if to_add else subprocess.CompletedProcess(args=["git", "add"], returncode=0, stdout="", stderr="")
     if add.returncode != 0:
         err = (add.stderr or add.stdout or "git add failed").strip()
         _block(vault_root, err, st=st)

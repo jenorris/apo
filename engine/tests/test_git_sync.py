@@ -196,6 +196,40 @@ class GitSyncRepoTest(_VaultRepoCase):
         self.assertIn("- note.md", log.stdout)
         self.assertNotIn("secret.db", log.stdout)
 
+    def test_commit_with_deletion_already_staged_by_git_rm(self):
+        # Someone ran `git rm` in the vault: the path is gone from the work
+        # tree AND the index ("D " in porcelain). `git add <path>` fails with
+        # "pathspec did not match"; sync must still commit, not block.
+        (self.vault / "gone.md").write_text("# G\n", encoding="utf-8")
+        _git(self.vault, "add", "gone.md")
+        _git(self.vault, "commit", "-m", "add gone")
+        _git(self.vault, "rm", "-q", "gone.md")
+        (self.vault / "note.md").write_text("# N\n\nv2\n", encoding="utf-8")
+
+        out = git_sync.commit_and_push(self.vault)
+        self.assertTrue(out["ok"], msg=out)
+        self.assertTrue(out["committed"])
+        self.assertIn("gone.md", out["paths"])
+        self.assertIn("note.md", out["paths"])
+        self.assertFalse(git_sync.is_blocked(self.vault))
+        tree = _git(self.vault, "ls-tree", "-r", "--name-only", "HEAD").stdout
+        self.assertNotIn("gone.md", tree)
+
+    def test_commit_with_only_staged_deletion(self):
+        (self.vault / "gone.md").write_text("# G\n", encoding="utf-8")
+        _git(self.vault, "add", "gone.md")
+        _git(self.vault, "commit", "-m", "add gone")
+        _git(self.vault, "rm", "-q", "gone.md")
+
+        out = git_sync.commit_and_push(self.vault)
+        self.assertTrue(out["ok"], msg=out)
+        self.assertTrue(out["committed"])
+        # The fixture's sync contract is untracked, so it rides along.
+        self.assertIn("gone.md", out["paths"])
+        self.assertFalse(git_sync.is_blocked(self.vault))
+        tree = _git(self.vault, "ls-tree", "-r", "--name-only", "HEAD").stdout
+        self.assertNotIn("gone.md", tree)
+
     def test_commit_agent_message_keeps_paths_body(self):
         (self.vault / "areas" / "threads").mkdir(parents=True)
         (self.vault / "areas" / "threads" / "t.md").write_text("x\n", encoding="utf-8")
