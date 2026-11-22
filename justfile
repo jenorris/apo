@@ -24,9 +24,13 @@ default:
 
 
 # Sync the authoritative lockfile and link its console scripts onto PATH.
+# The locked sync removes packages outside the lockfile, so watch-hook plugins
+# are reinstalled after it: apo-optima from APO_OPTIMA_DIR (default ../optima)
+# when that checkout exists. A missing checkout is skipped.
 setup:
     command -v uv >/dev/null 2>&1 || { echo "uv not found on PATH — install it first (e.g. brew install uv)"; exit 1; }
     cd engine && uv sync --locked --extra mcp --extra dev --extra otlp
+    optima="${APO_OPTIMA_DIR:-{{ justfile_directory() }}/../optima}"; if [ -f "$optima/pyproject.toml" ]; then uv pip install --python engine/.venv/bin/python --no-deps -e "$optima"; else echo "apo-optima: no checkout at $optima — skipped"; fi
     mkdir -p "${HOME}/.local/bin"
     for bin in apo apo-engine apo-local apo-mcp; do ln -sfn "{{ justfile_directory() }}/engine/.venv/bin/$bin" "${HOME}/.local/bin/$bin"; done
     @echo "ready — ensure ~/.local/bin is on PATH, then run 'just ollama', 'just index', and 'just mcp'"

@@ -11,6 +11,11 @@ All notable changes to Apo (`jenorris/apo`) are documented here. Semver tags sta
   exporter stays inert unless that backend is selected. MCP tool spans are
   under service `apo-engine` with `apo.*` attributes since 0.39.0 (they were
   `apo-mcp` and unprefixed names under the removed forwarder).
+- **`just setup` reinstalls the apo-optima plugin.** The locked sync removes
+  packages outside the lockfile, which dropped the Optima watch hook after
+  0.39.0. Setup now installs `apo-optima` editable, with `--no-deps`, from
+  `APO_OPTIMA_DIR` (default `../optima`). It skips with a message when that
+  checkout is missing.
 
 ## [0.39.3] — 2026-11-17
 
