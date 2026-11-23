@@ -13,6 +13,7 @@ from typing import Any, Iterable
 from . import note_lint
 from . import vaults as vault_reg
 from .atomic_io import atomic_write_text
+from .links import split_wikilink
 from .okf.frontmatter import set_fields
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+?)\]\]")
@@ -91,16 +92,17 @@ def replace_wikilink_target(content: str, old_target: str, new_target: str) -> t
     def repl(m: re.Match[str]) -> str:
         nonlocal changed
         inner = m.group(1)
-        raw = inner.split("|", 1)[0].strip().split("#", 1)[0].strip().removesuffix(".md")
+        head, sep, display = split_wikilink(inner)
+        raw = head.strip().split("#", 1)[0].strip().removesuffix(".md")
         if raw.lower() != old_target.lower():
             return m.group(0)
         changed = True
-        if "|" in inner:
-            display = inner.split("|", 1)[1]
-            return f"[[{new_target}|{display}]]"
+        if sep:
+            # Keep the author's separator: `\|` inside a table row stays escaped.
+            return f"[[{new_target}{sep}{display}]]"
         anchor = ""
-        if "#" in inner.split("|", 1)[0]:
-            anchor = "#" + inner.split("#", 1)[1]
+        if "#" in head:
+            anchor = "#" + head.split("#", 1)[1]
         return f"[[{new_target}{anchor}]]"
 
     new_content = _WIKILINK_RE.sub(repl, content)

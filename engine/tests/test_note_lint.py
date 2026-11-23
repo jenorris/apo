@@ -330,3 +330,9 @@ class FlawsWriteIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EscapedPipeWikiTargetTest(unittest.TestCase):
+    def test_table_row_escaped_pipe_target_has_no_backslash(self):
+        got = note_lint._wiki_targets("| x | [[areas/a/b\\|Title]] |\n[[c#H\\|t]]\n")
+        self.assertEqual(got, [("areas/a/b", 1), ("c", 2)])

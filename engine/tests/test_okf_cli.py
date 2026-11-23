@@ -510,3 +510,11 @@ class ReadOnlyVaultTests(OkfCliBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EscapedPipeLinkifyRegexTest(unittest.TestCase):
+    def test_wikilink_re_target_excludes_escape(self):
+        from apo_engine import okf_cli
+
+        got = [m.group(1) for m in okf_cli._WIKILINK_RE.finditer("| [[a/b\\|T]] | [[c|d]] [[e#h]] [[f]] |")]
+        self.assertEqual(got, ["a/b", "c", "e", "f"])
