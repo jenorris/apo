@@ -151,10 +151,24 @@ def _body_links(
                 yield link
 
 
+def split_wikilink(inner: str) -> tuple[str, str, str]:
+    """Split ``[[inner]]`` into ``(target_with_heading, separator, alias)``.
+
+    Inside a GFM table the alias separator must be escaped (``[[a\\|b]]``) or it
+    splits the cell; Obsidian reads ``\\|`` as the separator. The backslash is
+    not part of the target. ``separator`` is ``"|"``, ``"\\|"`` or ``""`` so a
+    rewriter can keep the author's escaping.
+    """
+    target, bar, alias = inner.partition("|")
+    if bar and target.endswith("\\"):
+        return target[:-1], "\\|", alias
+    return target, bar, alias
+
+
 def _wikilink(
     inner: str, kind: str, line: int, text: str, known_vaults: frozenset[str] | None
 ) -> Link | None:
-    target, _, alias = inner.partition("|")
+    target, _, alias = split_wikilink(inner)
     target, _, heading = target.partition("#")
     target = target.strip()
     if not target:

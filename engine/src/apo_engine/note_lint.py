@@ -15,6 +15,7 @@ from typing import Any, Iterable, Literal
 
 from . import vaults as vault_reg
 from .atomic_io import atomic_write_text
+from .links import split_wikilink
 
 Remediation = Literal["auto", "llm", "human"]
 Severity = Literal["info", "warn", "error"]
@@ -461,7 +462,7 @@ def _wiki_targets(content: str) -> list[tuple[str, int]]:
     out: list[tuple[str, int]] = []
     for lineno, line in enumerate(content.splitlines(), 1):
         for m in _WIKILINK_RE.finditer(line):
-            raw = m.group(1).split("|", 1)[0].strip()
+            raw = split_wikilink(m.group(1))[0].strip()
             raw = raw.split("#", 1)[0].strip().removesuffix(".md")
             if raw:
                 out.append((raw, lineno))

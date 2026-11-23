@@ -516,7 +516,9 @@ _LISTING_DESC_MAX = 120
 _LINKIFY_MAX_TARGETS = 12
 
 _OKF_LINKS_RE = re.compile(r"(?ms)^## OKF links\s*\n.*?(?=^## |\Z)")
-_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:\|[^\]]+)?\]\]")
+# Group 1 is the bare target. `\|` (escaped alias separator inside a GFM table)
+# is not part of it; neither is a `#heading`.
+_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+?)\\?(?:[|#][^\]]*)?\]\]")
 
 
 class OkfCliError(Exception):

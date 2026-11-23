@@ -31,6 +31,16 @@ class ExtractLinksTest(unittest.TestCase):
         self.assertEqual(got["foo"].mode, "name")
         self.assertEqual(got["foo"].line, 1)
 
+    def test_escaped_pipe_alias_in_table_row(self):
+        # Inside a GFM table the alias separator is written `\|`; the target
+        # must not keep the backslash.
+        rows = self.extract("| a | [[bar/Baz\\|Baz page]] | [[Qux#H\\|q]] |\n")
+        got = _by_key(rows)
+        self.assertEqual(set(got), {"bar/baz", "qux"})
+        self.assertEqual(got["bar/baz"].alias, "Baz page")
+        self.assertEqual(got["qux"].heading, "H")
+        self.assertEqual(got["qux"].alias, "q")
+
     def test_media_embeds_are_not_links(self):
         self.assertEqual(self.extract("![[diagram.png]] ![[spec.pdf]]\n"), [])
 

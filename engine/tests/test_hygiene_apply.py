@@ -102,3 +102,12 @@ class HygieneApplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EscapedPipeReplaceTest(unittest.TestCase):
+    def test_replace_keeps_escaped_separator(self):
+        out, changed = hygiene_apply.replace_wikilink_target(
+            "| x | [[old/note\\|Title]] |\n[[old/note|Plain]]\n", "old/note", "new/note"
+        )
+        self.assertTrue(changed)
+        self.assertEqual(out, "| x | [[new/note\\|Title]] |\n[[new/note|Plain]]\n")
