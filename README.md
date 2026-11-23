@@ -203,8 +203,10 @@ Then paste the **[onboard prompt](docs/onboard-prompt.md)** so agent write habit
 
 ### CLI entry points
 
-`just setup` runs `uv sync --locked --extra mcp --extra dev --extra otlp` and links four
-console scripts from `engine/.venv/bin` into `~/.local/bin`. Ensure
+`just setup` runs `uv sync --locked --extra mcp --extra dev --extra otlp`,
+reinstalls the [apo-optima](https://github.com/jenorris/apo-optima) watch-hook
+plugin (editable, from `APO_OPTIMA_DIR`, default `../optima`) when that checkout
+exists, and links four console scripts from `engine/.venv/bin` into `~/.local/bin`. Ensure
 `~/.local/bin` is on `PATH`. **`apo` is the one to reach for by hand going
 forward** — it dispatches by leading token, so the other three never need
 separate memorizing:
